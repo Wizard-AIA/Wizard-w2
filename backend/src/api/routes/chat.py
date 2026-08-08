@@ -21,6 +21,7 @@ from src.core.agent.consent import consent_broker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.session import Session, session_manager
+from src.utils.errors import safe_error_message
 from src.utils.logging import logger
 
 
@@ -283,8 +284,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     )
                     raise
                 except Exception as exc:
-                    logger.error("Chat run failed", error=str(exc), session=run_session.id)
-                    await emitter(Event(type=EventType.ERROR, data={"content": str(exc)}))
+                    message = safe_error_message(exc, "Chat run failed", session=run_session.id)
+                    await emitter(Event(type=EventType.ERROR, data={"content": message}))
                 finally:
                     consent_broker.abandon(run_session.id)
 
@@ -293,9 +294,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
     except Exception as exc:
-        logger.error("WebSocket handler crashed", error=str(exc))
+        message = safe_error_message(exc, "WebSocket handler crashed")
         try:
-            await websocket.send_json({"type": EventType.ERROR.value, "content": f"Server error: {exc}"})
+            await websocket.send_json({"type": EventType.ERROR.value, "content": message})
         except Exception as send_exc:
             logger.debug("Could not deliver the error frame; the socket is already gone", error=str(send_exc))
     finally:

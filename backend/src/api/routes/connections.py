@@ -34,6 +34,7 @@ from src.core.connectors.ingest import import_target
 from src.core.connectors.store import connection_store
 from src.core.data_mode import normalize
 from src.core.session import Session
+from src.utils.errors import safe_error_message
 from src.utils.logging import logger
 
 
@@ -92,7 +93,12 @@ def _open(spec: ConnectionSpec):
     except DriverMissing as exc:
         raise HTTPException(status_code=501, detail=f"{exc.message} {exc.detail}")
     except ConnectorError as exc:
-        raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
+        # `exc.detail` often wraps `str()` of the underlying driver exception,
+        # which can carry hostnames, driver internals or library versions --
+        # safe in a log, not in a response body from a service reachable
+        # beyond localhost.
+        detail = safe_error_message(exc, "Could not open connection", detail=exc.detail, connection=spec.name)
+        raise HTTPException(status_code=400, detail=f"{exc.message} {detail}".strip())
 
 
 def _permit(session: Session, category: str, subject: str) -> None:
