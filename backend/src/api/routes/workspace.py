@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from src.api.deps import get_session, require_api_key
+from src.api.deps import get_session, get_session_for_link, require_api_key
 from src.api.schemas import WorkspaceFile, WorkspaceListing
 from src.core.session import Session
 
@@ -90,7 +90,7 @@ async def list_files(session: Session = Depends(get_session)) -> WorkspaceListin
 
 
 @router.get("/file/{file_path:path}")
-async def get_file(file_path: str, session: Session = Depends(get_session)) -> FileResponse:
+async def get_file(file_path: str, session: Session = Depends(get_session_for_link)) -> FileResponse:
     """Serves one file from the caller's own workspace."""
     target = resolve_within(session.workspace, file_path)
     if not target.is_file():

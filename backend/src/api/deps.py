@@ -30,19 +30,43 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
-def get_session(
-    x_session_id: str | None = Header(default=None, alias=SESSION_HEADER),
-    session_query: str | None = Query(default=None, alias="session"),
-) -> Session:
-    """Resolves the caller's session, creating one when absent or expired."""
-    return session_manager.get_or_create(x_session_id or session_query)
+def get_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
+    """Resolves the caller's session, creating one when absent or expired.
+
+    Header only. A session id is a bearer credential -- whoever presents it
+    gets the workspace, datasets and chat history behind it -- and a query
+    string is routinely captured in proxy access logs, browser history and
+    the Referer header in a way a request header is not. The two routes that
+    serve a direct navigation target (a download link a browser tab opens
+    without JS setting a header) use :func:`get_session_for_link` instead.
+    """
+    return session_manager.get_or_create(x_session_id)
 
 
-def require_session(
-    x_session_id: str | None = Header(default=None, alias=SESSION_HEADER),
-    session_query: str | None = Query(default=None, alias="session"),
-) -> Session:
+def require_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
     """Like :func:`get_session` but rejects an unknown id instead of silently creating one."""
+    session = session_manager.get(x_session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or expired. Create a new session and re-upload your data.",
+        )
+    return session
+
+
+def get_session_for_link(
+    x_session_id: str | None = Header(default=None, alias=SESSION_HEADER),
+    session_query: str | None = Query(default=None, alias="session"),
+) -> Session:
+    """Like :func:`require_session`, but also accepts the id as a query param.
+
+    Reserved for routes a browser tab opens directly -- a download link or an
+    ``<img>``/``<a>`` target -- where there is no request in flight that could
+    carry a custom header. Keeping this accepted only on those routes, rather
+    than on every route as before, keeps the leakage surface a session id
+    carried in a URL creates (proxy logs, browser history, Referer) limited to
+    the two places it is actually unavoidable.
+    """
     session_id = x_session_id or session_query
     session = session_manager.get(session_id)
     if session is None:
@@ -53,12 +77,9 @@ def require_session(
     return session
 
 
-def require_dataset(
-    x_session_id: str | None = Header(default=None, alias=SESSION_HEADER),
-    session_query: str | None = Query(default=None, alias="session"),
-) -> Session:
+def require_dataset(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
     """Resolves a session that must already have an active dataset."""
-    session = get_session(x_session_id, session_query)
+    session = get_session(x_session_id)
     if not session.has_data:
         raise HTTPException(
             status_code=412,
