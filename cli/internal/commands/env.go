@@ -80,12 +80,13 @@ func (e *Env) FrontendLogPath() string       { return filepath.Join(e.LogsDir, "
 func (e *Env) BackendEnvExamplePath() string { return filepath.Join(e.BackendDir, ".env.example") }
 func (e *Env) BackendEnvPath() string        { return filepath.Join(e.BackendDir, ".env") }
 
-// VenvPython and VenvPip are the interpreter and installer inside the
-// wizard-managed venv -- Scripts\ with a .exe suffix on Windows, bin/
-// everywhere else, which is the one thing about a Python venv layout that is
-// genuinely platform-specific.
+// VenvPython and VenvUvicorn are executables inside the wizard-managed venv
+// -- Scripts\ with a .exe suffix on Windows, bin/ everywhere else, which is
+// the one thing about a Python venv layout that is genuinely
+// platform-specific. There is no VenvPip: `uv venv` does not seed a pip
+// binary into the environment, and installs go through `uv pip install
+// --python <VenvPython>` instead (see deps.go).
 func (e *Env) VenvPython() string  { return venvExe(e.VenvDir, "python") }
-func (e *Env) VenvPip() string     { return venvExe(e.VenvDir, "pip") }
 func (e *Env) VenvUvicorn() string { return venvExe(e.VenvDir, "uvicorn") }
 
 func venvExe(venvDir, name string) string {

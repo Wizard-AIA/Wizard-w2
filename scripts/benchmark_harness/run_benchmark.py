@@ -27,8 +27,8 @@ Usage:
 
 Requires the backend's own dependencies (pandas, the FastAPI app's `src` package)
 to already be importable -- run from an environment where
-`pip install -r requirements.txt -r requirements-local.txt` has been done, exactly
-as CLAUDE.md's own "Without Docker" section describes.
+`uv pip install --system -r requirements.txt -r requirements-local.txt` has been
+done, exactly as CLAUDE.md's own "Without Docker" section describes.
 """
 
 from __future__ import annotations

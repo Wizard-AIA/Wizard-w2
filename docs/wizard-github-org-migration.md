@@ -171,7 +171,7 @@ Any workarounds you've tried.
 ## Testing
 - [ ] `pytest` passes locally
 - [ ] `ruff check . --fix && ruff format .` clean
-- [ ] Frontend: `npm run lint && npx tsc --noEmit && npm run build` clean (if frontend touched)
+- [ ] Frontend: `pnpm lint && npx tsc --noEmit && pnpm build` clean (if frontend touched)
 
 ## Related issue
 Closes #

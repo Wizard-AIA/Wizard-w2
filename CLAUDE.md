@@ -26,16 +26,16 @@ EXECUTION_BACKEND=host docker compose up -d      # no sandbox image at all
 
 ### Without Docker
 ```bash
-pip install -r requirements.txt -r requirements-local.txt
+uv pip install --system -r requirements.txt -r requirements-local.txt
 uvicorn src.api.api:app --port 8000          # from backend/; EXECUTION_BACKEND defaults to
                                              # host, which runs code in a subprocess
 ```
 
 ### Backend
 ```bash
-pip install -r requirements.txt              # root file, not backend/ — API server only
-pip install -r requirements-local.txt        # the analysis toolkit, for running without Docker
-pip install -r requirements-optional.txt     # only for Redis or an OpenAI gateway
+uv pip install --system -r requirements.txt              # root file, not backend/ — API server only
+uv pip install --system -r requirements-local.txt         # the analysis toolkit, for running without Docker
+uv pip install --system -r requirements-optional.txt      # only for Redis or an OpenAI gateway
 
 uvicorn src.api.api:app --reload --port 8000 # run from backend/
 python backend/main.py path/to/data.csv      # CLI REPL over the same stack
@@ -59,9 +59,9 @@ An autouse fixture also stubs `tools.packages.install`. Consent to a library ins
 
 ### Frontend
 ```bash
-cd frontend && npm ci
-npm run dev
-npm run lint && npx tsc --noEmit && npm run build   # the three CI gates
+cd frontend && pnpm install
+pnpm dev
+pnpm lint && npx tsc --noEmit && pnpm build   # the three CI gates
 ```
 
 ## Architecture

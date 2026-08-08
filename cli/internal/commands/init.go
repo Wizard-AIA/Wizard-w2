@@ -35,13 +35,17 @@ func RunInit(env *Env, args []string) int {
 	fmt.Fprintln(env.Out, "Checking prerequisites...")
 	python := CheckPython(minPythonMajor, minPythonMinor)
 	node := CheckNode(minNodeMajor)
+	uv := CheckUV()
+	pnpm := CheckPnpm()
 	ollama := CheckOllama()
 
 	printCheck(env.Out, python)
 	printCheck(env.Out, node)
+	printCheck(env.Out, uv)
+	printCheck(env.Out, pnpm)
 	printCheck(env.Out, ollama)
 
-	if !python.OK || !node.OK {
+	if !python.OK || !node.OK || !uv.OK || !pnpm.OK {
 		fmt.Fprintln(env.Err, "\nOne or more required prerequisites are missing or too old. Install them and re-run `wizard init`.")
 		return 1
 	}
@@ -197,11 +201,17 @@ func ensureEnvFile(env *Env, applied bool, manager, worker string) error {
 // have a usable interpreter in it. Kept under the platform config directory
 // (see internal/appdir) rather than inside the checkout, so it survives a
 // `git clean` and does not collide with a developer's own venv there.
+//
+// Built with `uv venv` rather than `python -m venv`: uv is already a required
+// prerequisite (installDependencies uses it to install requirements), and its
+// venv creation is materially faster. The env this produces has no pip binary
+// in it -- uv installs packages without needing one -- which is why
+// Env.VenvPip was removed rather than kept for a tool nothing calls any more.
 func ensureVenv(env *Env, python ToolCheck) error {
 	if env.VenvExists() {
 		fmt.Fprintln(env.Out, "\nUsing existing venv at", env.VenvDir)
 		return nil
 	}
 	fmt.Fprintln(env.Out, "\nCreating a Python environment at", env.VenvDir)
-	return runStreamed(env, env.RepoRoot, python.Path, []string{"-m", "venv", env.VenvDir})
+	return runStreamed(env, env.RepoRoot, "uv", []string{"venv", "--python", python.Path, env.VenvDir})
 }

@@ -7,7 +7,7 @@ import (
 )
 
 // Default ports match what CLAUDE.md already documents for a manual
-// `uvicorn`/`npm run dev` setup: backend on 8000, frontend on 3000. A
+// `uvicorn`/`pnpm dev` setup: backend on 8000, frontend on 3000. A
 // WIZARD_*_PORT override, set by `wizard start`'s flags before it re-execs
 // into the supervisor, lets both sides agree on a non-default port without
 // a config file.

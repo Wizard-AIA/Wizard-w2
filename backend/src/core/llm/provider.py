@@ -432,7 +432,7 @@ class LLMProvider:
                 except ImportError as exc:  # pragma: no cover - depends on optional extra
                     raise LLMUnavailableError(
                         "Anthropic support needs the `langchain-anthropic` package. "
-                        "Install it with `pip install -r requirements-optional.txt`."
+                        "Install it with `uv pip install -r requirements-optional.txt`."
                     ) from exc
 
                 logger.info("Initializing ChatAnthropic client", model=spec.model)

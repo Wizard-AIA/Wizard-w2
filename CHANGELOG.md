@@ -7,6 +7,10 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 ## [Unreleased]
 
 ### Changed
+- Backend dependency installs (CI, Dockerfiles, `wizard init`/`update`) switched
+  from `pip` to `uv`; frontend switched from `npm` to `pnpm`, with
+  `frontend/pnpm-lock.yaml` replacing `frontend/package-lock.json`. Hash-pinned
+  lock files are unchanged -- they were already `uv pip compile` output.
 - Migrated the project from a personal account to the `Wizard-AIA` GitHub
   organization; core repo renamed `Wizard-w1` → `Wizard-w2`.
 - Hardened repo governance and CI/CD: Go CI for the `cli/` daemon, CodeQL

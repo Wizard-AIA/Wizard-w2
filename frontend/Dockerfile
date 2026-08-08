@@ -12,12 +12,16 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+# corepack ships with Node 20; `prepare --activate` pins the exact pnpm build
+# rather than trusting whatever "latest" resolves to on the day the image builds.
+RUN corepack enable && corepack prepare pnpm@10.33.3 --activate
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-RUN npm run build
+RUN pnpm run build
 
 # Production image.
 FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner

@@ -4,7 +4,7 @@
 # directly -- this is the source `uv` compiles from:
 #   uv pip compile requirements.txt --universal --generate-hashes \
 #     --emit-index-url --python-version 3.11 --output-file requirements.lock.txt
-# Regenerate the lock whenever a version here changes; `pip install
+# Regenerate the lock whenever a version here changes; `uv pip install
 # --require-hashes` fails loudly if the two drift apart.
 #
 # What the API server itself needs. Nothing here exists to serve *generated*

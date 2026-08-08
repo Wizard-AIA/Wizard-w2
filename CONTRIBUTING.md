@@ -38,9 +38,9 @@ git remote add upstream https://github.com/Wizard-AIA/Wizard-w2.git
 ollama pull qwen2.5-coder:7b
 ollama pull qwen3:8b
 
-pip install -r requirements.txt        # API server
-pip install -r requirements-local.txt  # + analysis toolkit, if you run without Docker
-cd frontend && npm ci && cd ..
+uv pip install --system -r requirements.txt        # API server
+uv pip install --system -r requirements-local.txt  # + analysis toolkit, if you run without Docker
+cd frontend && pnpm install && cd ..
 
 pre-commit install --hook-type commit-msg   # conventional commits are enforced
 ```
@@ -56,7 +56,7 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env` if you want 
 uvicorn src.api.api:app --reload --port 8000
 
 # Frontend (from frontend/)
-npm run dev
+pnpm dev
 
 # CLI, same stack
 python backend/main.py path/to/data.csv
@@ -78,9 +78,9 @@ pytest                    # from the repo root
 **Frontend**
 ```bash
 cd frontend
-npm run lint              # errors only; warnings are allowed
+pnpm lint                 # errors only; warnings are allowed
 npx tsc --noEmit
-npm run build
+pnpm build
 ```
 
 ---

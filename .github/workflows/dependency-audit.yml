@@ -28,11 +28,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+
       - name: Install Safety
         # Hash-pinned separately from the app's own lock (requirements-audit-tools.in):
         # this job never installs requirements.lock.txt, so constraining safety
         # against it would only produce a spurious conflict over typer's version.
-        run: pip install --require-hashes -r requirements-audit-tools.lock.txt
+        run: uv pip install --system --require-hashes -r requirements-audit-tools.lock.txt
 
       - name: Scan runtime dependencies
         env:
@@ -48,19 +53,22 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # Blocking gate: anything that reaches a user's browser must be clean.
       - name: Audit shipped dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: pnpm audit --prod --audit-level=high
 
       # Reported, not blocking. The remaining advisories are all dev-only and
       # currently unresolvable: the patched brace-expansion (>=5.0.8) changed its
@@ -71,4 +79,4 @@ jobs:
       # train people to ignore this job.
       - name: Audit build tooling (informational)
         continue-on-error: true
-        run: npm audit --audit-level=high
+        run: pnpm audit --audit-level=high

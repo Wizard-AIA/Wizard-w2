@@ -1,6 +1,6 @@
 # Optional extras. Nothing here is needed to run Wizard.
 #
-# Install with:  pip install -r requirements-optional.txt
+# Install with:  uv pip install --system -r requirements-optional.txt
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 
 # Shared cache and job state across workers. Activated only when REDIS_URL is

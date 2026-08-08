@@ -41,6 +41,14 @@ func RunUpdate(env *Env, args []string) int {
 		fmt.Fprintln(env.Err, "Python is no longer found/new enough after the pull; run `wizard init` to see what changed.")
 		return 1
 	}
+	if uv := CheckUV(); !uv.OK {
+		fmt.Fprintln(env.Err, "uv is no longer found on PATH; run `wizard init` to see what changed.")
+		return 1
+	}
+	if pnpm := CheckPnpm(); !pnpm.OK {
+		fmt.Fprintln(env.Err, "pnpm is no longer found on PATH; run `wizard init` to see what changed.")
+		return 1
+	}
 	if err := installDependencies(env, python); err != nil {
 		fmt.Fprintf(env.Err, "%v\n", err)
 		return 1

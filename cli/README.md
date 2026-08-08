@@ -2,7 +2,7 @@
 
 A single static binary that manages the Wizard backend and frontend as a
 background service — the same subcommands, same behavior, on Linux, macOS
-and Windows. It replaces the manual `uvicorn` + `npm run dev`/`start` dance
+and Windows. It replaces the manual `uvicorn` + `pnpm dev`/`start` dance
 (and `docker compose up`, which stays available and opt-in per Milestone 3)
 with `wizard init && wizard start`.
 
@@ -70,11 +70,11 @@ WIZARD_CLI_SELFTEST=1 go test ./internal/daemon/... -run TestSupervisor -v
 
 Run from inside a Wizard checkout (or any subdirectory of one) — `wizard`
 locates the checkout root by walking up looking for `backend/main.py` +
-`frontend/package.json`, the way `git`/`npm` locate their own project root.
+`frontend/package.json`, the way `git`/`pnpm` locate their own project root.
 
 | Command | What it does |
 |---|---|
-| `wizard init` | Checks Python 3.11+/Node 20+ (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory and installs backend requirements; runs `npm ci && npm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. |
+| `wizard init` | Checks Python 3.11+/Node 20+/uv/pnpm (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama/uv/pnpm themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. |
 | `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits here in the foreground until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` override the 8000/3000 defaults; `--no-browser` skips opening one. |
 | `wizard stop` | Idempotent. Asks the supervisor to stop and waits for it to clean up; falls back to a forced kill of the recorded pids if it doesn't. |
 | `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
@@ -90,8 +90,8 @@ locates the checkout root by walking up looking for `backend/main.py` +
   needs a release pipeline (build matrix, checksums, a way to fetch and
   atomically replace a running binary) that doesn't exist yet. Flagged as a
   follow-up, not silently dropped.
-- **Auto-installing Python/Node/Ollama.** `wizard init` detects and prints
-  the right install command for the host OS; it never runs a package
+- **Auto-installing Python/Node/uv/pnpm/Ollama.** `wizard init` detects and
+  prints the right install command for the host OS; it never runs a package
   manager on the user's behalf for these.
 - **Owning the Docker daemon's lifecycle.** `wizard start`/`doctor` only
   probe reachability and pass `EXECUTION_BACKEND` through — an unreachable

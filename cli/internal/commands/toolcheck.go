@@ -84,6 +84,27 @@ func CheckOllama() ToolCheck {
 	return ToolCheck{Name: "Ollama", Found: true, Path: path, OK: true}
 }
 
+// CheckUV and CheckPnpm are presence-only, like CheckOllama: installDependencies
+// shells out to whatever `uv`/`pnpm` a user has, and there is no minimum this
+// project pins against -- only Python 3.11 and Node 20 have a real version floor.
+func CheckUV() ToolCheck {
+	path, err := exec.LookPath("uv")
+	if err != nil {
+		return ToolCheck{Name: "uv", Found: false, InstallHint: uvInstallHint()}
+	}
+	version, _ := parseVersion(runVersion("uv", "--version"))
+	return ToolCheck{Name: "uv", Found: true, Path: path, Version: version, OK: true, InstallHint: uvInstallHint()}
+}
+
+func CheckPnpm() ToolCheck {
+	path, err := exec.LookPath("pnpm")
+	if err != nil {
+		return ToolCheck{Name: "pnpm", Found: false, InstallHint: pnpmInstallHint()}
+	}
+	version, _ := parseVersion(runVersion("pnpm", "--version"))
+	return ToolCheck{Name: "pnpm", Found: true, Path: path, Version: version, OK: true, InstallHint: pnpmInstallHint()}
+}
+
 // runVersion is bounded so a PATH-resolved executable that hangs (an
 // unrelated program shadowing the expected name, a broken wrapper script)
 // cannot block `wizard init`/`wizard doctor` from reporting anything at all.
@@ -137,5 +158,27 @@ func nodeInstallHint() string {
 		return "brew install node@20"
 	default:
 		return "use your distribution's Node 20+ package, or https://nodejs.org"
+	}
+}
+
+func uvInstallHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return `winget install astral-sh.uv  (or: powershell -c "irm https://astral.sh/uv/install.ps1 | iex")`
+	case "darwin":
+		return "brew install uv"
+	default:
+		return "curl -LsSf https://astral.sh/uv/install.sh | sh"
+	}
+}
+
+func pnpmInstallHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "winget install pnpm.pnpm  (or: corepack enable && corepack prepare pnpm@latest --activate)"
+	case "darwin":
+		return "brew install pnpm"
+	default:
+		return "corepack enable && corepack prepare pnpm@latest --activate"
 	}
 }

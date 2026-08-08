@@ -80,7 +80,7 @@
 @theme inline {
   /*
     Geist, self-hosted from the npm package rather than fetched by
-    `next/font/google` — `npm run build` is a CI gate and must not depend on
+    `next/font/google` — `pnpm build` is a CI gate and must not depend on
     Google Fonts being reachable. `--font-geist-*` are injected by next/font in
     the root layout; the system stack is the fallback while they swap in.
   */

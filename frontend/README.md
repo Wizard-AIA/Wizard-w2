@@ -7,10 +7,10 @@ open, not a product you are sold.
 ## Run it
 
 ```bash
-npm ci
-npm run dev            # http://localhost:3000
+pnpm install
+pnpm dev                # http://localhost:3000
 
-npm run lint && npx tsc --noEmit && npm run build   # the three CI gates
+pnpm lint && npx tsc --noEmit && pnpm build   # the three CI gates
 ```
 
 The backend is expected at `http://localhost:8000`. Point elsewhere with

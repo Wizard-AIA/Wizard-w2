@@ -40,7 +40,7 @@ export default function RootLayout({
     /*
       Geist ships its own woff2 files inside the npm package, so the type is
       self-hosted and `next build` never reaches the network for it. That
-      matters: `npm run build` is a CI gate, and `next/font/google` would have
+      matters: `pnpm build` is a CI gate, and `next/font/google` would have
       made it fail whenever Google Fonts was unreachable.
     */
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>

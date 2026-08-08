@@ -7,8 +7,8 @@ import (
 )
 
 // runStreamed runs a command with its output connected directly to the
-// Env's streams -- used for the long steps of `init`/`update` (pip install,
-// npm ci/build) where the user watching progress scroll by is the point,
+// Env's streams -- used for the long steps of `init`/`update` (uv pip install,
+// pnpm install/build) where the user watching progress scroll by is the point,
 // unlike the short, captured commands in toolcheck.go.
 func runStreamed(env *Env, dir, name string, args []string, extraEnv ...string) error {
 	fmt.Fprintf(env.Out, "$ %s %s\n", name, joinArgs(args))

@@ -76,10 +76,13 @@
     "tw-animate-css": "1.3.3",
     "typescript": "^5"
   },
-  "overrides": {
-    "postcss": "$postcss",
-    "sharp": "^0.35.3",
-    "js-yaml": "^4.2.1"
-  },
-  "description": "Client for Wizard, a local-first autonomous data analysis agent."
+  "description": "Client for Wizard, a local-first autonomous data analysis agent.",
+  "packageManager": "pnpm@10.33.3",
+  "pnpm": {
+    "overrides": {
+      "postcss": "$postcss",
+      "sharp": "^0.35.3",
+      "js-yaml": "^4.2.1"
+    }
+  }
 }

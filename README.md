@@ -80,9 +80,9 @@ cd .. && ./cli/wizard init                  # checks Python 3.11+/Node 20+, inst
 See [cli/README.md](cli/README.md) for the full subcommand reference. Or do it by hand:
 
 ```bash
-pip install -r requirements.txt -r requirements-local.txt
+uv pip install --system -r requirements.txt -r requirements-local.txt
 cd backend && uvicorn src.api.api:app --port 8000
-cd frontend && npm ci && npm run dev
+cd frontend && pnpm install && pnpm dev
 ```
 
 `EXECUTION_BACKEND` defaults to `host`: generated code runs in a **subprocess** of the backend — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Docker is opt-in; set `EXECUTION_BACKEND=docker` to use a container per session instead.
@@ -282,14 +282,14 @@ Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).
 ## Development
 
 ```bash
-pip install -r requirements.txt       # API server
-pip install -r requirements-local.txt # + the analysis toolkit, for running without Docker
-cd frontend && npm ci && cd ..
+uv pip install --system -r requirements.txt       # API server
+uv pip install --system -r requirements-local.txt # + the analysis toolkit, for running without Docker
+cd frontend && pnpm install && cd ..
 
 pytest                                # 600+ tests; no Docker, model, network or subprocess
 ruff check . --fix && ruff format .
 
-cd frontend && npm run lint && npx tsc --noEmit && npm run build
+cd frontend && pnpm lint && npx tsc --noEmit && pnpm build
 ```
 
 Tests are organised as `unit/`, `integration/`, `regression/` and `negative/` under `backend/tests/`. The regression suite pins previously-fixed defects and each test explains what broke — worth reading before changing sessions, the database layer or the code guard.
