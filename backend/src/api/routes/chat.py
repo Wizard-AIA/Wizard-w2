@@ -9,6 +9,7 @@ nothing but translate events into frames.
 from __future__ import annotations
 
 import asyncio
+import hmac
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
@@ -124,8 +125,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     await websocket.accept()
 
-    api_key = websocket.query_params.get("api_key") or websocket.headers.get("x-api-key")
-    if settings.API_KEY and api_key != settings.API_KEY:
+    # Header only -- a query string is routinely captured in reverse-proxy and
+    # load-balancer access logs, browser history and the Referer header even
+    # over TLS, so a key accepted there would leak through channels the
+    # WSS handshake itself never touches.
+    api_key = websocket.headers.get("x-api-key")
+    if settings.API_KEY and (not api_key or not hmac.compare_digest(api_key, settings.API_KEY)):
         await websocket.send_json({"type": "error", "content": "Invalid or missing API key."})
         await websocket.close(code=1008)
         ws_gate.release(client_host)
