@@ -95,6 +95,17 @@ def skill_paths(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
 
+    resolved = root.resolve()
+    if resolved.parent == resolved:
+        # `SKILLS_BUILTIN_DIR`/`SKILLS_PROJECT_DIR` are deploy-time overrides,
+        # not request input, but a misconfigured value of `/` or `C:\` here
+        # would make every markdown file and every `SKILL.md`-bearing
+        # directory on the machine load as a skill -- and a skill's body is
+        # injected straight into the planning prompt. A path that resolves to
+        # a filesystem root is never a legitimate skills directory.
+        logger.warning("Refusing to index a skills directory that resolves to a filesystem root", root=str(resolved))
+        return []
+
     paths: list[Path] = []
     seen: set[str] = set()
     try:
