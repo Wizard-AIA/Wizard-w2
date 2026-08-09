@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -21,6 +23,7 @@ from src.api.schemas import (
     WriteBackRequest,
 )
 from src.core.connectors import (
+    Connector,
     ConnectionSpec,
     ConnectorError,
     DriverMissing,
@@ -99,6 +102,23 @@ def _open(spec: ConnectionSpec):
         # beyond localhost.
         detail = safe_error_message(exc, "Could not open connection", detail=exc.detail, connection=spec.name)
         raise HTTPException(status_code=400, detail=f"{exc.message} {detail}".strip())
+
+
+@asynccontextmanager
+async def open_connector(spec: ConnectionSpec) -> AsyncIterator[Connector]:
+    """Builds a connector and guarantees ``close()`` runs, on every exit path.
+
+    The four routes below used to repeat ``connector = _open(spec)`` followed
+    by a ``try/finally`` calling ``close()``. Centralising that here means the
+    guarantee -- close runs whether the body returns, raises, or the request
+    is cancelled -- is enforced once rather than trusted to be copied
+    correctly at every call site, including any added later.
+    """
+    connector = _open(spec)
+    try:
+        yield connector
+    finally:
+        await asyncio.to_thread(connector.close)
 
 
 def _permit(session: Session, category: str, subject: str) -> None:
@@ -257,16 +277,14 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     # A test *is* a connect -- it opens a socket to the source -- so the profile
     # binds here too. A `deny` ruling stops it; an `ask` is answered by the click.
     _permit(session, "db_connect", spec.id)
-    connector = _open(spec)
-    try:
-        await asyncio.to_thread(connector.test)
-    except ConnectorError as exc:
-        return ConnectionTestResponse(ok=False, detail=f"{exc.message} {exc.detail}".strip())
-    except Exception as exc:
-        logger.warning("A connection test failed", connection=spec.name, error=str(exc))
-        return ConnectionTestResponse(ok=False, detail=str(exc))
-    finally:
-        await asyncio.to_thread(connector.close)
+    async with open_connector(spec) as connector:
+        try:
+            await asyncio.to_thread(connector.test)
+        except ConnectorError as exc:
+            return ConnectionTestResponse(ok=False, detail=f"{exc.message} {exc.detail}".strip())
+        except Exception as exc:
+            logger.warning("A connection test failed", connection=spec.name, error=str(exc))
+            return ConnectionTestResponse(ok=False, detail=str(exc))
     return ConnectionTestResponse(ok=True, detail="Reached the source.")
 
 
@@ -280,13 +298,11 @@ async def discover_connection(connection_id: str, session: Session = Depends(get
     spec = _require_spec(connection_id)
     _check_data_mode(session, spec)
     _permit(session, "db_connect", spec.id)
-    connector = _open(spec)
-    try:
-        schema = await asyncio.to_thread(connector.discover)
-    except ConnectorError as exc:
-        raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
-    finally:
-        await asyncio.to_thread(connector.close)
+    async with open_connector(spec) as connector:
+        try:
+            schema = await asyncio.to_thread(connector.discover)
+        except ConnectorError as exc:
+            raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
     return ConnectionSchemaResponse(**schema.to_dict())  # type: ignore[arg-type]
 
 
@@ -313,16 +329,14 @@ async def import_from_connection(
     if not target:
         raise HTTPException(status_code=422, detail="Name the table to import.")
 
-    connector = _open(spec)
-    try:
-        result = await asyncio.to_thread(import_target, session, spec, connector, target, request.make_active)
-    except ConnectorError as exc:
-        raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
-    except Exception as exc:
-        logger.error("A connection import failed", connection=spec.name, target=target, error=str(exc))
-        raise HTTPException(status_code=400, detail=f"Could not import {target!r}: {exc}")
-    finally:
-        await asyncio.to_thread(connector.close)
+    async with open_connector(spec) as connector:
+        try:
+            result = await asyncio.to_thread(import_target, session, spec, connector, target, request.make_active)
+        except ConnectorError as exc:
+            raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
+        except Exception as exc:
+            detail = safe_error_message(exc, "A connection import failed", connection=spec.name, target=target)
+            raise HTTPException(status_code=400, detail=f"Could not import {target!r}: {detail}")
 
     response.headers[SESSION_HEADER] = session.id
     return ConnectionImportResponse(
@@ -369,16 +383,14 @@ async def write_to_connection(
         raise HTTPException(status_code=422, detail="Name the table to write to.")
     _permit(session, "db_write", f"{spec.id}:{target}")
 
-    connector = _open(spec)
-    try:
-        await asyncio.to_thread(connector.write, target, handle.df)
-    except ConnectorError as exc:
-        raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
-    except Exception as exc:
-        logger.error("A write-back failed", connection=spec.name, target=target, error=str(exc))
-        raise HTTPException(status_code=400, detail=f"Could not write to {target!r}: {exc}")
-    finally:
-        await asyncio.to_thread(connector.close)
+    async with open_connector(spec) as connector:
+        try:
+            await asyncio.to_thread(connector.write, target, handle.df)
+        except ConnectorError as exc:
+            raise HTTPException(status_code=400, detail=f"{exc.message} {exc.detail}".strip())
+        except Exception as exc:
+            detail = safe_error_message(exc, "A write-back failed", connection=spec.name, target=target)
+            raise HTTPException(status_code=400, detail=f"Could not write to {target!r}: {detail}")
 
     logger.info("Wrote a table back to a source", connection=spec.name, target=target, rows=len(handle.df))
     return ConnectionTestResponse(ok=True, detail=f"Wrote {len(handle.df):,} rows to '{target}'.")
