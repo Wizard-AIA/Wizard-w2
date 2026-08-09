@@ -246,27 +246,37 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 session.append_message("user", instruction)
 
             async def run_turn(
-                run_session: Session = session,
-                instruction: str = instruction,
-                mode: str = mode,
-                approved_plan: str | None = approved_plan,
-                approved_search: str | None = approved_search,
+                run_session: Session,
+                run_instruction: str,
+                run_mode: str,
+                run_approved_plan: str | None,
+                run_approved_search: str | None,
             ):
                 """Runs one turn and reports its own outcome.
 
-                The error handling lives in here rather than around an ``await``
-                on the task, because the receive loop must stay free to deliver
-                the frames a paused turn is waiting for.
+                Takes every value it needs as a plain parameter rather than
+                closing over the receive loop's locals. The loop reassigns
+                ``session``/``instruction``/``mode`` on its very next
+                iteration, and a coroutine created by ``ensure_future`` does
+                not start running until the loop yields -- so a free variable
+                here would risk reading next turn's values instead of this
+                one's. Passing them as arguments at the call site below fixes
+                what value each parameter holds independent of when the
+                coroutine actually starts.
+
+                The error handling lives in here rather than around an
+                ``await`` on the task, because the receive loop must stay free
+                to deliver the frames a paused turn is waiting for.
                 """
                 nonlocal last_code
                 try:
                     result = await orchestrator.run(
                         session=run_session,
-                        instruction=instruction,
-                        mode=mode,
+                        instruction=run_instruction,
+                        mode=run_mode,
                         emitter=emitter,
-                        approved_plan=approved_plan,
-                        approved_search=approved_search,
+                        approved_plan=run_approved_plan,
+                        approved_search=run_approved_search,
                         previous_code=last_code,
                         # This socket can carry a consent question to a human and
                         # bring the answer back, so gated actions may pause here
@@ -289,7 +299,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 finally:
                     consent_broker.abandon(run_session.id)
 
-            current_run = asyncio.ensure_future(run_turn())
+            current_run = asyncio.ensure_future(
+                run_turn(session, instruction, mode, approved_plan, approved_search)
+            )
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
