@@ -58,6 +58,13 @@ BANNED_MODULES = frozenset(
         "pwd",
         "grp",
         "tempfile",
+        # Reflection/introspection modules that reach the interpreter's live
+        # state directly -- `gc.get_objects()` and `inspect`'s frame walkers
+        # reconstruct exactly the sandbox escapes `BANNED_ATTRIBUTES` blocks by
+        # name, and `code` builds executable objects from raw bytecode.
+        "gc",
+        "inspect",
+        "code",
     }
 )
 

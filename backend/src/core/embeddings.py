@@ -29,9 +29,12 @@ question failing.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import socket
 import threading
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -41,6 +44,46 @@ from src.utils.logging import logger
 
 
 HASH_DIM = 384  # matches all-MiniLM-L6-v2 so stored vectors stay interchangeable in size
+
+#: Caps the connection pool of the module-process-lifetime httpx client below.
+#: Left unbounded, a burst of concurrent encode calls (several per question,
+#: across sessions) opens one socket each with no ceiling -- unbounded socket
+#: growth against a single embedding endpoint is a resource-exhaustion vector
+#: in its own right, independent of anything the remote host does.
+_HTTP_LIMITS_MAX_CONNECTIONS = 20
+_HTTP_LIMITS_MAX_KEEPALIVE = 10
+
+
+class RemoteHostBlocked(Exception):
+    """Raised when a configured embedding endpoint resolves to a host we refuse to call."""
+
+
+def _assert_host_allowed(url: str) -> None:
+    """Refuses link-local and other non-routable targets before they are dialled.
+
+    The embedding endpoint's base URL is provider config a user can point
+    anywhere from the settings UI, and this call happens server-side with no
+    further review -- the shape of SSRF. This app is local-first and
+    routinely talks to a model server on the loopback or local network, so
+    private/loopback ranges stay reachable; what is refused is the class of
+    address that exists specifically to be reachable *only* from the host
+    itself for purposes other than "the user's own model server" -- cloud
+    metadata services live at a link-local address (169.254.169.254) for
+    exactly that reason.
+    """
+    host = urlsplit(url).hostname
+    if not host:
+        raise RemoteHostBlocked(f"Embedding endpoint URL has no host: {url!r}")
+    try:
+        addresses = {str(info[4][0]) for info in socket.getaddrinfo(host, None)}
+    except OSError as exc:
+        raise RemoteHostBlocked(f"Could not resolve embedding endpoint host {host!r}: {exc}") from exc
+
+    for raw in addresses:
+        address = ipaddress.ip_address(raw.split("%", 1)[0])
+        if address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved:
+            raise RemoteHostBlocked(f"Embedding endpoint host {host!r} resolves to a disallowed address {address}.")
+
 
 #: How long to wait before retrying a remote encoder that could not be reached.
 #: Without this every single encode on an offline machine pays a connect
@@ -115,7 +158,13 @@ class _RemoteEncoder:
                 if self._client is None:
                     import httpx
 
-                    self._client = httpx.Client(timeout=settings.EMBEDDING_TIMEOUT)
+                    self._client = httpx.Client(
+                        timeout=settings.EMBEDDING_TIMEOUT,
+                        limits=httpx.Limits(
+                            max_connections=_HTTP_LIMITS_MAX_CONNECTIONS,
+                            max_keepalive_connections=_HTTP_LIMITS_MAX_KEEPALIVE,
+                        ),
+                    )
         return self._client
 
     def _endpoint_and_payload(self, texts: list[str]) -> tuple[str, dict[str, Any]]:
@@ -171,6 +220,11 @@ class _RemoteEncoder:
         encoder that answers in 50ms once it is resident.
         """
         url, payload = self._endpoint_and_payload(texts)
+        try:
+            _assert_host_allowed(url)
+        except RemoteHostBlocked as exc:
+            logger.warning("Refusing to call embedding endpoint", provider=self.provider, error=str(exc))
+            return None
         headers = {}
         key = settings.provider_api_key(self.provider)
         if key:

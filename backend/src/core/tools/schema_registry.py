@@ -56,9 +56,20 @@ class SchemaRegistry:
                 except TypeError:
                     continue
 
+        # A single vectorised null-count pass over the whole frame, rather than
+        # one `Series.isnull().sum()` call per column from the Python loop --
+        # on a wide DataFrame that per-column overhead was the bottleneck.
+        # `is_unique`, the actually expensive check, then only runs on columns
+        # that already passed the (cheap) null filter.
+        try:
+            null_counts = df.isnull().sum()
+        except TypeError:
+            return ""
         for column in df.columns:
+            if null_counts[column] != 0:
+                continue
             try:
-                if df[column].isnull().sum() == 0 and df[column].is_unique:
+                if df[column].is_unique:
                     return str(column)
             except TypeError:
                 continue

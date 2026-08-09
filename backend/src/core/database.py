@@ -162,7 +162,11 @@ class DatabaseManager:
         """Returns a per-thread connection, creating it on first use."""
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            # `isolation_level=None` puts the connection in autocommit mode so
+            # transaction boundaries are exactly what `_write` states below --
+            # no implicit, *deferred* BEGIN on the first DML statement that
+            # would only take SQLite's write lock partway through the block.
+            conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("PRAGMA journal_mode=WAL")
@@ -180,9 +184,20 @@ class DatabaseManager:
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        """Serialised write transaction. SQLite allows a single writer at a time."""
+        """Serialised write transaction. SQLite allows a single writer at a time.
+
+        ``BEGIN IMMEDIATE`` takes SQLite's write lock as soon as the
+        transaction opens, instead of the default *deferred* BEGIN that only
+        acquires it on the first write statement. Under WAL, two connections
+        that both start deferred and then try to upgrade to a writer can each
+        end up waiting on the other's read lock -- the classic SQLite
+        "database is locked" deadlock. Acquiring the lock immediate, while
+        still serialised through ``_write_lock`` for connections that share
+        this process, closes that window rather than trusting timing alone.
+        """
         conn = self._connection()
         with self._write_lock:
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 yield conn
                 conn.commit()
