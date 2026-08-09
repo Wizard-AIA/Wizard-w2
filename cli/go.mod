@@ -1,5 +1,5 @@
 module wizard
 
-go 1.23
+go 1.25.0
 
-require golang.org/x/sys v0.27.0
+require golang.org/x/sys v0.47.0
