@@ -1301,9 +1301,15 @@ class AnalysisOrchestrator:
         )
 
         remaining_iterations = max(1, budget.iterations - state.iterations_used)
+        # `max(1, ...)` even though the config validator already floors
+        # SUBAGENT_MAX_ITERATIONS to 1: this is the computation that would
+        # otherwise start a branch, hand it zero iterations, and have it fold
+        # back nothing -- silent data loss rather than a visible failure --
+        # if either input to `min()` were ever 0 by some path the validator
+        # doesn't cover.
         child_budget = replace(
             budget,
-            iterations=min(settings.SUBAGENT_MAX_ITERATIONS, remaining_iterations),
+            iterations=max(1, min(settings.SUBAGENT_MAX_ITERATIONS, remaining_iterations)),
             allow_decisions=False,
             allow_verification=False,
             allow_reflection=False,

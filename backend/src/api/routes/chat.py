@@ -14,7 +14,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
 
-from src.api.deps import SESSION_HEADER, require_api_key, require_dataset, ws_gate
+from src.api.deps import (
+    SESSION_HEADER,
+    require_api_key,
+    require_dataset,
+    ws_client_ip,
+    ws_client_key,
+    ws_gate,
+    ws_ip_gate,
+)
 from src.api.schemas import ChatRequest, ChatResponse
 from src.config import settings
 from src.core.agent.consent import consent_broker
@@ -119,8 +127,19 @@ async def websocket_chat(websocket: WebSocket) -> None:
     could not interrupt anything, and a mid-run consent question could never be
     answered by the only client able to answer it.
     """
-    client_host = websocket.client.host if websocket.client else "unknown"
+    # Resolved once here, before accept(): the composite (IP, session) key
+    # gates fairness among sessions sharing an address (NAT, reverse proxy);
+    # the raw IP additionally gates the address itself, since a session id is
+    # client-supplied and a fresh one per connection would otherwise mint a
+    # fresh concurrency bucket per connection. Both keys are reused to
+    # release their gates once the socket closes.
+    client_host = ws_client_key(websocket)
+    client_addr = ws_client_ip(websocket)
     if not ws_gate.acquire(client_host):
+        await websocket.close(code=1013, reason="Too many concurrent connections.")
+        return
+    if not ws_ip_gate.acquire(client_addr):
+        ws_gate.release(client_host)
         await websocket.close(code=1013, reason="Too many concurrent connections.")
         return
 
@@ -135,6 +154,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         await websocket.send_json({"type": "error", "content": "Invalid or missing API key."})
         await websocket.close(code=1008)
         ws_gate.release(client_host)
+        ws_ip_gate.release(client_addr)
         return
 
     session_id = websocket.query_params.get("session") or websocket.headers.get(SESSION_HEADER.lower())
@@ -317,3 +337,4 @@ async def websocket_chat(websocket: WebSocket) -> None:
             current_run.cancel()
         emitter.closed = True
         ws_gate.release(client_host)
+        ws_ip_gate.release(client_addr)

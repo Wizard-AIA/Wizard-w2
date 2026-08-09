@@ -73,8 +73,12 @@ def _split_options(options: dict, secret: str | None) -> tuple[dict, str | None]
     cleaned, embedded = split_secret_from_dsn(dsn)
     if not embedded:
         return options, secret
-    options["dsn"] = cleaned
-    return options, secret if secret is not None else embedded
+    # A new dict, not a mutation of the caller's: whatever reference the caller
+    # (or a logging call earlier in the request lifecycle) still holds must not
+    # observe the raw DSN turn into a scrubbed one out from under it.
+    scrubbed = dict(options)
+    scrubbed["dsn"] = cleaned
+    return scrubbed, secret if secret is not None else embedded
 
 
 def _require_spec(connection_id: str) -> ConnectionSpec:

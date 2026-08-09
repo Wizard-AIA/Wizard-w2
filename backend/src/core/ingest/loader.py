@@ -455,9 +455,20 @@ def json_safe_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return prepared.to_dict(orient="records")
 
 
-def make_temp_path(suffix: str = "") -> Path:
-    """Temp file inside the configured data dir so cleanup is predictable."""
-    tmp_dir = settings.DATA_DIR / "uploads"
+def make_temp_path(suffix: str = "", workspace: Path | None = None) -> Path:
+    """Temp file for an in-flight upload, named and created atomically.
+
+    ``mkstemp`` already rules out the symlink pre-creation race a predictable
+    name would allow -- it opens with ``O_CREAT | O_EXCL``. What a shared
+    ``DATA_DIR/uploads`` still gets wrong is scope: every session's in-flight
+    upload sits in one directory, readable by anything with access to it on a
+    shared machine, for however long parsing takes. A caller with a session
+    passes its private workspace instead, so an upload never has a moment
+    where it exists outside the one place already scoped to that session.
+    ``DATA_DIR/uploads`` remains the fallback for callers with no session in
+    hand.
+    """
+    tmp_dir = workspace / "uploads" if workspace is not None else settings.DATA_DIR / "uploads"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     handle, name = tempfile.mkstemp(suffix=suffix, dir=str(tmp_dir))
     os.close(handle)

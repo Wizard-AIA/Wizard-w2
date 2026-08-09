@@ -32,6 +32,7 @@ from typing import Any
 import pandas as pd
 
 from src.config import settings
+from src.core.agent.consent import consent_broker
 from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor, isolation_for
@@ -547,6 +548,16 @@ class Session:
 
     def dispose(self):
         """Releases the container and forgets persisted rows for this session."""
+        # A pending consent question (`ConsentBroker._pending`) is keyed by
+        # session id, not held on the `Session` -- a TTL reap or a capacity
+        # eviction of a session with an approval still outstanding (the
+        # client disconnected without ever answering it, so no `resolve` or
+        # `abandon` call was ever made) would otherwise leave that future
+        # parked forever, since nothing else revisits a disposed session.
+        # `dispose()` is the one chokepoint every eviction path already
+        # funnels through (`drop`, `reap_expired`, `_enforce_capacity`), so
+        # it is where abandoning it belongs.
+        consent_broker.abandon(self.id)
         # Any subagent still alive at session end (a turn cancelled mid-fan-out,
         # a crash) would otherwise leak its process/container until this
         # process exits, since a subagent never appears in `SessionManager`.

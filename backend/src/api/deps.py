@@ -7,7 +7,7 @@ import time
 from collections import defaultdict, deque
 from threading import Lock
 
-from fastapi import Header, HTTPException, Query, Request
+from fastapi import Header, HTTPException, Query, Request, WebSocket
 
 from src.config import settings
 from src.core.session import Session, session_manager
@@ -140,6 +140,16 @@ rate_limiter = SlidingWindowRateLimiter(
     window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
 )
 
+#: A coarser ceiling keyed on the raw address alone. `rate_limiter` above is
+#: keyed per (address, session) for fairness among sessions sharing an
+#: address; on its own that would let an attacker multiply their effective
+#: rate arbitrarily by minting a fresh session id per request. This bounds
+#: the address regardless of how many sessions it claims.
+ip_rate_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.RATE_LIMIT_MAX_REQUESTS * settings.RATE_LIMIT_IP_BURST_MULTIPLIER,
+    window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+)
+
 
 class ConnectionGate:
     """Caps simultaneous WebSocket connections per client.
@@ -169,8 +179,65 @@ class ConnectionGate:
                     del self._active[key]
 
 
+#: Fairness among sessions sharing an address. `ws_ip_gate` below is the
+#: ceiling on the address itself, for the same reason `ip_rate_limiter` is.
 ws_gate = ConnectionGate(settings.WS_MAX_CONCURRENT_PER_IP)
+ws_ip_gate = ConnectionGate(settings.WS_MAX_CONCURRENT_PER_IP * settings.RATE_LIMIT_IP_BURST_MULTIPLIER)
+
+
+def _resolved_ip(peer_host: str | None, forwarded_for: str | None) -> str:
+    """The caller's IP, honouring ``X-Forwarded-For`` only from a trusted peer.
+
+    A header is self-reported: without restricting it to a configured proxy,
+    any client could claim an arbitrary address to evade its own limit or
+    collide someone else's bucket.
+
+    A trusted proxy is expected to *append* the address it received the
+    request from as the last hop, not replace the header outright -- so the
+    last entry is what the proxy itself observed. The first entry is
+    whatever the client sent and is exactly what a client behind that proxy
+    could forge by prepending fake addresses ahead of its own.
+    """
+    trusted = {ip.strip() for ip in settings.FORWARDED_ALLOW_IPS.split(",") if ip.strip()}
+    if peer_host and peer_host in trusted and forwarded_for:
+        hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+        if hops:
+            return hops[-1]
+    return peer_host or "unknown"
+
+
+def client_ip(request: Request) -> str:
+    """The caller's resolved address alone, with no session mixed in."""
+    return _resolved_ip(request.client.host if request.client else None, request.headers.get("x-forwarded-for"))
 
 
 def client_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    """Composite rate-limit key: resolved IP plus session.
+
+    IP alone collides every user behind the same NAT gateway or reverse proxy
+    onto one bucket -- one busy session then exhausts the limit for everyone
+    else sharing that address. The session id, sent on every mutating request
+    this limiter guards, tells them apart without trusting a client-controlled
+    header alone.
+
+    This key alone is not a rate limit on the *address* -- a session id is
+    itself client-supplied, so a caller minting a fresh one per request would
+    get a fresh bucket per request. Callers must also check `ip_rate_limiter`
+    against :func:`client_ip`, which bounds the address regardless of how
+    many sessions it claims.
+    """
+    ip = client_ip(request)
+    session_id = request.headers.get(SESSION_HEADER) or ""
+    return f"{ip}:{session_id}" if session_id else ip
+
+
+def ws_client_ip(websocket: WebSocket) -> str:
+    """Like :func:`client_ip`, for the WebSocket handshake (no ``Request``)."""
+    return _resolved_ip(websocket.client.host if websocket.client else None, websocket.headers.get("x-forwarded-for"))
+
+
+def ws_client_key(websocket: WebSocket) -> str:
+    """Like :func:`client_key`, for the WebSocket handshake (no ``Request``)."""
+    ip = ws_client_ip(websocket)
+    session_id = websocket.query_params.get("session") or websocket.headers.get(SESSION_HEADER.lower()) or ""
+    return f"{ip}:{session_id}" if session_id else ip

@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # `core.*.__init__` imports `settings` back.
 from src.providers import CLOUD_PROVIDERS, LOCAL_PROVIDERS, PROVIDERS, describe, is_cloud
 from src.utils.hostinfo import host_info
+from src.utils.logging import logger
 
 
 # Not a Literal any more: the set of backends is data in `src.providers`, and
@@ -486,6 +487,9 @@ class Settings(BaseSettings):
     # round-trip per branch, and a cap independent of the parent's own tier.
     # ------------------------------------------------------------------ #
     SUBAGENT_ENABLED: bool = True
+    #: Floored to 1 by a validator below -- a subagent that starts and is
+    #: handed zero iterations completes zero steps and folds back nothing,
+    #: which fails silently rather than either running or refusing to.
     SUBAGENT_MAX_ITERATIONS: int = 3
     # Wall clock for the whole fan-out, clamped to whatever's left of
     # AGENT_TURN_TIMEOUT when that's set. A branch that hasn't finished by
@@ -589,6 +593,12 @@ class Settings(BaseSettings):
     # 30s or more, which is long enough that an unreachable host reads as a hang
     # rather than as a wrong hostname.
     CONNECTOR_TIMEOUT: int = 10
+    # A row-limited *sample* of a delimited object (CSV/TSV) fetches this many
+    # bytes via an HTTP Range request instead of the whole object -- a 5GB CSV
+    # for a 100-row preview otherwise costs the full download every time.
+    # Parquet/Feather/JSON keep reading whole: they are not line-splittable at
+    # an arbitrary byte offset the way a delimited text format is.
+    CONNECTOR_SAMPLE_RANGE_BYTES: int = 1024 * 1024
 
     # Sessions
     SESSION_TTL_SECONDS: int = 60 * 60 * 6
@@ -618,6 +628,25 @@ class Settings(BaseSettings):
     RATE_LIMIT_MAX_REQUESTS: int = 60
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     WS_MAX_CONCURRENT_PER_IP: int = 4
+    #: Comma-separated peer IPs allowed to set X-Forwarded-For. Empty means
+    #: nobody is trusted, so the limiter keys on the socket peer alone -- the
+    #: header is otherwise self-reported and a client behind no real proxy
+    #: could claim any address to evade or collide someone else's bucket.
+    FORWARDED_ALLOW_IPS: str = ""
+    #: Multiplies RATE_LIMIT_MAX_REQUESTS / WS_MAX_CONCURRENT_PER_IP into a
+    #: second, coarser ceiling keyed on the raw address alone. The per-session
+    #: limiter gives every session behind a shared address (NAT, reverse
+    #: proxy) its own fair budget, but a session id is client-supplied --
+    #: without a ceiling on the address too, an attacker could mint a fresh
+    #: one per request and multiply their effective rate without bound. Both
+    #: ceilings must pass.
+    RATE_LIMIT_IP_BURST_MULTIPLIER: int = 8
+    #: Ceiling on a JSON request body -- POST /api/chat, /api/connections,
+    #: PUT /api/permissions and friends. File upload routes are exempt: they
+    #: stream to disk under their own MAX_UPLOAD_BYTES / CONTEXT_DOC_MAX_BYTES
+    #: ceiling rather than buffering into a parsed object first, which a JSON
+    #: body always does.
+    MAX_JSON_BODY_BYTES: int = 2 * 1024 * 1024
 
     # Paths
     DATA_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "data")
@@ -649,6 +678,19 @@ class Settings(BaseSettings):
         cleaned = (value or "").strip().lower()
         return "host" if cleaned in ("auto", "local") else cleaned
 
+    @field_validator("SUBAGENT_MAX_ITERATIONS")
+    @classmethod
+    def _floor_subagent_iterations(cls, value: int) -> int:
+        """A misconfigured 0 would give every branch a zero-iteration budget.
+
+        `_act_parallel` takes `min(SUBAGENT_MAX_ITERATIONS, remaining)` for
+        the child budget -- a 0 here forces that to 0 regardless of what the
+        parent has left, so every subagent starts, runs no steps, and folds
+        back nothing. That is silent data loss, not a refusal, so it is
+        floored here rather than left to reach the loop at all.
+        """
+        return max(1, value)
+
     @field_validator("API_PROVIDER", "MODEL_TYPE")
     @classmethod
     def _validate_provider(cls, value: str) -> str:
@@ -674,6 +716,30 @@ class Settings(BaseSettings):
         if cleaned.endswith("/v1"):
             cleaned = cleaned[: -len("/v1")]
         return cleaned
+
+    @model_validator(mode="after")
+    def _guard_inprocess_backend(self) -> "Settings":
+        """Refuses the no-isolation backend outright in production.
+
+        ``inprocess`` runs model-generated code via a guarded ``exec()`` inside
+        this same API process -- no separate process, no OS sandbox, nothing
+        between a hallucinated ``os.environ`` write and every active session.
+        It exists for CI and for environments where spawning a child is
+        blocked, never as something a real deployment should be able to reach
+        by a stray ``.env`` value.
+        """
+        if self.EXECUTION_BACKEND == "inprocess":
+            if self.ENV == "prod":
+                raise ValueError(
+                    "EXECUTION_BACKEND=inprocess is refused when ENV=prod: it runs generated code with no "
+                    "process or OS isolation in the API server itself. Use host (default) or docker."
+                )
+            logger.critical(
+                "EXECUTION_BACKEND=inprocess selected -- generated code runs with NO isolation inside "
+                "this process. Development/CI only; never set this in a real deployment.",
+                env=self.ENV,
+            )
+        return self
 
     @model_validator(mode="after")
     def _size_to_the_host(self) -> "Settings":

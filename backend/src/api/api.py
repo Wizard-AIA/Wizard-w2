@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.deps import client_key, rate_limiter
+from src.api.deps import client_ip, client_key, ip_rate_limiter, rate_limiter
 from src.api.routes import chat, connections, datasets, export, meta, sandbox, sessions, skills, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
@@ -36,6 +36,11 @@ MAINTENANCE_INTERVAL_SECONDS = 300
 # least as expensive as an upload -- and unlike an upload, the cost lands on
 # somebody else's database too.
 RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets", "/api/connections")
+
+#: File-upload routes stream straight to disk under their own byte ceiling
+#: (MAX_UPLOAD_BYTES / CONTEXT_DOC_MAX_BYTES) rather than buffering a parsed
+#: JSON object, so MAX_JSON_BODY_BYTES below does not apply to them.
+JSON_BODY_LIMIT_EXEMPT_PREFIXES = ("/api/datasets", "/api/documents")
 
 #: Methods a same-origin form or fetch can use to change state. GET is
 #: excluded on purpose -- it must stay side-effect-free for this check to mean
@@ -111,6 +116,32 @@ app = FastAPI(
 )
 
 
+async def _reject_oversized_body(request: Request, limit: int) -> bool:
+    """Reads the body in bounded chunks, caching it for the route handler.
+
+    A ``Content-Length`` check alone only catches a client that reports its
+    size honestly; chunked transfer or a lying header would still let the
+    whole payload land in memory -- inside ``json.loads``, which needs the
+    full body before it can parse anything -- before there was any chance to
+    refuse it. Reading in chunks and stopping the moment the running total
+    passes ``limit`` means at most one chunk over budget is ever resident.
+
+    ``request._body`` is set on success so a later ``await request.json()``
+    in the route handler reuses these bytes instead of trying to re-read an
+    already-drained stream -- the same attribute Starlette's own
+    ``Request.body()`` populates and checks before touching the stream again.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            return True
+        chunks.append(chunk)
+    request._body = b"".join(chunks)  # noqa: SLF001 -- Starlette's own caching contract
+    return False
+
+
 @app.middleware("http")
 async def observability_and_limits(request: Request, call_next):
     """Logs each request, blocks cross-site form submissions, and rate-limits.
@@ -127,6 +158,20 @@ async def observability_and_limits(request: Request, call_next):
     """
     path = request.url.path
 
+    if (
+        request.method in MUTATING_METHODS
+        and path.startswith("/api/")
+        and not any(path.startswith(prefix) for prefix in JSON_BODY_LIMIT_EXEMPT_PREFIXES)
+        and await _reject_oversized_body(request, settings.MAX_JSON_BODY_BYTES)
+    ):
+        logger.warning("Request body too large", path=path)
+        return JSONResponse(
+            status_code=413,
+            content={
+                "detail": f"Request body too large. Maximum is {settings.MAX_JSON_BODY_BYTES // (1024 * 1024)}MB."
+            },
+        )
+
     if not settings.API_KEY and request.method in MUTATING_METHODS and path.startswith("/api/"):
         origin = request.headers.get("origin")
         if origin and origin not in settings.cors_origins:
@@ -141,7 +186,12 @@ async def observability_and_limits(request: Request, call_next):
         "PUT",
         "DELETE",
     }:
-        if not rate_limiter.allow(client_key(request)):
+        # Both must pass: the composite key keeps sessions sharing an address
+        # from colliding into one bucket, and the IP-only check keeps that
+        # fairness from becoming an unbounded multiplier -- a session id is
+        # client-supplied, so without a ceiling on the address too, minting a
+        # fresh one per request would mint a fresh bucket per request.
+        if not (rate_limiter.allow(client_key(request)) and ip_rate_limiter.allow(client_ip(request))):
             logger.warning("Rate limit exceeded", path=path, client=client_key(request))
             return JSONResponse(
                 status_code=429,
