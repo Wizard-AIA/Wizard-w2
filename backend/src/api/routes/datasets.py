@@ -62,7 +62,7 @@ async def upload_dataset(
             detail=(f"Unsupported file type. Supported formats: {', '.join(DatasetLoader.supported_extensions())}"),
         )
 
-    temp_path = make_temp_path(suffix=Path(filename).suffix)
+    temp_path = make_temp_path(suffix=Path(filename).suffix, workspace=session.workspace)
     try:
         try:
             await asyncio.to_thread(DatasetLoader.spool_to_disk, file.file, temp_path, settings.MAX_UPLOAD_BYTES)
@@ -152,7 +152,7 @@ async def upload_document(
             detail=(f"Unsupported document type. Supported formats: {', '.join(supported_document_extensions())}"),
         )
 
-    temp_path = make_temp_path(suffix=Path(filename).suffix)
+    temp_path = make_temp_path(suffix=Path(filename).suffix, workspace=session.workspace)
     try:
         try:
             await asyncio.to_thread(DatasetLoader.spool_to_disk, file.file, temp_path, settings.CONTEXT_DOC_MAX_BYTES)
