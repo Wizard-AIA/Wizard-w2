@@ -35,6 +35,7 @@ const HEARTBEAT_MS = 25_000
 const MAX_RECONNECT_DELAY_MS = 15_000
 
 function newId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID()
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 }
 
@@ -676,7 +677,11 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
       if (shouldReconnectRef.current) {
         attemptsRef.current += 1
-        const delay = Math.min(1000 * 2 ** (attemptsRef.current - 1), MAX_RECONNECT_DELAY_MS)
+        const cappedDelay = Math.min(1000 * 2 ** (attemptsRef.current - 1), MAX_RECONNECT_DELAY_MS)
+        // Full jitter: every tab reconnecting off the same fixed schedule
+        // after a backend restart is a thundering herd hitting the server at
+        // once. A random delay in [0, cappedDelay] spreads that out.
+        const delay = Math.floor(Math.random() * cappedDelay)
         // Reached through a ref so the callback does not have to close over
         // itself, which would make it its own dependency.
         reconnectRef.current = setTimeout(() => {
