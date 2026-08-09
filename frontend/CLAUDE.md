@@ -4,6 +4,13 @@ Moved out of the root `CLAUDE.md` so it loads only when work touches
 `frontend/`. The root file is the always-loaded one, and these are
 frontend-only conventions — nothing here changes how the backend behaves.
 
+## Commands
+```bash
+cd frontend && pnpm install
+pnpm dev
+pnpm lint && npx tsc --noEmit && pnpm build   # the three CI gates
+```
+
 Five routes, no landing page — `/` **is** the workspace:
 
 | Route | Component |
