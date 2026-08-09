@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # `core.*.__init__` imports `settings` back.
 from src.providers import CLOUD_PROVIDERS, LOCAL_PROVIDERS, PROVIDERS, describe, is_cloud
 from src.utils.hostinfo import host_info
+from src.utils.logging import logger
 
 
 # Not a Literal any more: the set of backends is data in `src.providers`, and
@@ -674,6 +675,30 @@ class Settings(BaseSettings):
         if cleaned.endswith("/v1"):
             cleaned = cleaned[: -len("/v1")]
         return cleaned
+
+    @model_validator(mode="after")
+    def _guard_inprocess_backend(self) -> "Settings":
+        """Refuses the no-isolation backend outright in production.
+
+        ``inprocess`` runs model-generated code via a guarded ``exec()`` inside
+        this same API process -- no separate process, no OS sandbox, nothing
+        between a hallucinated ``os.environ`` write and every active session.
+        It exists for CI and for environments where spawning a child is
+        blocked, never as something a real deployment should be able to reach
+        by a stray ``.env`` value.
+        """
+        if self.EXECUTION_BACKEND == "inprocess":
+            if self.ENV == "prod":
+                raise ValueError(
+                    "EXECUTION_BACKEND=inprocess is refused when ENV=prod: it runs generated code with no "
+                    "process or OS isolation in the API server itself. Use host (default) or docker."
+                )
+            logger.critical(
+                "EXECUTION_BACKEND=inprocess selected -- generated code runs with NO isolation inside "
+                "this process. Development/CI only; never set this in a real deployment.",
+                env=self.ENV,
+            )
+        return self
 
     @model_validator(mode="after")
     def _size_to_the_host(self) -> "Settings":
