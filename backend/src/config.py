@@ -487,6 +487,9 @@ class Settings(BaseSettings):
     # round-trip per branch, and a cap independent of the parent's own tier.
     # ------------------------------------------------------------------ #
     SUBAGENT_ENABLED: bool = True
+    #: Floored to 1 by a validator below -- a subagent that starts and is
+    #: handed zero iterations completes zero steps and folds back nothing,
+    #: which fails silently rather than either running or refusing to.
     SUBAGENT_MAX_ITERATIONS: int = 3
     # Wall clock for the whole fan-out, clamped to whatever's left of
     # AGENT_TURN_TIMEOUT when that's set. A branch that hasn't finished by
@@ -668,6 +671,19 @@ class Settings(BaseSettings):
         """
         cleaned = (value or "").strip().lower()
         return "host" if cleaned in ("auto", "local") else cleaned
+
+    @field_validator("SUBAGENT_MAX_ITERATIONS")
+    @classmethod
+    def _floor_subagent_iterations(cls, value: int) -> int:
+        """A misconfigured 0 would give every branch a zero-iteration budget.
+
+        `_act_parallel` takes `min(SUBAGENT_MAX_ITERATIONS, remaining)` for
+        the child budget -- a 0 here forces that to 0 regardless of what the
+        parent has left, so every subagent starts, runs no steps, and folds
+        back nothing. That is silent data loss, not a refusal, so it is
+        floored here rather than left to reach the loop at all.
+        """
+        return max(1, value)
 
     @field_validator("API_PROVIDER", "MODEL_TYPE")
     @classmethod
