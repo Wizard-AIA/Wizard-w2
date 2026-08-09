@@ -660,6 +660,44 @@ def test_a_per_dataset_policy_survives_to_the_prompt(client) -> None:
     assert orchestrator._redact_for(session, "manager") is False
 
 
+def test_workspace_files_are_not_reachable_across_sessions(client) -> None:
+    """H-9 (GitHub #88): `/api/workspace/files` and `/api/workspace/file/{path}`
+    must require the *caller's own* session, not merely *a* session.
+
+    Before the fix, anyone who obtained or guessed a session id could list and
+    download another session's files -- including the raw proprietary dataset --
+    because the only check was that a session existed at all.
+    """
+    import io
+
+    owner = client.post("/api/session").json()["session_id"]
+    owner_headers = {"X-Session-Id": owner}
+    csv = io.BytesIO(b"secret,value\nrow,1\n")
+    upload = client.post(
+        "/api/datasets?clean=false",
+        files={"file": ("dataset.csv", csv, "text/csv")},
+        headers=owner_headers,
+    )
+    assert upload.status_code == 200
+
+    intruder = client.post("/api/session").json()["session_id"]
+    intruder_headers = {"X-Session-Id": intruder}
+
+    listing = client.get("/api/workspace/files", headers=intruder_headers).json()
+    assert not any(entry["name"] == "dataset.csv" for entry in listing["files"]), (
+        "the intruder's own (empty) session must not surface the owner's files"
+    )
+
+    download = client.get("/api/workspace/file/dataset.csv", headers=intruder_headers)
+    assert download.status_code == 404, "the intruder's session has no such file of its own"
+
+    forged = client.get("/api/workspace/file/dataset.csv", headers={"X-Session-Id": "not-a-real-session-id"})
+    assert forged.status_code == 404, "an unknown session id must be rejected, not silently minted a fresh session"
+
+    owned = client.get("/api/workspace/file/dataset.csv", headers=owner_headers)
+    assert owned.status_code == 200
+
+
 def test_a_policy_cannot_be_set_for_a_dataset_that_is_not_loaded(client) -> None:
     """A silently-stored override for a name that does not exist would read as
     protection that is not actually in force."""
