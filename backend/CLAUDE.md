@@ -15,7 +15,7 @@ uv pip install --system -r requirements-optional.txt      # Redis / OpenAI gatew
 uvicorn src.api.api:app --reload --port 8000              # from backend/
 python backend/main.py path/to/data.csv                   # CLI REPL
 
-# Test  (run from repo ROOT — pyproject sets testpaths/pythonpath)
+# Test (run from repo ROOT — pyproject sets testpaths/pythonpath)
 pytest
 pytest backend/tests/unit -q
 pytest backend/tests/unit/test_code_guard.py::test_repair_strips_markdown_fences
@@ -103,6 +103,7 @@ src/
 - `approval_required` carries an `id` **only** for a mid-run permission gate — its presence distinguishes a paused turn from an ended one.
 - `observation` closes the most recent `action` that has none — never correlated by id.
 - `usage` emitted **only when a cloud model ran**; under `local-only`, silence is the honest surface.
+- See [docs/agent-loop.md](../docs/agent-loop.md) for frame catalogue and streaming protocol.
 
 ### Agent loop
 
@@ -127,13 +128,14 @@ orient (plan) → [plan gate] → loop → verify → answer
 - `AGENT_TURN_TIMEOUT` checked **before** an iteration is claimed, never mid-call.
 - Under `local-only`, `SEARCH:` is **refused** (not gated) — no consent can make it allowed.
 - **The final answer is synthesised by the manager from real execution output** (`create_answer_prompt`). Do not reintroduce client-side cleanup.
+- See [docs/agent-loop.md](../docs/agent-loop.md) for full loop and grounding details.
 
 ### Subagents
 
 - `parallel` step: offered only when `SUBAGENT_ENABLED and budget.allow_subagents and max_subagents >= 2`. Compact tier never sees it.
 - `SubagentSession` is a structural proxy (not a subclass); overrides `.id`, `.executor`, `.workspace`; forwards everything else.
 - `inprocess` runs branches **serially**; real backends use `asyncio.gather`.
-- See [docs/architecture.md](../docs/architecture.md) for full subagent design.
+- See [docs/agent-loop.md](../docs/agent-loop.md) for full subagent design.
 
 ### Execution
 
@@ -141,7 +143,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - Three backends: `host` (default, subprocess), `docker` (container), `inprocess` (guarded exec, test/dev only).
 - Docker is **opt-in**; unreachable daemon degrades to `host` with a warning.
 - **Any path to generated code must come from `runtime.workspace_path(session_id, name)`** — a literal `/workspace` only exists in containers.
-- Both real backends run the **same daemon** over the same protocol. See [docs/architecture.md](../docs/architecture.md).
+- Both real backends run the **same daemon** over the same protocol. See [docs/runtime.md](../docs/runtime.md).
 
 ### CodeGuard
 
@@ -158,6 +160,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - `df` preloaded from `<workspace>/dataset.feather`; all tables from `<workspace>/tables/*.feather`. `remove_dataset` must call `reload_dataset()`.
 - Paths interpolated with **`%r`**, not into `"..."` (Windows escape sequences).
 - `capabilities` probes with `find_spec` (no imports).
+- See [docs/runtime.md](../docs/runtime.md) for daemon protocol details.
 
 ### Sessions
 
@@ -172,6 +175,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - Three axes: mode (which providers), policy (how much data), tools (web_search unavailable under local-only).
 - Switching mode clears forbidden role assignments.
 - Forbidden encoder degrades to hashing fallback (doesn't raise).
+- See [docs/security.md](../docs/security.md) for full data mode policy.
 
 ### Permissions
 
@@ -181,6 +185,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - Grants are session-scoped, not persisted. Tightening clears them.
 - `ConsentBroker.ask` parks the turn on a future. Timeout/cancel/disconnect → denied. `orchestrator.run(can_prompt=...)` declares reply channel availability.
 - A denial does **not** end the turn — the loop routes around it.
+- See [docs/security.md](../docs/security.md) for permissions and consent broker details.
 
 ### Redaction
 
@@ -194,7 +199,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - Platform config dir (`utils/appdirs.py`). Resolution: env/settings first, then store.
 - **Never returned by any route** — only `has_key` and masked hints.
 - Permissions: POSIX `0600`, Windows SID-based ACL (via `whoami /user`, not `%USERNAME%`).
-- See [docs/architecture.md](../docs/architecture.md) for full design.
+- See [docs/security.md](../docs/security.md) for credential storage design.
 
 ### Context budgeting
 
@@ -202,6 +207,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - `prompts.TOOLKIT` is a catalogue, not a promise — filtered by `runtime.capabilities()`. Entries are **atomic** (all-or-nothing).
 - `_visualization_rules` and `_workspace_root` are capability- and backend-aware.
 - `runtime.TIER_MODULES` mirrors the Dockerfile; a test asserts agreement.
+- See [docs/runtime.md](../docs/runtime.md) for context and prompt budgeting.
 
 ### LLM / providers
 
@@ -246,7 +252,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - `LLM_NUM_CTX` reaches Ollama only; derived from host; `0` = derive.
 - `SYSTEM_PROFILE` on `auto`: host measured at boot, derivation fills only unset fields.
 - `PLOT_FORMAT` coupled across `create_prompt` and `_execute` — **change both**.
-- See [docs/architecture.md](../docs/architecture.md) for full config details.
+- See [docs/runtime.md](../docs/runtime.md) for full config details.
 
 ## Conventions
 
@@ -256,8 +262,11 @@ Ruff line-length 120, `E501` disabled (formatter owns line length).
 
 For design rationale, historical context, and implementation details beyond these rules:
 
-- [docs/architecture.md](../docs/architecture.md) — orchestrator, events, execution, daemon, sessions, export, context, config, testing
+- [docs/architecture.md](../docs/architecture.md) — System overview, subsystem map, and architecture index
+- [docs/agent-loop.md](../docs/agent-loop.md) — Orchestrator, loop, subagents, events, grounding, export
+- [docs/security.md](../docs/security.md) — Data mode, permission profiles, consent broker, redaction, credentials
+- [docs/runtime.md](../docs/runtime.md) — Execution backends, daemon protocol, session state, config derivation, database, testing
 - [docs/sandbox.md](../docs/sandbox.md) — Docker backend, OS sandbox (Linux/macOS/Windows), two-phase enforcement, selftest
-- [docs/connectors.md](../docs/connectors.md) — connector architecture, registry, credential handling, consent, write-back
-- [docs/skills.md](../docs/skills.md) — skill layers, promotion pipeline, GitHub install flow, trust boundary
-- [docs/llm.md](../docs/llm.md) — provider system, model registry, memory fitting, reasoning, usage, downloading, embeddings
+- [docs/connectors.md](../docs/connectors.md) — Connector architecture, registry, credential handling, consent, write-back
+- [docs/skills.md](../docs/skills.md) — Skill layers, promotion pipeline, GitHub install flow, trust boundary
+- [docs/llm.md](../docs/llm.md) — Provider system, model registry, memory fitting, reasoning, usage, downloading, embeddings

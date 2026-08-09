@@ -132,4 +132,4 @@ gave them call sites**.
 
 `network` gates installing a skill from GitHub, not connectors. Connectors are
 gated under `db_connect` — see the permission profile section in
-[`architecture.md`](architecture.md).
+[`security.md`](security.md).
