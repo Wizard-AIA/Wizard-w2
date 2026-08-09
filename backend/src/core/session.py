@@ -484,6 +484,8 @@ class Session:
 
     # ------------------------------------------------------------------ #
     def describe(self) -> dict[str, Any]:
+        backend = runtime_backend.active_backend()
+        confinement = self._sandbox_confinement(backend)
         return {
             "session_id": self.id,
             "created_at": self.created_at,
@@ -497,8 +499,43 @@ class Session:
             "data_policy": self.data_policy.to_dict(),
             "permissions": self.permissions.to_dict(),
             "usage": usage_ledger.totals(self.id),
-            "sandboxed": isolation_for(runtime_backend.active_backend()) in ("container", "os-sandbox"),
-            "execution_backend": runtime_backend.active_backend(),
+            "sandboxed": confinement["sandboxed"],
+            "execution_backend": backend,
+            # What the running child actually reports was enforced, not what
+            # was configured -- see `security/sandbox/child.py`. `best-effort`
+            # on an old kernel or a Windows box without pywin32 can silently
+            # apply nothing, and `sandboxed` above would otherwise still read
+            # `True` from the backend name alone.
+            "sandbox_detail": confinement["detail"],
+        }
+
+    def _sandbox_confinement(self, backend: str) -> dict[str, Any]:
+        """Truthfully answers whether *this* session's runtime is confined.
+
+        `isolation_for(backend)` only says what a backend is capable of; it
+        cannot know whether Landlock, SBPL or a Low-IL token actually applied
+        to the process that is running. Only that process knows, and it
+        reports it through `capabilities` -- see `security/sandbox/child.py`.
+        A container or a runtime that has not started yet has no report to
+        ask for, so it falls back to the backend's static claim.
+        """
+        static_isolation = isolation_for(backend)
+        if backend != "host" or not settings.HOST_SANDBOX or settings.HOST_SANDBOX == "off":
+            return {"sandboxed": static_isolation in ("container", "os-sandbox"), "detail": "unreported"}
+
+        runtime = runtime_backend.get_runtime(self.id, create=False)
+        if runtime is None:
+            return {"sandboxed": static_isolation in ("container", "os-sandbox"), "detail": "not started"}
+
+        report = runtime.sandbox_report()
+        if not report:
+            return {"sandboxed": static_isolation in ("container", "os-sandbox"), "detail": "unreported"}
+
+        refused = sorted(name for name, entry in report.items() if not (entry or {}).get("enforced"))
+        applied = sorted(name for name, entry in report.items() if (entry or {}).get("enforced"))
+        return {
+            "sandboxed": not refused,
+            "detail": "fully enforced" if not refused else f"partial: +{','.join(applied) or 'none'} -{','.join(refused)}",
         }
 
     def set_data_mode(self, mode: str) -> str:
