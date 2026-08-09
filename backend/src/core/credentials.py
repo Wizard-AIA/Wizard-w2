@@ -69,8 +69,12 @@ class CredentialStore:
 
     # ------------------------------------------------------------------ #
     def _load(self) -> dict[str, str]:
-        if self._cache is not None:
-            return self._cache
+        # Always through the lock: the pre-lock fast-path read raced a
+        # concurrent first write, which could observe `self._cache` after
+        # Python allocated the dict but before `_read()` finished populating
+        # it. `set`/`delete` already replace `self._cache` wholesale under
+        # the lock rather than mutate it in place, so the only thing this
+        # costs on the cached path is one uncontended lock acquisition.
         with self._lock:
             if self._cache is None:
                 self._cache = self._read()
