@@ -366,6 +366,41 @@ def test_a_real_sqlite_connection_reads_end_to_end(sqlite_spec) -> None:
     assert list(frame.columns) == ["id", "region", "amount"]
 
 
+def test_fetch_binds_params_instead_of_interpolating_them(sqlite_spec) -> None:
+    """A value containing SQL syntax must stay data, never become code.
+
+    ``region`` here is exactly what a naive ``f"...WHERE region = '{region}'"``
+    caller would format into the query string -- if `fetch` did that internally,
+    or if a caller had no bind-parameter path and had to do it themselves, this
+    value would close the string and inject a second statement. Bound through
+    ``params`` it can only ever match a row.
+    """
+    pytest.importorskip("sqlalchemy")
+    connector = build(sqlite_spec)
+    injection_attempt = "north' OR '1'='1"
+    try:
+        frame = connector.fetch(
+            "SELECT * FROM orders WHERE region = :region",
+            params={"region": injection_attempt},
+        )
+    finally:
+        connector.close()
+
+    assert len(frame) == 0, "the injected condition must not have matched every row"
+
+
+def test_fetch_still_works_with_no_params(sqlite_spec) -> None:
+    pytest.importorskip("sqlalchemy")
+    connector = build(sqlite_spec)
+    try:
+        frame = connector.fetch("SELECT * FROM orders WHERE region = 'north'")
+    finally:
+        connector.close()
+
+    assert len(frame) > 0
+    assert set(frame["region"]) == {"north"}
+
+
 def test_the_row_limit_is_pushed_down_not_sliced_afterwards(sqlite_spec) -> None:
     """`sample` must bound the read in the *engine*, not fetch everything and slice.
 

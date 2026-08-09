@@ -187,12 +187,20 @@ class RelationalConnector:
         except Exception as exc:
             raise ConnectorError(f"Could not read '{target}'.", detail=str(exc)) from exc
 
-    def fetch(self, query: str) -> pd.DataFrame:
+    def fetch(self, query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
+        """Runs ``query`` with ``:name``-style bind parameters, never string interpolation.
+
+        ``params`` goes to the driver as bound values -- the only way a caller
+        can vary a query by a value without that value being parsed as SQL. A
+        caller that instead formats the value into ``query`` gets the same
+        injection ``text()`` was supposed to prevent; this signature exists so
+        that caller has a safe alternative to reach for.
+        """
         sqlalchemy = _sqlalchemy()
         engine = self._connect()
         try:
             with engine.connect() as connection:
-                return pd.read_sql(sqlalchemy.text(query), connection)
+                return pd.read_sql(sqlalchemy.text(query), connection, params=params)
         except Exception as exc:
             raise ConnectorError("The query failed.", detail=str(exc)) from exc
 

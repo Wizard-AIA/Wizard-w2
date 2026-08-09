@@ -197,8 +197,12 @@ class ObjectStoreConnector:
             raise ConnectorError(f"Could not parse '{key}'.", detail=str(exc)) from exc
         return frame.head(limit)
 
-    def fetch(self, query: str) -> pd.DataFrame:
-        """Reads one object whole. ``query`` is its key."""
+    def fetch(self, query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
+        """Reads one object whole. ``query`` is its key.
+
+        ``params`` is part of the shared ``Connector`` signature; a key lookup
+        has nothing to bind it into.
+        """
         return self._read_object(query)
 
     def write(self, target: str, df: pd.DataFrame) -> None:
