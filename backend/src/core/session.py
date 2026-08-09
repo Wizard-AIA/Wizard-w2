@@ -535,7 +535,9 @@ class Session:
         applied = sorted(name for name, entry in report.items() if (entry or {}).get("enforced"))
         return {
             "sandboxed": not refused,
-            "detail": "fully enforced" if not refused else f"partial: +{','.join(applied) or 'none'} -{','.join(refused)}",
+            "detail": "fully enforced"
+            if not refused
+            else f"partial: +{','.join(applied) or 'none'} -{','.join(refused)}",
         }
 
     def set_data_mode(self, mode: str) -> str:

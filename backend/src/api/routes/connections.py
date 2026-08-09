@@ -23,8 +23,8 @@ from src.api.schemas import (
     WriteBackRequest,
 )
 from src.core.connectors import (
-    Connector,
     ConnectionSpec,
+    Connector,
     ConnectorError,
     DriverMissing,
     available_kinds,

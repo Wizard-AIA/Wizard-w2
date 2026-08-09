@@ -127,11 +127,7 @@ async def observability_and_limits(request: Request, call_next):
     """
     path = request.url.path
 
-    if (
-        not settings.API_KEY
-        and request.method in MUTATING_METHODS
-        and path.startswith("/api/")
-    ):
+    if not settings.API_KEY and request.method in MUTATING_METHODS and path.startswith("/api/"):
         origin = request.headers.get("origin")
         if origin and origin not in settings.cors_origins:
             logger.warning("Blocked cross-site request", path=path, origin=origin)

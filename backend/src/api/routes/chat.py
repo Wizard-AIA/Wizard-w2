@@ -299,9 +299,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 finally:
                     consent_broker.abandon(run_session.id)
 
-            current_run = asyncio.ensure_future(
-                run_turn(session, instruction, mode, approved_plan, approved_search)
-            )
+            current_run = asyncio.ensure_future(run_turn(session, instruction, mode, approved_plan, approved_search))
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
