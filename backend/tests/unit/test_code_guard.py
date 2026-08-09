@@ -303,6 +303,49 @@ def test_an_approved_root_does_not_widen_anything_else() -> None:
     assert not verdict.ok
 
 
+# --------------------------------------------------------------------------- #
+# Dynamic path expressions must not bypass the check (issue #87 / C-5)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "code",
+    [
+        # f-string with a computed field
+        "open(f'/etc/{name}')",
+        'open(f"{base}/passwd")',
+        # string concatenation involving a variable
+        "open(prefix + '/etc/shadow')",
+        "df.to_csv(dest)",
+        "df.to_csv(get_path())",
+        "with open(user_supplied) as f:\n    pass",
+        "df.to_csv(path_or_buf=dest)",
+        # nested inside an f-string that also has a constant piece
+        "open(f'/workspace/{sub}/out.csv')",
+    ],
+)
+def test_blocks_dynamic_path_expressions(code: str) -> None:
+    """A path built at runtime cannot be proven safe statically, so it must be
+    rejected rather than silently let through -- the C-5 bypass."""
+    verdict = CodeGuard.scan(code)
+    assert not verdict.ok
+    assert not verdict.syntax_error
+
+
+def test_evaluates_constant_f_string_paths_statically() -> None:
+    """An f-string whose fields are themselves constants can be evaluated, so
+    it is checked like any other literal instead of being rejected outright."""
+    assert CodeGuard.scan("open(f'/workspace/{\"ok\"}/out.csv')").ok
+    verdict = CodeGuard.scan("open(f'/etc/{\"passwd\"}')")
+    assert not verdict.ok
+    assert verdict.paths == ["/etc/passwd"]
+
+
+def test_evaluates_constant_string_concatenation_statically() -> None:
+    assert CodeGuard.scan("open('/workspace/' + 'out.csv')").ok
+    verdict = CodeGuard.scan("open('/etc/' + 'passwd')")
+    assert not verdict.ok
+    assert verdict.paths == ["/etc/passwd"]
+
+
 def test_an_approved_root_does_not_move_where_a_relative_path_lands() -> None:
     """A relative path resolves against the *first* root, so order is load-bearing.
 
