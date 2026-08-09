@@ -155,12 +155,47 @@ class ObjectStoreConnector:
         return ConnectionSchema(targets=targets)
 
     def sample(self, target: str, limit: int = DEFAULT_SAMPLE_ROWS) -> pd.DataFrame:
-        # Read whole, then bounded. An object store has no server-side row
-        # limit -- the smallest unit it will return is the object -- so unlike the
-        # relational connector there is nothing to push down, and pretending
-        # otherwise would only hide where the cost actually is.
+        # An object store has no server-side row limit -- the smallest unit it
+        # will return is the object -- so unlike the relational connector
+        # there is nothing to push down in general. A delimited text format
+        # is the one exception: it can be parsed from a byte prefix without
+        # reading the rest, so a preview of a multi-GB CSV costs a bounded
+        # Range request instead of the whole download. Parquet/Feather/JSON
+        # are not splittable at an arbitrary offset this way and still read
+        # whole.
+        lowered = target.lower()
+        if lowered.endswith((".csv", ".tsv")):
+            return self._sample_delimited(target, lowered.endswith(".tsv"), int(limit))
         frame = self._read_object(target)
         return frame.head(int(limit))
+
+    def _sample_delimited(self, key: str, tab_separated: bool, limit: int) -> pd.DataFrame:
+        """Parses only the first `CONNECTOR_SAMPLE_RANGE_BYTES` of a CSV/TSV object."""
+        client = self._connect()
+        range_bytes = max(1, int(settings.CONNECTOR_SAMPLE_RANGE_BYTES))
+        try:
+            response = client.get_object(Bucket=self._bucket(), Key=key, Range=f"bytes=0-{range_bytes - 1}")
+            payload = response["Body"].read()
+        except Exception as exc:
+            raise ConnectorError(f"Could not read '{key}'.", detail=str(exc)) from exc
+
+        # A range short of the whole object almost certainly split the final
+        # row mid-line -- `ContentRange` is `bytes 0-N/total`, so comparing N+1
+        # against the reported total says whether this range *was* the whole
+        # object. When it wasn't, the partial trailing line is dropped rather
+        # than handed to the CSV parser as a short row.
+        content_range = str(response.get("ContentRange") or "")
+        total = content_range.rsplit("/", 1)[-1] if "/" in content_range else ""
+        truncated = not total.isdigit() or len(payload) < int(total)
+
+        text = payload.decode("utf-8", errors="replace")
+        if truncated and "\n" in text:
+            text = text.rsplit("\n", 1)[0]
+        try:
+            frame = pd.read_csv(io.StringIO(text), sep="\t" if tab_separated else ",")
+        except Exception as exc:
+            raise ConnectorError(f"Could not parse '{key}'.", detail=str(exc)) from exc
+        return frame.head(limit)
 
     def fetch(self, query: str) -> pd.DataFrame:
         """Reads one object whole. ``query`` is its key."""

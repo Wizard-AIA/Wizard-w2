@@ -593,6 +593,12 @@ class Settings(BaseSettings):
     # 30s or more, which is long enough that an unreachable host reads as a hang
     # rather than as a wrong hostname.
     CONNECTOR_TIMEOUT: int = 10
+    # A row-limited *sample* of a delimited object (CSV/TSV) fetches this many
+    # bytes via an HTTP Range request instead of the whole object -- a 5GB CSV
+    # for a 100-row preview otherwise costs the full download every time.
+    # Parquet/Feather/JSON keep reading whole: they are not line-splittable at
+    # an arbitrary byte offset the way a delimited text format is.
+    CONNECTOR_SAMPLE_RANGE_BYTES: int = 1024 * 1024
 
     # Sessions
     SESSION_TTL_SECONDS: int = 60 * 60 * 6
