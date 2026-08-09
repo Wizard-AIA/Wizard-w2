@@ -273,6 +273,28 @@ def test_installs_are_refused_when_on_demand_pip_is_disabled(tmp_path: Path, mon
     assert not (tmp_path / LIBS_DIRNAME).exists()
 
 
+def test_a_flag_injection_attempt_is_refused_before_pip_runs(tmp_path: Path, monkeypatch) -> None:
+    """A module name reaching `pip install <name>` as a bare positional arg is
+    read by pip's own argument parser -- a leading dash or a `pkg @ url` direct
+    reference is not neutralised by `subprocess.run` avoiding a shell.
+    """
+    monkeypatch.setattr("src.config.settings.SANDBOX_ALLOW_RUNTIME_PIP", True)
+
+    ok, detail = real_install(tmp_path, {"--index-url=http://evil.example.com"})
+
+    assert ok is False
+    assert "not a valid package name" in detail
+
+
+def test_a_vcs_direct_reference_is_refused_before_pip_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("src.config.settings.SANDBOX_ALLOW_RUNTIME_PIP", True)
+
+    ok, detail = real_install(tmp_path, {"innocuous @ git+https://evil.example.com/repo"})
+
+    assert ok is False
+    assert "not a valid package name" in detail
+
+
 def test_the_distribution_map_is_shared_with_the_daemon() -> None:
     """Two copies would drift, and the container would install a different
     package than the parent for the same import name.

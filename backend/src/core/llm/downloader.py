@@ -37,6 +37,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Literal
+from urllib.parse import urlsplit
 
 from src.config import settings
 from src.core.llm.registry import model_registry
@@ -82,8 +83,29 @@ def is_valid_model_name(name: str) -> bool:
     never gets a say.
     """
     if "://" in name:
-        return bool(_HF_URL_RE.match(name))
+        return _is_valid_huggingface_url(name)
     return bool(_MODEL_NAME_RE.match(name))
+
+
+def _is_valid_huggingface_url(url: str) -> bool:
+    """Whether ``url`` is a plain, unadorned ``huggingface.co/<org>/<repo>`` link.
+
+    The regex alone rejects the character classes that let a URL smuggle a
+    pip/CLI-style option or a second scheme, but ``urlsplit`` is what actually
+    proves the string parses to the host and scheme it appears to have --
+    parsing and pattern-matching agreeing is a stronger guarantee than either
+    one alone, and cheap enough that there is no reason to rely on just one.
+    """
+    if not _HF_URL_RE.match(url):
+        return False
+    parts = urlsplit(url)
+    return (
+        parts.scheme == "https"
+        and parts.netloc.lower() == "huggingface.co"
+        and not parts.query
+        and not parts.fragment
+        and "@" not in parts.netloc
+    )
 
 
 def lms_executable() -> str | None:

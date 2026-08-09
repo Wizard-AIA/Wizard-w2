@@ -35,7 +35,10 @@ MAINTENANCE_INTERVAL_SECONDS = 300
 # `/api/connections` is here because an import reads a remote table, which is at
 # least as expensive as an upload -- and unlike an upload, the cost lands on
 # somebody else's database too.
-RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets", "/api/connections")
+# `/api/models` covers starting/cancelling a multi-gigabyte download and
+# deleting an installed model -- all three are cheap to fire off and expensive
+# (disk, network, an irreversible delete) to actually happen repeatedly.
+RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets", "/api/connections", "/api/models")
 
 #: File-upload routes stream straight to disk under their own byte ceiling
 #: (MAX_UPLOAD_BYTES / CONTEXT_DOC_MAX_BYTES) rather than buffering a parsed

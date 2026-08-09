@@ -17,11 +17,24 @@ away with the session.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from src.utils.logging import logger
+
+
+#: A distribution name pip will accept as a plain package specifier -- not a
+#: flag, a VCS URL, a `pkg @ url` direct reference, or a filesystem path.
+#: `pip install` positional arguments go straight to its own argument parser
+#: regardless of the fact that ``subprocess.run`` is invoked without a shell,
+#: so a value starting with ``-`` (e.g. ``--index-url=http://evil``) or
+#: containing ``@``/``://`` (a direct reference pip will fetch and build) is
+#: rejected outright rather than escaped -- there is no argv position that
+#: makes those safe to pass through. Mirrors PyPI's own package-name grammar
+#: (PEP 508): letters, digits, ``.``, ``_``, ``-``, bounded in length.
+_PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,213}[A-Za-z0-9])?$")
 
 
 #: Import name -> distribution name, for the cases where they differ. A missing
@@ -60,6 +73,11 @@ def distribution_for(module: str) -> str:
     return DISTRIBUTION_NAMES.get(module, module)
 
 
+def is_allowed_package(name: str) -> bool:
+    """Whether ``name`` is safe to hand to pip as a bare package argument."""
+    return bool(_PACKAGE_NAME_RE.match(name))
+
+
 def install(workspace: Path, modules: frozenset[str] | set[str], timeout: int = 300) -> tuple[bool, str]:
     """Installs ``modules`` into the session's own library directory.
 
@@ -90,6 +108,10 @@ def install(workspace: Path, modules: frozenset[str] | set[str], timeout: int = 
         return False, f"could not create {target}: {exc}"
 
     packages = sorted({distribution_for(name) for name in modules})
+    rejected = [name for name in packages if not is_allowed_package(name)]
+    if rejected:
+        return False, f"refusing to install {', '.join(rejected)}: not a valid package name"
+
     command = [
         sys.executable,
         "-m",
@@ -120,4 +142,4 @@ def install(workspace: Path, modules: frozenset[str] | set[str], timeout: int = 
     return True, f"installed {', '.join(packages)}"
 
 
-__all__ = ["DISTRIBUTION_NAMES", "LIBS_DIRNAME", "distribution_for", "install", "libs_dir"]
+__all__ = ["DISTRIBUTION_NAMES", "LIBS_DIRNAME", "distribution_for", "install", "is_allowed_package", "libs_dir"]
