@@ -88,12 +88,16 @@ def _roots() -> list[SkillRoot]:
 
 
 @router.get("", response_model=SkillListResponse)
-async def list_skills() -> SkillListResponse:
+async def list_skills(session: Session = Depends(get_session)) -> SkillListResponse:
     """Every installed skill, the roots they came from, and any pending offer.
 
     Shadowed skills are included: a built-in overridden by a user copy still
     exists, and hiding it is what makes "I edited it and nothing changed"
     unanswerable.
+
+    Requires a session, like the rest of the app's discovery routes: an id
+    that doesn't resolve is a 404 here rather than a silent fresh session, so
+    this isn't reachable with a forged or expired one.
     """
     skills = await asyncio.to_thread(skill_registry.list, include_shadowed=True)
     usage = await asyncio.to_thread(db_mgr.skill_usage_summary)
@@ -211,11 +215,13 @@ async def reload_skills() -> dict:
 
 
 @router.get("/candidates", response_model=SkillCandidateListResponse)
-async def list_candidates() -> SkillCandidateListResponse:
+async def list_candidates(session: Session = Depends(get_session)) -> SkillCandidateListResponse:
     """Analyses that have recurred enough to be worth naming.
 
     Also served here, not only as a live frame, so an offer missed in the chat is
     still findable rather than being a one-shot card.
+
+    Requires a session for the same reason as `list_skills`.
     """
     candidates = await asyncio.to_thread(promotion.pending)
     return SkillCandidateListResponse(
@@ -224,7 +230,7 @@ async def list_candidates() -> SkillCandidateListResponse:
     )
 
 
-@router.get("/candidates/{candidate_id}/draft", dependencies=[Depends(require_api_key)])
+@router.get("/candidates/{candidate_id}/draft", dependencies=[Depends(require_api_key), Depends(get_session)])
 async def draft_candidate(candidate_id: int) -> dict:
     """A first draft of the skill this candidate would become.
 
@@ -289,12 +295,14 @@ async def dismiss_candidate(candidate_id: int) -> dict:
 
 
 @router.get("/{name}", response_model=SkillDetail)
-async def get_skill(name: str) -> SkillDetail:
+async def get_skill(name: str, session: Session = Depends(get_session)) -> SkillDetail:
     """One skill's full text, and the analyses it has informed.
 
     The usage list is the browser half of "see which analyses used which skill".
     The live ``skill`` frame answers it during a turn; by the time this page is
     open that frame is gone, so it is read back from what was recorded.
+
+    Requires a session for the same reason as `list_skills`.
     """
     skill = await asyncio.to_thread(skill_registry.get, name)
     if skill is None:

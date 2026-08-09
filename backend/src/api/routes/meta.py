@@ -485,8 +485,20 @@ async def cancel_download(request: ModelDownloadRequest) -> dict:
 
 
 @router.delete("/api/models/installed", dependencies=[Depends(require_api_key)])
-async def delete_model(model: str, provider: str | None = None) -> dict:
-    """Removes an installed model. Ollama only — LM Studio's CLI has no delete."""
+async def delete_model(model: str, provider: str | None = None, confirm: str | None = None) -> dict:
+    """Removes an installed model. Ollama only — LM Studio's CLI has no delete.
+
+    ``confirm`` must repeat ``model`` back exactly. This is a destructive,
+    irreversible action reachable by a one-line request, and an API key alone
+    only proves the caller is authorized -- not that ``model`` is the one they
+    meant to delete rather than one grabbed from a stale link or a typo'd
+    query string.
+    """
+    if confirm != model:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass confirm=<model name>, matching `model` exactly, to delete an installed model.",
+        )
     try:
         await asyncio.to_thread(model_downloader.remove, provider, model)
     except ProviderNotDownloadable as exc:

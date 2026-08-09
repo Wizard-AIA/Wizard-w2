@@ -14,6 +14,7 @@ import pytest
 from src.core.ingest.documents import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     ContextDocument,
+    DocumentExtractionError,
     UnsupportedDocumentError,
     chunk_text,
     is_supported_document,
@@ -196,3 +197,57 @@ def test_summary_reports_what_the_ui_needs() -> None:
     assert summary["chunks"] == len(document.chunks)
     assert summary["chars"] > 0
     assert summary["preview"]
+
+
+# --------------------------------------------------------------------------- #
+# PDF bounds -- a small file on disk does not bound what parsing it costs
+# --------------------------------------------------------------------------- #
+class _FakePage:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def extract_text(self) -> str:
+        return self._text
+
+
+class _FakeReader:
+    def __init__(self, path: str, page_count: int, text_per_page: str) -> None:
+        self.pages = [_FakePage(text_per_page) for _ in range(page_count)]
+
+
+def test_a_pdf_declaring_too_many_pages_is_refused(tmp_path: Path, monkeypatch) -> None:
+    pypdf = pytest.importorskip("pypdf")
+
+    monkeypatch.setattr("src.core.ingest.documents.settings.CONTEXT_DOC_MAX_PDF_PAGES", 5)
+    monkeypatch.setattr(pypdf, "PdfReader", lambda path: _FakeReader(path, page_count=6, text_per_page="hi"))
+
+    path = tmp_path / "big.pdf"
+    path.write_bytes(b"%PDF-1.4 not a real pdf, never opened by the fake reader")
+
+    with pytest.raises(DocumentExtractionError, match="pages"):
+        load_document(path, "big.pdf")
+
+
+def test_a_pdf_decompressing_past_the_char_ceiling_is_refused(tmp_path: Path, monkeypatch) -> None:
+    pypdf = pytest.importorskip("pypdf")
+
+    monkeypatch.setattr("src.core.ingest.documents.settings.CONTEXT_DOC_MAX_EXTRACTED_CHARS", 100)
+    monkeypatch.setattr(pypdf, "PdfReader", lambda path: _FakeReader(path, page_count=3, text_per_page="x" * 60))
+
+    path = tmp_path / "bomb.pdf"
+    path.write_bytes(b"%PDF-1.4 not a real pdf, never opened by the fake reader")
+
+    with pytest.raises(DocumentExtractionError, match="memory"):
+        load_document(path, "bomb.pdf")
+
+
+def test_a_pdf_within_bounds_still_parses(tmp_path: Path, monkeypatch) -> None:
+    pypdf = pytest.importorskip("pypdf")
+
+    monkeypatch.setattr(pypdf, "PdfReader", lambda path: _FakeReader(path, page_count=2, text_per_page="A rule."))
+
+    path = tmp_path / "small.pdf"
+    path.write_bytes(b"%PDF-1.4 not a real pdf, never opened by the fake reader")
+
+    document = load_document(path, "small.pdf")
+    assert "A rule." in document.text

@@ -110,7 +110,31 @@ def _extract_text(path: Path, suffix: str) -> str:
                 "Reading PDFs needs the `pypdf` package. Install it, or upload the document as Markdown or text."
             ) from exc
         reader = PdfReader(str(path))
-        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+
+        # A small file on disk does not bound what comes out of it: a PDF can
+        # declare an arbitrary page count, and a page's content stream can
+        # decompress to far more text than its own size suggests. Both are
+        # cheap for an attacker and expensive for this process, so both are
+        # capped before extraction is allowed to run unbounded.
+        page_count = len(reader.pages)
+        if page_count > settings.CONTEXT_DOC_MAX_PDF_PAGES:
+            raise DocumentExtractionError(
+                f"'{path.name}' has {page_count} pages, more than the "
+                f"{settings.CONTEXT_DOC_MAX_PDF_PAGES} this deployment will parse."
+            )
+
+        parts: list[str] = []
+        total_chars = 0
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            total_chars += len(text)
+            if total_chars > settings.CONTEXT_DOC_MAX_EXTRACTED_CHARS:
+                raise DocumentExtractionError(
+                    f"'{path.name}' decompresses to more text than this deployment will hold in memory "
+                    f"(over {settings.CONTEXT_DOC_MAX_EXTRACTED_CHARS:,} characters)."
+                )
+            parts.append(text)
+        return "\n\n".join(parts)
 
     if suffix in DOCX_LIKE:
         try:

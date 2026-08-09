@@ -510,6 +510,14 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     CONTEXT_DOCS_ENABLED: bool = True
     CONTEXT_DOC_MAX_BYTES: int = 32 * 1024 * 1024
+    #: A page count a PDF can *declare* regardless of its on-disk size --
+    #: bounds the cost of walking every page before extraction is allowed to run.
+    CONTEXT_DOC_MAX_PDF_PAGES: int = 2000
+    #: A ceiling on the text pulled out of one document, independent of upload
+    #: size -- a page's compressed content stream can decompress to far more
+    #: text than the file itself suggests, so the input size alone doesn't
+    #: bound the memory extraction can consume.
+    CONTEXT_DOC_MAX_EXTRACTED_CHARS: int = 20_000_000
     CONTEXT_CHUNK_CHARS: int = 1200
     CONTEXT_CHUNK_OVERLAP: int = 150
     CONTEXT_TOP_K: int = 5
