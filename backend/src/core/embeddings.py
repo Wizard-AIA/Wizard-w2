@@ -84,6 +84,7 @@ def _assert_host_allowed(url: str) -> None:
         if address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved:
             raise RemoteHostBlocked(f"Embedding endpoint host {host!r} resolves to a disallowed address {address}.")
 
+
 #: How long to wait before retrying a remote encoder that could not be reached.
 #: Without this every single encode on an offline machine pays a connect
 #: timeout, and encodes happen several times per question.
