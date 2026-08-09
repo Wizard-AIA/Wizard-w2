@@ -93,6 +93,7 @@ class CredentialStore:
 
     def _write(self, keys: dict[str, str]) -> bool:
         path = self.path
+        is_new = not path.exists()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             # Restricted before anything secret is in it, not just after.
@@ -103,6 +104,16 @@ class CredentialStore:
         except OSError as exc:
             logger.error("Could not save credentials", path=str(path), error=str(exc))
             return False
+        if is_new:
+            # Stated once, at the moment it becomes true, rather than left for
+            # the docstring above to say on the user's behalf: this store is
+            # plaintext on disk, protected only by OS file permissions -- the
+            # same guarantee `~/.aws/credentials` has, not encryption at rest.
+            logger.warning(
+                "Created a new credentials store. Keys are saved in plaintext, "
+                "protected only by OS file permissions -- not encrypted at rest.",
+                path=str(path),
+            )
         return True
 
     # ------------------------------------------------------------------ #

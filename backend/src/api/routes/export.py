@@ -23,7 +23,7 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from src.api.deps import require_session
+from src.api.deps import get_session_for_link
 from src.core.agent import export
 from src.core.database import db_mgr
 from src.core.session import Session
@@ -41,7 +41,7 @@ MEDIA_TYPES = {
 async def export_message(
     message_id: int,
     format: str = Query(default="script", pattern="^(script|notebook)$"),
-    session: Session = Depends(require_session),
+    session: Session = Depends(get_session_for_link),
 ) -> Response:
     """Rebuilds one turn's analysis as a downloadable script, notebook, or zip.
 

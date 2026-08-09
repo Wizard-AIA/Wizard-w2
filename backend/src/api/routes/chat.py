@@ -9,6 +9,7 @@ nothing but translate events into frames.
 from __future__ import annotations
 
 import asyncio
+import hmac
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ from src.core.agent.consent import consent_broker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.session import Session, session_manager
+from src.utils.errors import safe_error_message
 from src.utils.logging import logger
 
 
@@ -124,8 +126,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     await websocket.accept()
 
-    api_key = websocket.query_params.get("api_key") or websocket.headers.get("x-api-key")
-    if settings.API_KEY and api_key != settings.API_KEY:
+    # Header only -- a query string is routinely captured in reverse-proxy and
+    # load-balancer access logs, browser history and the Referer header even
+    # over TLS, so a key accepted there would leak through channels the
+    # WSS handshake itself never touches.
+    api_key = websocket.headers.get("x-api-key")
+    if settings.API_KEY and (not api_key or not hmac.compare_digest(api_key, settings.API_KEY)):
         await websocket.send_json({"type": "error", "content": "Invalid or missing API key."})
         await websocket.close(code=1008)
         ws_gate.release(client_host)
@@ -240,27 +246,37 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 session.append_message("user", instruction)
 
             async def run_turn(
-                run_session: Session = session,
-                instruction: str = instruction,
-                mode: str = mode,
-                approved_plan: str | None = approved_plan,
-                approved_search: str | None = approved_search,
+                run_session: Session,
+                run_instruction: str,
+                run_mode: str,
+                run_approved_plan: str | None,
+                run_approved_search: str | None,
             ):
                 """Runs one turn and reports its own outcome.
 
-                The error handling lives in here rather than around an ``await``
-                on the task, because the receive loop must stay free to deliver
-                the frames a paused turn is waiting for.
+                Takes every value it needs as a plain parameter rather than
+                closing over the receive loop's locals. The loop reassigns
+                ``session``/``instruction``/``mode`` on its very next
+                iteration, and a coroutine created by ``ensure_future`` does
+                not start running until the loop yields -- so a free variable
+                here would risk reading next turn's values instead of this
+                one's. Passing them as arguments at the call site below fixes
+                what value each parameter holds independent of when the
+                coroutine actually starts.
+
+                The error handling lives in here rather than around an
+                ``await`` on the task, because the receive loop must stay free
+                to deliver the frames a paused turn is waiting for.
                 """
                 nonlocal last_code
                 try:
                     result = await orchestrator.run(
                         session=run_session,
-                        instruction=instruction,
-                        mode=mode,
+                        instruction=run_instruction,
+                        mode=run_mode,
                         emitter=emitter,
-                        approved_plan=approved_plan,
-                        approved_search=approved_search,
+                        approved_plan=run_approved_plan,
+                        approved_search=run_approved_search,
                         previous_code=last_code,
                         # This socket can carry a consent question to a human and
                         # bring the answer back, so gated actions may pause here
@@ -278,19 +294,19 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     )
                     raise
                 except Exception as exc:
-                    logger.error("Chat run failed", error=str(exc), session=run_session.id)
-                    await emitter(Event(type=EventType.ERROR, data={"content": str(exc)}))
+                    message = safe_error_message(exc, "Chat run failed", session=run_session.id)
+                    await emitter(Event(type=EventType.ERROR, data={"content": message}))
                 finally:
                     consent_broker.abandon(run_session.id)
 
-            current_run = asyncio.ensure_future(run_turn())
+            current_run = asyncio.ensure_future(run_turn(session, instruction, mode, approved_plan, approved_search))
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
     except Exception as exc:
-        logger.error("WebSocket handler crashed", error=str(exc))
+        message = safe_error_message(exc, "WebSocket handler crashed")
         try:
-            await websocket.send_json({"type": EventType.ERROR.value, "content": f"Server error: {exc}"})
+            await websocket.send_json({"type": EventType.ERROR.value, "content": message})
         except Exception as send_exc:
             logger.debug("Could not deliver the error frame; the socket is already gone", error=str(send_exc))
     finally:

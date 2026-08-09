@@ -37,6 +37,11 @@ MAINTENANCE_INTERVAL_SECONDS = 300
 # somebody else's database too.
 RATE_LIMITED_PREFIXES = ("/api/chat", "/api/datasets", "/api/connections")
 
+#: Methods a same-origin form or fetch can use to change state. GET is
+#: excluded on purpose -- it must stay side-effect-free for this check to mean
+#: anything.
+MUTATING_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
+
 
 async def _maintenance_loop():
     """Periodically reaps idle sessions and finished jobs."""
@@ -108,8 +113,28 @@ app = FastAPI(
 
 @app.middleware("http")
 async def observability_and_limits(request: Request, call_next):
-    """Logs each request and applies the sliding-window rate limit."""
+    """Logs each request, blocks cross-site form submissions, and rate-limits.
+
+    When ``API_KEY`` is unset -- the default for a local-first install --
+    mutating routes rely on CORS alone, and CORS does not stop a simple
+    cross-site request: a plain HTML form on a page the user has open in
+    another tab can still POST to this API, because a form submission is not
+    subject to CORS's preflight check. A browser does attach an ``Origin``
+    header to that request, though, so mutating requests carrying one that
+    does not match an allowed origin are refused. A request with no ``Origin``
+    at all -- a script, curl, the CLI -- is not this attack and is let
+    through; ``API_KEY`` is the control for that case.
+    """
     path = request.url.path
+
+    if not settings.API_KEY and request.method in MUTATING_METHODS and path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and origin not in settings.cors_origins:
+            logger.warning("Blocked cross-site request", path=path, origin=origin)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Cross-site request blocked. Set API_KEY to allow requests from other origins."},
+            )
 
     if any(path.startswith(prefix) for prefix in RATE_LIMITED_PREFIXES) and request.method in {
         "POST",

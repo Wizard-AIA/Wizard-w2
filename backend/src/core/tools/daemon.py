@@ -79,7 +79,7 @@ import traceback
 PID_FILE = %(pid_file)r
 ALLOW_PIP = %(allow_pip)s
 WORKSPACE = %(workspace)r
-BIND_HOST = "%(bind_host)s"
+BIND_HOST = %(bind_host)r
 MEM_BYTES = %(mem_bytes)d
 PROBE_MODULES = %(probe_modules)s
 DISTRIBUTIONS = %(distributions)s
@@ -430,9 +430,17 @@ def render_daemon(
 ) -> str:
     """Renders the daemon source for one runtime.
 
+    Every interpolated string -- ``workspace``, ``pid_file`` and ``bind_host``
+    -- is written with ``%r``, i.e. as a Python ``repr``, so the interpreter's
+    own escaping produces the literal. ``bind_host`` used to be spliced into a
+    ``"..."`` literal with plain ``%s``: every current caller passes a fixed
+    constant, but a value containing a quote, backslash or newline would have
+    broken out of the string and run as code inside the sandbox daemon before
+    any policy applied. ``%r`` closes that off structurally rather than by
+    trusting every future caller to keep passing a safe literal.
+
     ``workspace`` is a real host path on the local backend and ``/workspace``
-    inside a container. Both paths are written with ``%r``, i.e. as a Python
-    ``repr``, so the interpreter's own escaping produces the literal.
+    inside a container. Both paths are written with ``%r`` for the same reason.
 
     Interpolating them into ``"..."`` and relying on ``Path.as_posix()`` to
     remove the backslashes did not work, because ``as_posix()`` is only a

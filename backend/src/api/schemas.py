@@ -132,8 +132,15 @@ class SessionResponse(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     #: True when a real boundary was in force, not merely a separate process.
+    #: Derived from what the runtime *reported* enforcing, not from the
+    #: backend name alone -- `best-effort` on an old kernel or a Windows box
+    #: without pywin32 can silently apply nothing.
     sandboxed: bool = False
     execution_backend: str = "inprocess"
+    #: What was actually enforced -- "fully enforced", "partial: +fs -network",
+    #: "not started" (no runtime yet, nothing to ask) or "unreported" (Docker,
+    #: or HOST_SANDBOX=off, where this question does not apply).
+    sandbox_detail: str = "unreported"
 
 
 class ModelInfoResponse(BaseModel):

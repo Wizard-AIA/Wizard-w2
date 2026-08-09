@@ -88,6 +88,7 @@ from src.core.skills import promotion
 from src.core.skills.registry import skill_registry
 from src.core.tools import packages, runtime as runtime_backend
 from src.core.tools.evaluator import Evaluator
+from src.utils.errors import safe_error_message
 from src.utils.logging import logger
 
 
@@ -629,9 +630,9 @@ class AnalysisOrchestrator:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("Run failed unexpectedly", error=str(exc))
-            await emit(emitter, EventType.ERROR, content=f"Unexpected failure: {exc}")
-            state.answer = f"The analysis failed unexpectedly: {exc}"
+            message = safe_error_message(exc, "Run failed unexpectedly", session=session.id)
+            await emit(emitter, EventType.ERROR, content=message)
+            state.answer = f"The analysis failed unexpectedly: {message}"
             return self._result(state, "failed")
 
     # ------------------------------------------------------------------ #

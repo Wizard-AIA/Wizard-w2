@@ -8,6 +8,13 @@ services:
     # socket mount below already grants host-root-equivalent power, so dropping
     # to a non-root user here would add no real isolation.
     user: root
+    # Prevents the container from ever regaining privileges beyond what it was
+    # started with (e.g. via a setuid binary reachable through the mounted
+    # socket path). Does not reduce the socket mount's own power -- that is
+    # tracked above -- but it closes the one privilege-escalation avenue this
+    # service can be hardened against without breaking Docker-socket access.
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "8000:8000"
     environment:
