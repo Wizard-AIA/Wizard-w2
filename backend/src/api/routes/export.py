@@ -23,7 +23,7 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from src.api.deps import get_session_for_link
+from src.api.deps import get_session_for_link, require_api_key
 from src.core.agent import export
 from src.core.database import db_mgr
 from src.core.session import Session
@@ -37,7 +37,7 @@ MEDIA_TYPES = {
 }
 
 
-@router.get("/{message_id}")
+@router.get("/{message_id}", dependencies=[Depends(require_api_key)])
 async def export_message(
     message_id: int,
     format: str = Query(default="script", pattern="^(script|notebook)$"),
