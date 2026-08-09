@@ -632,6 +632,12 @@ class Settings(BaseSettings):
     #: one per request and multiply their effective rate without bound. Both
     #: ceilings must pass.
     RATE_LIMIT_IP_BURST_MULTIPLIER: int = 8
+    #: Ceiling on a JSON request body -- POST /api/chat, /api/connections,
+    #: PUT /api/permissions and friends. File upload routes are exempt: they
+    #: stream to disk under their own MAX_UPLOAD_BYTES / CONTEXT_DOC_MAX_BYTES
+    #: ceiling rather than buffering into a parsed object first, which a JSON
+    #: body always does.
+    MAX_JSON_BODY_BYTES: int = 2 * 1024 * 1024
 
     # Paths
     DATA_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "data")
