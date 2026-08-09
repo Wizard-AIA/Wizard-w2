@@ -1,66 +1,57 @@
 # Frontend
 
-Moved out of the root `CLAUDE.md` so it loads only when work touches
-`frontend/`. The root file is the always-loaded one, and these are
-frontend-only conventions — nothing here changes how the backend behaves.
+Frontend-specific architecture, commands and UI conventions.
+Loads only when work touches `frontend/`. Global rules: [root CLAUDE.md](../CLAUDE.md).
 
 ## Commands
+
 ```bash
 cd frontend && pnpm install
-pnpm dev
-pnpm lint && npx tsc --noEmit && pnpm build   # the three CI gates
+pnpm dev                                         # Next.js dev server (:3000)
+pnpm lint && npx tsc --noEmit && pnpm build      # The three CI gates
 ```
+
+## Routes
 
 Five routes, no landing page — `/` **is** the workspace:
 
-| Route | Component |
-|-------|-----------|
-| `/` | [chat-shell.tsx](frontend/components/chat-shell.tsx) |
-| `/data` | [pages/data-workbench.tsx](frontend/components/pages/data-workbench.tsx) |
-| `/skills` | [pages/skills-workbench.tsx](frontend/components/pages/skills-workbench.tsx) |
-| `/models` | [pages/models-workbench.tsx](frontend/components/pages/models-workbench.tsx) |
-| `/settings` | [pages/settings-workbench.tsx](frontend/components/pages/settings-workbench.tsx) |
+| Route | Component | Purpose |
+|---|---|---|
+| `/` | [components/chat-shell.tsx](components/chat-shell.tsx) | Chat workspace & agent execution |
+| `/data` | [components/pages/data-workbench.tsx](components/pages/data-workbench.tsx) | Datasets & per-source cloud policy |
+| `/skills` | [components/pages/skills-workbench.tsx](components/pages/skills-workbench.tsx) | Skills browser, history & promotion |
+| `/models` | [components/pages/models-workbench.tsx](components/pages/models-workbench.tsx) | Model selection & downloading |
+| `/settings` | [components/pages/settings-workbench.tsx](components/pages/settings-workbench.tsx) | System profile & permission matrix |
 
-[app-shell.tsx](frontend/components/app-shell.tsx) renders the nav rail once from the root layout. Keep it there: mounting it per page would tear down and rebuild the chat WebSocket on every route change.
+## Invariants & Rules
 
-- [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) owns one persistent WebSocket with heartbeat and exponential-backoff reconnect, and appends each `*_delta` frame to the live message. This is genuine token streaming; do not reintroduce the timer-based word reveal.
-- **Every socket handler first checks it is still the socket the hook holds** (`socketRef.current === socket`). A discarded socket otherwise keeps acting as the live one: its `onclose` nulls `socketRef` out from under the replacement and schedules another connect, so the replacement stays open with nothing pointing at it. StrictMode remounts every effect in dev, so this fired on **every page load** — the backend log showed two `[accepted]` per load and one disconnect. The orphan is not free: `ws_gate` caps connections at `WS_MAX_CONCURRENT_PER_IP` (4) per client, so one tab cost two slots and two tabs exhausted the limit. Retiring a socket also means detaching its handlers, and for one still CONNECTING, closing on open rather than immediately — `close()` mid-handshake is what logs "WebSocket is closed before the connection is established".
-- The composer holds **two independent dials**: the Auto / Fast / Deep segmented control (analysis *depth*) and [chat/permission-control.tsx](frontend/components/chat/permission-control.tsx) (how much it asks first). A popover rather than a third segmented group — three of those across one row does not fit, and unlike depth this is changed rarely. The full per-category matrix is on `/settings`; this is the profile switch.
-- **A permission prompt does not end the turn.** `use-chat-stream.ts` keeps `isRunning` true and keeps `activeIdRef` when the frame carries an `id`, and `respondToApproval` replies in place instead of rebuilding the turn — the paused run on the server is still holding its investigation.
-- [chat/investigation-trail.tsx](frontend/components/chat/investigation-trail.tsx) renders what the agent chose to do, move by move; [chat/answer-trust.tsx](frontend/components/chat/answer-trust.tsx) renders how far the answer can be trusted. Both are collapsed by default — the answer is the headline.
-- **[chat/skill-credit.tsx](frontend/components/chat/skill-credit.tsx) sits with the trust surfaces, not in the trail.** Where the answer's reasoning came from is the same kind of question as how far it can be trusted. One quiet line, each name linking to `/skills`, so "which skill?" and "what does it say?" are one click apart — this is Milestone 5's first acceptance criterion made visible, which without it would be true only inside a prompt nobody sees. `skill` frames are deduped by name in the hook: a skill can match at planning and again through a `consult`, and "informed by X, X" says nothing extra. The `final` frame's `skills_used` is *merged* into those frames rather than replacing them, because the frames carry the layer and the score and the terminal list is names only.
-- [chat/skill-promotion.tsx](frontend/components/chat/skill-promotion.tsx) renders the `skill_candidate` offer, **after** the answer and its caveats: it is an offer to save work already done, not something the turn waits on. The draft is fetched, not composed here — the backend builds it from the plan and code that actually ran, which makes promotion a confirmation rather than a writing task. Declining is persisted server-side, so it is not asked again next turn.
-- **The same component serves both routes into promotion.** With a `candidate` it is the agent's offer; with only an `instruction` it is the user's "Save as skill", a quiet action beside Copy on any finished answer. They differ in what fetches the draft and in whether backing out is worth recording — declining an offer is a decision about the analysis, closing a form you opened yourself is not — so they are one component rather than two that drift. `ChatMessage.instruction` is set when the turn is sent rather than found by walking backwards through the list, so the button cannot attach itself to the wrong turn.
-- `/skills` shows **how many analyses each skill informed**, and names the recent ones on the detail pane. That is the browser half of the milestone's bullet, and it cannot come from the `skill` frame: that frame is live and gone by the time the page is open, so it is read back from `skill_usage`.
-- `/skills` shows the three layer roots **by path**, and the built-in layer renders read-only *with the reason*. A disabled control with no explanation is exactly what it avoids: the answer to "why can't I edit this" belongs on the screen. A shadowed skill says which layer overrode it. There is a reload button because skills are plain files and a text editor is a supported way to change one — the page must not contradict that.
-- Grounding and verification arrive **twice**: as a warning string (for REST clients with no richer surface) and as structured fields. `message.tsx` filters the two known prefixes out of the plain warning list so nothing is said twice. Those prefixes are coupled to `GroundingReport.warning()` and `orchestrator._verify`.
-- `connect()` deliberately performs **no synchronous setState** — it is called from a mount effect, and the `react-hooks/set-state-in-effect` lint rule is an error, not a warning.
-- The session id lives in `localStorage` and is sent on every request, so a reload rejoins the same server-side session and dataset.
-- **[data-mode-control.tsx](frontend/components/data-mode-control.tsx) is in the nav rail, not in Settings.** Whether anything leaves the machine is not a preference to be found three screens deep; the rail already mounts once from the root layout, so it costs no remount and never disturbs the chat socket. The cost line sits with it because spending is a consequence of that choice, not a separate topic. The permission profile deliberately does **not** join it: the two are separate axes, and the one that belongs in the composer is the one you might change per question.
-- The cost readout is **live**: the backend's `usage` frame carries session totals, [use-chat-stream.ts](frontend/lib/use-chat-stream.ts) pushes them into [usage-store.ts](frontend/lib/usage-store.ts), and the rail subscribes through `useSyncExternalStore` — the same pattern as `use-sound`, and for the same reason (`set-state-in-effect` is an error here). The frame replaces rather than accumulates: the backend ledger is the source of truth, and adding on the client would double-count a reconnect.
-- Provider **labels and hints come from the backend**, not from the frontend. There used to be two hardcoded `Record<ProviderId, string>` maps — one in the picker, one on `/models` — and adding a backend meant editing both plus the union type. `ProviderId` is now just `string`.
-- The per-source cloud-data control lives on `/data` beside each table, since that is where you already are when you decide a table is sensitive. It offers three states, not two: "Default" tracks the session setting rather than copying it.
-- `/settings` has a **Data** section: the mode in force, what schema-only withholds *by name*, which tools the mode disables, and the session's usage table. Under `local-only` it states that no external call is possible rather than rendering a zeroed meter.
-- `/models` can hold an **API key** per cloud provider ([models/provider-key.tsx](frontend/components/models/provider-key.tsx)). The field never shows the stored key — only a masked tail — because reading one back to render it would put it in a response, a browser cache and a devtools log for no benefit.
-- `/settings` has an **Inference** section reporting what local inference actually runs with (threads, context window, keep-alive, turn deadline) plus `performance_notes` — settings that will make the install slow, named in plain language by the backend (`routes/meta.performance_notes`). Each note is checked by its *symptom* against the measured machine, not by whether the value was pinned: the host-sizing validator assigns to those fields, so `model_fields_set` cannot tell a user's choice from a derived one by the time anyone can ask. Silence means nothing is fighting the machine, so the empty case says that explicitly rather than rendering nothing.
-- `/settings` reports the runtime **actually in force**, not just "Docker or not": `local` gets a plain statement of what it does and does not protect, and only `inprocess` gets a warning. It also shows the measured host facts the resource limits were derived from — the answer to "why is it only using four threads" should be one screen, not a support conversation.
-- `/models` can **install** a model, not only choose one — [models/model-install.tsx](frontend/components/models/model-install.tsx). It sits above the installed list because on a fresh machine that list is empty and it is the only control that does anything. Progress is polled; a provider that cannot download shows the reason instead of a button.
-- Chat components: [chat/message.tsx](frontend/components/chat/message.tsx), [chat/reasoning-panel.tsx](frontend/components/chat/reasoning-panel.tsx), [chat/step-timeline.tsx](frontend/components/chat/step-timeline.tsx), [chat/artifacts-panel.tsx](frontend/components/chat/artifacts-panel.tsx) (slide-over), [chat/model-picker.tsx](frontend/components/chat/model-picker.tsx) (quick swap; `/models` is the full surface).
-- The picker browses one provider at a time and always sends the provider alongside the model name — the list on screen may belong to a different backend than the role currently uses, and a bare name would be routed to the wrong daemon.
+### Navigation & Shell
+- [components/app-shell.tsx](components/app-shell.tsx) renders the nav rail **once** from the root layout. Do not mount per page (would tear down and rebuild the chat WebSocket on route changes).
+- [components/data-mode-control.tsx](components/data-mode-control.tsx) sits in the nav rail with the live cost readout (`lib/usage-store.ts`).
 
-## Design system — [globals.css](frontend/app/globals.css)
+### WebSocket & Streaming
+- [lib/use-chat-stream.ts](lib/use-chat-stream.ts) manages the persistent chat WebSocket.
+- **Every socket handler must check `socketRef.current === socket`** to prevent duplicate/orphan socket leaks under React StrictMode effect remounts.
+- `connect()` must perform **no synchronous setState** in mount effects (triggers ESLint error).
+- Session ID is persisted in `localStorage` and sent on every request via `X-Session-Id`.
 
-Every colour, shadow, duration and easing curve is a token; components reference tokens, never raw values. Adding a `#hex` or a bare `duration-200` to a component is the thing to avoid.
+### Permission & Prompts
+- The composer has two independent controls: Depth segmented control (Auto/Fast/Deep) and Permission popover ([components/chat/permission-control.tsx](components/chat/permission-control.tsx)).
+- **Permission prompts do not end the turn.** When `approval_required` carries an `id`, `use-chat-stream.ts` preserves `isRunning=true` and `activeIdRef`; `respondToApproval` replies in place.
+- `ChatMessage.instruction` is stamped when a turn is sent.
 
-- **Light only.** There is no `.dark` block and no `dark` variant. The aurora washes, the orb's glow and the shadow ramp are all tuned against a warm white ground. Do not reintroduce `dark:` classes — they will silently do nothing.
-- The base background is painted on `html`, not `body`. `.aurora` is `position: fixed; z-index: -1`, and a background on `body` covers it completely.
-- Surfaces: `.aurora` (ambient wash, in the root layout), `.grid-field` (hero only), `.glass` (anything floating over content), `.ring-gradient` (1px gradient border — plain `border` cannot express one), `.text-gradient`.
-- Motion: `.reveal` / `.reveal-in` / `.reveal-scale` for entrances, `.stagger` with an inline `--i` for cascades, `.lift` for hover, `.caret` for the streaming cursor. Entrances are blur + a 6px rise, never a long slide.
-- `prefers-reduced-motion` neutralises entrances to their **end state** rather than just shortening them, so nothing is left stranded mid-blur.
-- Type is **Geist**, self-hosted from the `geist` npm package (the font files ship inside it). Deliberately not `next/font/google`, which downloads at build time and would make `pnpm build` — a CI gate — fail whenever Google Fonts was unreachable.
+### Trust & Attribution
+- [components/chat/investigation-trail.tsx](components/chat/investigation-trail.tsx) and [components/chat/answer-trust.tsx](components/chat/answer-trust.tsx) are collapsed by default.
+- [components/chat/skill-credit.tsx](components/chat/skill-credit.tsx) sits with trust surfaces; links to `/skills`. `skill` frames are deduped by name.
 
-## The orb and sound
+### Design System — [app/globals.css](app/globals.css)
+- **Use tokens only.** Every color, shadow, duration, and easing curve is a token in `globals.css`. Never add raw `#hex` or arbitrary duration utilities.
+- **Light only.** Do not add `dark:` utility classes (surfaces are tuned for warm white ground).
+- Base background is painted on `html`, not `body` (so `.aurora` fixed background is visible).
+- Font is **Geist**, self-hosted from the `geist` npm package (no build-time Google Fonts downloads).
+- Motion: `.reveal`, `.reveal-in`, `.reveal-scale`, `.lift`, `.caret`. `prefers-reduced-motion` resets animations to completed end states.
 
-- [animated-orb.tsx](frontend/components/animated-orb.tsx) is the brand mark, recovered from the pre-rewrite UI. Blur and drop shadow are computed from `size`; the original constants only looked right at hero scale. Orbits live in `globals.css`.
-- [use-sound.ts](frontend/lib/use-sound.ts) pools one `Audio` element per sound — the old code allocated a new one per click. The mute preference is shared through `useSyncExternalStore` and persisted, hydrated in `subscribe` rather than an effect (again, `set-state-in-effect` is an error).
-- Autoplay is expected to fail: browsers block the startup chime until the page has been interacted with, so it is re-armed to fire on the first real gesture.
+## Deep Documentation
+
+For deep UI architecture, React StrictMode analysis, and design system rationale:
+- [docs/frontend.md](../docs/frontend.md) — Route architecture, WebSocket lifecycle, component state patterns, and design tokens
