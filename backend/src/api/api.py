@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.deps import client_key, rate_limiter
+from src.api.deps import client_ip, client_key, ip_rate_limiter, rate_limiter
 from src.api.routes import chat, connections, datasets, export, meta, sandbox, sessions, skills, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
@@ -141,7 +141,12 @@ async def observability_and_limits(request: Request, call_next):
         "PUT",
         "DELETE",
     }:
-        if not rate_limiter.allow(client_key(request)):
+        # Both must pass: the composite key keeps sessions sharing an address
+        # from colliding into one bucket, and the IP-only check keeps that
+        # fairness from becoming an unbounded multiplier -- a session id is
+        # client-supplied, so without a ceiling on the address too, minting a
+        # fresh one per request would mint a fresh bucket per request.
+        if not (rate_limiter.allow(client_key(request)) and ip_rate_limiter.allow(client_ip(request))):
             logger.warning("Rate limit exceeded", path=path, client=client_key(request))
             return JSONResponse(
                 status_code=429,

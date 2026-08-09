@@ -619,6 +619,19 @@ class Settings(BaseSettings):
     RATE_LIMIT_MAX_REQUESTS: int = 60
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     WS_MAX_CONCURRENT_PER_IP: int = 4
+    #: Comma-separated peer IPs allowed to set X-Forwarded-For. Empty means
+    #: nobody is trusted, so the limiter keys on the socket peer alone -- the
+    #: header is otherwise self-reported and a client behind no real proxy
+    #: could claim any address to evade or collide someone else's bucket.
+    FORWARDED_ALLOW_IPS: str = ""
+    #: Multiplies RATE_LIMIT_MAX_REQUESTS / WS_MAX_CONCURRENT_PER_IP into a
+    #: second, coarser ceiling keyed on the raw address alone. The per-session
+    #: limiter gives every session behind a shared address (NAT, reverse
+    #: proxy) its own fair budget, but a session id is client-supplied --
+    #: without a ceiling on the address too, an attacker could mint a fresh
+    #: one per request and multiply their effective rate without bound. Both
+    #: ceilings must pass.
+    RATE_LIMIT_IP_BURST_MULTIPLIER: int = 8
 
     # Paths
     DATA_DIR: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "data")
