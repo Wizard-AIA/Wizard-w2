@@ -150,12 +150,14 @@ class DocumentConnector:
             raise ConnectorError(f"Could not read '{target}'.", detail=str(exc)) from exc
         return self._frame(documents)
 
-    def fetch(self, query: str) -> pd.DataFrame:
+    def fetch(self, query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
         """Runs a JSON find specification: ``{"collection": ..., "filter": {...}}``.
 
         A find document rather than a query language, because Mongo has no single
         textual one and inventing a dialect here would be a second thing to learn
-        that only Wizard speaks.
+        that only Wizard speaks. ``params`` is part of the shared ``Connector``
+        signature; Mongo's filter document has no separate bind-parameter slot,
+        so there is nothing here for it to do.
         """
         import json
 

@@ -15,7 +15,7 @@ That is what keeps Milestone 3's sandbox network seal intact -- see
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -53,8 +53,13 @@ class Connector(Protocol):
         the whole table, which is the thing this signature exists to avoid.
         """
 
-    def fetch(self, query: str) -> pd.DataFrame:
+    def fetch(self, query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
         """Runs an engine-native query and returns the result.
+
+        ``params`` carries bind values for engines that support them (SQL's
+        ``:name`` placeholders). A caller with a value to vary the query by must
+        bind it here, never format it into ``query`` -- that is the difference
+        between a parameterized query and a SQL-injection vector.
 
         Called only from the parent process, and only for something the user
         asked for -- never handed to generated code. Defined now because a
