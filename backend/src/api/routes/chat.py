@@ -158,7 +158,16 @@ async def websocket_chat(websocket: WebSocket) -> None:
         return
 
     session_id = websocket.query_params.get("session") or websocket.headers.get(SESSION_HEADER.lower())
-    session = session_manager.get_or_create(session_id)
+    resolved = session_manager.get(session_id) if session_id is not None else None
+    if resolved is None and session_id is not None:
+        await websocket.send_json(
+            {"type": "error", "content": "Session not found or expired. Create a new session and re-upload your data."}
+        )
+        await websocket.close(code=1008)
+        ws_gate.release(client_host)
+        ws_ip_gate.release(client_addr)
+        return
+    session = resolved if resolved is not None else session_manager.create()
 
     emitter = WebSocketEmitter(websocket)
     current_run: asyncio.Task | None = None

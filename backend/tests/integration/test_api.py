@@ -99,10 +99,18 @@ def test_sessions_are_isolated_from_each_other(client: TestClient) -> None:
     assert other["has_data"] is False, "a dataset leaked across sessions"
 
 
-def test_unknown_session_id_yields_a_fresh_session(client: TestClient) -> None:
+def test_unknown_session_id_is_rejected_not_silently_replaced(client: TestClient) -> None:
+    """Regression (issue #94): an invalid/expired/forged X-Session-Id must not
+    silently mint a fresh unauthenticated session -- that would detach the
+    caller from whatever workspace/data-mode/policy state it thought it had."""
     response = client.get("/api/session", headers={SESSION_HEADER: "does-not-exist"})
+    assert response.status_code == 404
+
+
+def test_omitted_session_id_yields_a_fresh_session(client: TestClient) -> None:
+    response = client.get("/api/session")
     assert response.status_code == 200
-    assert response.json()["session_id"] != "does-not-exist"
+    assert response.json()["session_id"]
 
 
 def test_session_delete(client: TestClient) -> None:

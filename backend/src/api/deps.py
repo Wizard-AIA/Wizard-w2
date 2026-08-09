@@ -31,7 +31,7 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
 
 
 def get_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
-    """Resolves the caller's session, creating one when absent or expired.
+    """Resolves the caller's session, creating one only when no id was sent.
 
     Header only. A session id is a bearer credential -- whoever presents it
     gets the workspace, datasets and chat history behind it -- and a query
@@ -39,8 +39,15 @@ def get_session(x_session_id: str | None = Header(default=None, alias=SESSION_HE
     the Referer header in a way a request header is not. The two routes that
     serve a direct navigation target (a download link a browser tab opens
     without JS setting a header) use :func:`get_session_for_link` instead.
+
+    An id that *was* sent but doesn't resolve (unknown, expired, forged) is
+    rejected rather than silently handed a fresh unauthenticated session --
+    that would detach the caller from the workspace/data-mode/policy state
+    it thought it had. Creation only happens when the header is absent.
     """
-    return session_manager.get_or_create(x_session_id)
+    if x_session_id is None:
+        return session_manager.create()
+    return require_session(x_session_id)
 
 
 def require_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
