@@ -22,7 +22,7 @@ async def create_session(response: Response) -> SessionResponse:
 
 @router.get("/session", response_model=SessionResponse)
 async def describe_session(response: Response, session: Session = Depends(get_session)) -> SessionResponse:
-    """Returns the caller's session, creating one transparently if needed."""
+    """Returns the caller's session, creating one only if no id was sent."""
     response.headers[SESSION_HEADER] = session.id
     return SessionResponse(**session.describe())
 
