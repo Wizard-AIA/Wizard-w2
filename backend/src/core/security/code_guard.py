@@ -298,31 +298,83 @@ class CodeGuard:
             ):
                 violations.append(f"'{name}()' cannot be used to reach '{attribute.value}'.")
 
-        # Path arguments: only literal strings can be checked statically. A
-        # computed path is allowed through because the container mount, not this
-        # scanner, is the real boundary.
+        # Path arguments: a literal string, an f-string built only from
+        # constants, or a `+` concatenation of such can be evaluated statically
+        # and checked against the allowlist. Anything else -- a bare variable, a
+        # function call, an f-string with a computed field -- cannot be proven
+        # safe, so it is rejected outright rather than let through unchecked.
         checkable = (isinstance(func, ast.Name) and name in PATH_ARG_FUNCTIONS) or (
             isinstance(func, ast.Attribute) and name in (PATH_ARG_FUNCTIONS | PATH_ARG_METHODS)
         )
         if checkable:
-            path_literal = cls._first_string_arg(node)
-            if path_literal is not None and not _is_path_allowed(path_literal, roots):
-                violations.append(f"File access outside the workspace is not permitted (path: '{path_literal}').")
-                paths.append(path_literal)
+            arg_node = cls._first_path_arg(node)
+            if arg_node is not None and not (
+                isinstance(arg_node, ast.Constant) and not isinstance(arg_node.value, str)
+            ):
+                path_literal = cls._static_string_value(arg_node)
+                if path_literal is None:
+                    violations.append(
+                        f"'{name}()' path argument must be a literal string; "
+                        "computed or dynamic paths are not permitted."
+                    )
+                elif not _is_path_allowed(path_literal, roots):
+                    violations.append(f"File access outside the workspace is not permitted (path: '{path_literal}').")
+                    paths.append(path_literal)
 
         return violations, paths
 
     @staticmethod
-    def _first_string_arg(node: ast.Call) -> str | None:
-        for arg in node.args:
-            if isinstance(arg, ast.Constant):
-                return arg.value if isinstance(arg.value, str) else None
-            return None
+    def _first_path_arg(node: ast.Call) -> ast.expr | None:
+        """Returns the AST node for the path-like argument, if any.
+
+        Only the *node* is resolved here -- whether it can be evaluated to a
+        literal string is a separate question, answered by
+        ``_static_string_value``.
+        """
+        if node.args:
+            return node.args[0]
         for kw in node.keywords:
-            if kw.arg in {"path_or_buf", "filepath_or_buffer", "fname", "file", "path"} and isinstance(
-                kw.value, ast.Constant
-            ):
-                return kw.value.value if isinstance(kw.value.value, str) else None
+            if kw.arg in {"path_or_buf", "filepath_or_buffer", "fname", "file", "path"}:
+                return kw.value
+        return None
+
+    @classmethod
+    def _static_string_value(cls, node: ast.expr) -> str | None:
+        """Evaluates ``node`` to a string if it is built entirely from constants.
+
+        Handles a plain string literal, an f-string whose every field is
+        itself a constant (``f"/workspace/{'a'}"``), and `+` concatenations of
+        either. Returns ``None`` the moment any piece depends on something
+        computed at runtime -- a variable, a call, a non-constant f-string
+        field -- which the caller must treat as unverifiable, not as safe.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else None
+
+        if isinstance(node, ast.JoinedStr):
+            parts: list[str] = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                elif (
+                    isinstance(value, ast.FormattedValue)
+                    and value.format_spec is None
+                    and value.conversion in (-1, ord("s"))
+                    and isinstance(value.value, ast.Constant)
+                    and isinstance(value.value.value, str)
+                ):
+                    # `{"ok"}` inside an f-string -- a constant field with no
+                    # conversion/format-spec to apply, so it is just its value.
+                    parts.append(value.value.value)
+                else:
+                    return None
+            return "".join(parts)
+
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = cls._static_string_value(node.left)
+            right = cls._static_string_value(node.right)
+            return None if left is None or right is None else left + right
+
         return None
 
     # ------------------------------------------------------------------ #
