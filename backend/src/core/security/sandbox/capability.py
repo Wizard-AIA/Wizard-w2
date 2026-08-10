@@ -74,7 +74,10 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
         return False, f"sandbox-exec could not be run ({exc})"
     if result.returncode != 0:
         detail = (result.stderr or b"").decode("utf-8", "replace").strip()
-        return False, f"sandbox-exec cannot execute python on this system ({detail or 'exit code ' + str(result.returncode)})"
+        return (
+            False,
+            f"sandbox-exec cannot execute python on this system ({detail or 'exit code ' + str(result.returncode)})",
+        )
     return True, "sandbox-exec accepts a profile"
 
 
