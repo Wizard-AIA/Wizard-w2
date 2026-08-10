@@ -54,6 +54,18 @@ class DataPolicy:
     schema_only: bool = True
     per_dataset: dict[str, bool] = field(default_factory=dict)
 
+    @staticmethod
+    def _key(name: str) -> str:
+        """Case- and whitespace-normalized key, so ``Dataset.CSV`` and ``dataset.csv`` collide.
+
+        Filesystems that hand back the exact bytes a user typed (and browsers,
+        and re-uploads) can vary case on a name that is otherwise the same
+        dataset. An exact-match dict silently misses those and falls back to
+        the session default — which for a cloud provider means real values
+        leaking where a schema-only policy was intended.
+        """
+        return name.strip().lower()
+
     def schema_only_for(self, dataset: str | None = None, origin: str | None = None) -> bool:
         """The policy in force for one table: its own, then its source's, then the session's.
 
@@ -63,22 +75,32 @@ class DataPolicy:
         uploaded ``sales.csv`` must never inherit a policy set for a connection
         that happens to be called ``sales``.
         """
-        if dataset and dataset in self.per_dataset:
-            return self.per_dataset[dataset]
-        if origin and origin in self.per_dataset:
-            return self.per_dataset[origin]
+        if dataset:
+            key = self._key(dataset)
+            if key in self.per_dataset:
+                return self.per_dataset[key]
+        if origin:
+            key = self._key(origin)
+            if key in self.per_dataset:
+                return self.per_dataset[key]
         return self.schema_only
 
     def set_for(self, dataset: str, schema_only: bool) -> None:
-        self.per_dataset[dataset] = schema_only
+        self.per_dataset[self._key(dataset)] = schema_only
 
     def clear_for(self, dataset: str) -> bool:
         """Drops the override so the dataset follows the session default again."""
-        return self.per_dataset.pop(dataset, None) is not None
+        return self.per_dataset.pop(self._key(dataset), None) is not None
 
     def forget(self, dataset: str) -> None:
         """Called when the dataset is removed, so a re-upload does not inherit it."""
-        self.per_dataset.pop(dataset, None)
+        self.per_dataset.pop(self._key(dataset), None)
+
+    def rekey(self, old_name: str, new_name: str) -> None:
+        """Moves an override from ``old_name`` to ``new_name`` (e.g. a connection rename)."""
+        overridden = self.per_dataset.pop(self._key(old_name), None)
+        if overridden is not None:
+            self.per_dataset[self._key(new_name)] = overridden
 
     def to_dict(self) -> dict[str, object]:
         return {"schema_only": self.schema_only, "per_dataset": dict(self.per_dataset)}

@@ -239,9 +239,7 @@ async def update_connection(
         for handle in session.datasets.values():
             if handle.origin == spec.name:
                 handle.origin = name
-        overridden = session.data_policy.per_dataset.pop(spec.name, None)
-        if overridden is not None:
-            session.data_policy.per_dataset[name] = overridden
+        session.data_policy.rekey(spec.name, name)
     return _summary(updated)
 
 
