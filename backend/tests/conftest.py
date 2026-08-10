@@ -277,7 +277,7 @@ def _clean_database():
     # saved by one test is still there for the next, which sees a name conflict
     # rather than the empty store it was written against.
     connection_store.clear()
-    consent_broker._pending.clear()
+    consent_broker.reset()
 
 
 @pytest.fixture

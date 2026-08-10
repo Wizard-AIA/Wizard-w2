@@ -10,6 +10,10 @@ from threading import Lock
 from fastapi import Header, HTTPException, Query, Request, WebSocket
 
 from src.config import settings
+from src.core.agent.consent import ConsentBroker, consent_broker
+from src.core.agent.orchestrator import AnalysisOrchestrator, orchestrator
+from src.core.connectors.store import ConnectionStore, connection_store
+from src.core.credentials import CredentialStore, credential_store
 from src.core.session import Session, session_manager
 from src.utils.logging import logger
 
@@ -93,6 +97,35 @@ def require_dataset(x_session_id: str | None = Header(default=None, alias=SESSIO
             detail="No dataset loaded. Upload a file before running an analysis.",
         )
     return session
+
+
+# Below: factory functions for FastAPI's `Depends()`, one per process-wide
+# singleton a route needs. Each still resolves to the same module-level
+# instance the singleton always was -- these do not change runtime behaviour.
+# What they buy is testability: a route under `TestClient` can override
+# `app.dependency_overrides[get_orchestrator]` with a stub, whereas the bare
+# module-level import a route used before could only be swapped by
+# monkeypatching the imported name at every call site.
+
+
+def get_orchestrator() -> AnalysisOrchestrator:
+    """The shared analysis orchestrator."""
+    return orchestrator
+
+
+def get_credential_store() -> CredentialStore:
+    """The shared provider API-key store."""
+    return credential_store
+
+
+def get_connection_store() -> ConnectionStore:
+    """The shared saved-connection store."""
+    return connection_store
+
+
+def get_consent_broker() -> ConsentBroker:
+    """The shared mid-run permission broker."""
+    return consent_broker
 
 
 class SlidingWindowRateLimiter:

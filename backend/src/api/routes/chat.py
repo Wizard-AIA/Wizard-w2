@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
 
 from src.api.deps import (
     SESSION_HEADER,
+    get_consent_broker,
+    get_orchestrator,
     require_api_key,
     require_dataset,
     ws_client_ip,
@@ -25,9 +27,9 @@ from src.api.deps import (
 )
 from src.api.schemas import ChatRequest, ChatResponse
 from src.config import settings
-from src.core.agent.consent import consent_broker
+from src.core.agent.consent import ConsentBroker
 from src.core.agent.events import Event, EventCollector, EventType
-from src.core.agent.orchestrator import orchestrator
+from src.core.agent.orchestrator import AnalysisOrchestrator
 from src.core.session import Session, session_manager
 from src.utils.errors import safe_error_message
 from src.utils.logging import logger
@@ -41,6 +43,7 @@ async def chat(
     request: ChatRequest,
     response: Response,
     session: Session = Depends(require_dataset),
+    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
 ) -> ChatResponse:
     """Runs a full turn and returns the finished answer.
 
@@ -106,7 +109,11 @@ class WebSocketEmitter:
 
 
 @router.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket) -> None:
+async def websocket_chat(
+    websocket: WebSocket,
+    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
+    consent_broker: ConsentBroker = Depends(get_consent_broker),
+) -> None:
     """Streaming chat.
 
     Client frames

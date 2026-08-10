@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "generate:api-types": "openapi-typescript ../backend/openapi.json -o lib/api-types.generated.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -71,6 +72,7 @@
     "@typescript-eslint/parser": "^8.54.0",
     "eslint": "^9.39.2",
     "eslint-config-next": "^16.1.6",
+    "openapi-typescript": "^7.13.0",
     "postcss": "^8.5.23",
     "tailwindcss": "^4.1.9",
     "tw-animate-css": "1.3.3",
