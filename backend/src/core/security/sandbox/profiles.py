@@ -45,9 +45,13 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
         lines.append(f"(allow file-read* file-write* (subpath {_sbpl_string(root)}))")
 
     # Special devices and temp directories needed by Python's dyld/ctypes/locale runtime
-    lines.append('(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/dtracehelper"))')
+    lines.append(
+        '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/dtracehelper"))'
+    )
     lines.append('(allow file-write-data (literal "/dev/null") (literal "/dev/zero"))')
-    lines.append('(allow file-read* (subpath "/private/var/db/dyld") (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))')
+    lines.append(
+        '(allow file-read* (subpath "/private/var/db/dyld") (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))'
+    )
     lines.append('(allow file-read* file-write* (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))')
 
     if policy.network == "deny":
