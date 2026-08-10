@@ -17,6 +17,7 @@ import sqlite3
 import pandas as pd
 import pytest
 
+from src.config import settings
 from src.core.connectors import (
     ConnectionSpec,
     ConnectorError,
@@ -399,6 +400,25 @@ def test_fetch_still_works_with_no_params(sqlite_spec) -> None:
 
     assert len(frame) > 0
     assert set(frame["region"]) == {"north"}
+
+
+def test_fetch_is_bounded_by_connector_max_rows(sqlite_spec, monkeypatch) -> None:
+    """`fetch` must not load an unbounded result into memory.
+
+    The query is arbitrary SQL text, so unlike `sample` the limit cannot be
+    pushed into the statement -- this asserts the fallback: `fetch` stops
+    pulling chunks once it has read past `CONNECTOR_MAX_ROWS` rather than
+    materialising the whole result set and slicing it afterwards.
+    """
+    pytest.importorskip("sqlalchemy")
+    monkeypatch.setattr(settings, "CONNECTOR_MAX_ROWS", 5)
+    connector = build(sqlite_spec)
+    try:
+        frame = connector.fetch("SELECT * FROM orders")
+    finally:
+        connector.close()
+
+    assert len(frame) == 5
 
 
 def test_the_row_limit_is_pushed_down_not_sliced_afterwards(sqlite_spec) -> None:
