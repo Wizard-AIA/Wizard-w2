@@ -15,7 +15,10 @@
 #     the exact resolved version (its own documented "recently released"
 #     gap). All MIT (standard for their respective ecosystems/authors).
 #   - go: golang.org/x/sys -- same dependency-graph gap. BSD-3-Clause
-#     (standard license for all golang.org/x/* modules).
+licenses:
+  others: "warning"
+  unknown: "warning"
+
 python:
   excludeModules:
     - name: "langchain"
