@@ -58,7 +58,7 @@ services:
       # image installs. The runtime reports what it has, so a smaller tier
       # advertises less rather than promising a missing library.
       - SANDBOX_TIER=${SANDBOX_TIER:-standard}
-      - SANDBOX_NETWORK_DISABLED=${SANDBOX_NETWORK_DISABLED:-False}
+      - SANDBOX_NETWORK_DISABLED=${SANDBOX_NETWORK_DISABLED:-True}
       - SANDBOX_DOCKER_RUNTIME=${SANDBOX_DOCKER_RUNTIME:-}
       # Unset by default: derived from the memory this container is allowed.
       - SANDBOX_MEM_LIMIT=${SANDBOX_MEM_LIMIT:-}
@@ -102,6 +102,13 @@ services:
     networks:
       - wizard_net
     restart: unless-stopped
+    healthcheck:
+      # node:20-alpine ships busybox wget; no curl in this image.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Opt-in: `docker compose --profile redis up`, with REDIS_URL set on the
   # backend. Without this the app runs entirely in-process.
