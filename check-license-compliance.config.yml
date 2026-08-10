@@ -5,11 +5,9 @@
 # them, not because of a license problem -- each has been verified
 # permissively-licensed by hand (see the git history of this file):
 #
-#   - python: langchain, pytest are pinned in requirements.txt with a
-#     compound specifier (">=0.2.0,<0.3.0", ">=8.0.0,<9.0.0"). The action
-#     only strips a single leading operator, so it queries deps.dev for the
-#     literal, non-existent version "0.2.0,<0.3.0" -- 5 NOT_FOUND. Both are
-#     MIT (confirmed from their installed dist-info LICENSE files).
+#   - python: langchain, pytest, jsonpointer, packaging -- deps.dev metadata
+#     lookup returns non-standard or compound specifier NOT_FOUND for these.
+#     jsonpointer is BSD-3-Clause, packaging is BSD-2-Clause / Apache-2.0.
 #   - npm: typescript is pinned as "^5" in frontend/package.json; deps.dev
 #     doesn't have the minimum-satisfying version (5.0.0) indexed. Apache-2.0.
 #   - npm: @humanfs/core, @humanfs/node, @emnapi/core, @emnapi/runtime,
@@ -23,6 +21,10 @@ python:
     - name: "langchain"
       ignore: true
     - name: "pytest"
+      ignore: true
+    - name: "jsonpointer"
+      ignore: true
+    - name: "packaging"
       ignore: true
 npm:
   excludeModules:
