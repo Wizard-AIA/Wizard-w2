@@ -229,6 +229,22 @@ def test_downcast_reduces_memory() -> None:
     assert after <= before
 
 
+def test_downcast_does_not_lose_float_precision() -> None:
+    # float32 cannot represent this exactly; downcasting it would silently
+    # corrupt the value, which is worse than the memory it would save.
+    lossy_value = 123456789.123456789
+    df = pd.DataFrame({"measurement": [lossy_value, 2.5, 3.5]})
+    result = downcast_numeric(df.copy())
+    assert result["measurement"].dtype == np.float64
+    assert result["measurement"].iloc[0] == lossy_value
+
+
+def test_downcast_skips_currency_named_columns() -> None:
+    df = pd.DataFrame({"total_price": np.array([1.5, 2.5, 3.5], dtype="float64")})
+    result = downcast_numeric(df.copy())
+    assert result["total_price"].dtype == np.float64
+
+
 def test_categorize_low_cardinality_converts_repetitive_columns() -> None:
     df = pd.DataFrame({"kind": ["a", "b"] * 1000})
     converted = categorize_low_cardinality(df.copy())

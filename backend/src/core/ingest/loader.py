@@ -130,15 +130,29 @@ def sanitize_columns(columns: list[Any]) -> tuple[list[str], dict[str, str]]:
     return result, renamed
 
 
+_CURRENCY_COLUMN_HINTS = ("price", "amount", "balance", "cost", "salary", "revenue", "total")
+
+
 def downcast_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Shrinks numeric dtypes in place where it is lossless."""
+    """Shrinks numeric dtypes in place where it is lossless.
+
+    Integers always downcast losslessly (``pd.to_numeric`` refuses to narrow a
+    column if it would drop a value). Floats do not have that guarantee — a
+    float64 -> float32 cast can silently lose precision — so a column is only
+    narrowed after confirming the round trip reproduces the original values,
+    and currency-flavoured columns are left untouched even then.
+    """
     for column in df.columns:
         dtype = df[column].dtype
+        name = str(column).lower()
         try:
             if pd.api.types.is_integer_dtype(dtype):
                 df[column] = pd.to_numeric(df[column], downcast="integer")
-            elif pd.api.types.is_float_dtype(dtype):
-                df[column] = pd.to_numeric(df[column], downcast="float")
+            elif pd.api.types.is_float_dtype(dtype) and not any(hint in name for hint in _CURRENCY_COLUMN_HINTS):
+                narrowed = pd.to_numeric(df[column], downcast="float")
+                original = df[column].to_numpy()
+                if np.array_equal(np.asarray(narrowed, dtype="float64"), original, equal_nan=True):
+                    df[column] = narrowed
         except (ValueError, TypeError):
             continue
     return df
