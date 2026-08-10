@@ -24,6 +24,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import stat
 import sys
 
 
@@ -161,9 +162,15 @@ def _apply_landlock(policy: dict) -> tuple[bool, str]:
                     # set is a superset covering several layouts on purpose.
                     continue
                 try:
+                    st = os.fstat(fd)
+                    if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                        continue
                     rule = _LandlockPathBeneathAttr(allowed_access=access, parent_fd=fd)
                     if libc.syscall(add_rule, ruleset, LANDLOCK_RULE_PATH_BENEATH, ctypes.byref(rule), 0) < 0:
-                        return False, f"landlock_add_rule failed for {root} (errno {ctypes.get_errno()})"
+                        errno = ctypes.get_errno()
+                        if errno == 22:  # EINVAL: Landlock PATH_BENEATH unsupported file type
+                            continue
+                        return False, f"landlock_add_rule failed for {root} (errno {errno})"
                 finally:
                     os.close(fd)
 
