@@ -63,9 +63,13 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
     binary = shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
     if not os.path.exists(binary):
         return False, "sandbox-exec is not present on this system"
+    from src.core.security.sandbox.policy import SandboxPolicy
+    from src.core.security.sandbox.profiles import sbpl_profile
+
+    profile = sbpl_profile(SandboxPolicy(writable=(".",), readable=("/usr",)))
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
-            [binary, "-p", "(version 1)(allow default)", "/usr/bin/true"],
+            [binary, "-p", profile, sys.executable, "-c", "import sys"],
             capture_output=True,
             timeout=10,
             check=False,
@@ -74,7 +78,10 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
         return False, f"sandbox-exec could not be run ({exc})"
     if result.returncode != 0:
         detail = (result.stderr or b"").decode("utf-8", "replace").strip()
-        return False, f"sandbox-exec refused a trivial profile ({detail or 'no output'})"
+        return (
+            False,
+            f"sandbox-exec cannot enforce profiles on this macOS kernel ({detail or 'exit code ' + str(result.returncode)})",
+        )
     return True, "sandbox-exec accepts a profile"
 
 

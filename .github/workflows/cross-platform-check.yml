@@ -61,6 +61,12 @@ jobs:
       # job, otherwise this check reports success while proving nothing.
       run: pytest -q
 
+    - name: Run sandbox containment selftest
+      # Runs platform-specific sandbox containment tests (Windows Job Object / macOS SBPL)
+      env:
+        WIZARD_SANDBOX_SELFTEST: "1"
+      run: pytest backend/tests/sandbox/ -v
+
     - name: Set up pnpm
       uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
       with:

@@ -202,8 +202,9 @@ def run(timeout: float = 60.0) -> SelfTestResult:
 
         line = next((ln for ln in stdout.splitlines() if ln.startswith("WIZARD_SELFTEST ")), "")
         if not line:
-            logger.warning("Sandbox self-test produced no report", stderr=stderr[:500])
-            return SelfTestResult(False, stderr[:500] or "the probe produced no report", {}, {})
+            detail = f"the probe produced no report (exit code {completed.returncode}, stderr={stderr[:300]!r}, stdout={stdout[:300]!r})"
+            logger.warning("Sandbox self-test produced no report", detail=detail)
+            return SelfTestResult(False, detail, {}, {})
 
         try:
             payload = json.loads(line[len("WIZARD_SELFTEST ") :])

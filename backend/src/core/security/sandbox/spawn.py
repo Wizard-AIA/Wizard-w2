@@ -96,7 +96,10 @@ def plan_spawn(policy: SandboxPolicy, argv: list[str], workspace: Path) -> Spawn
 
     try:
         if sys.platform == "darwin":
-            plan = _macos_plan(policy, argv, workspace)
+            if capability.features[0].supported:
+                plan = _macos_plan(policy, argv, workspace)
+            else:
+                plan = SpawnPlan(argv=argv, mechanism="none")
         elif sys.platform == "win32":
             plan = _windows_plan(policy, argv, workspace)
         else:
