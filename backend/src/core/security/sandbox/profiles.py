@@ -66,8 +66,8 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
 
     if policy.network == "deny":
         lines.append("(deny network*)")
-        lines.append("(allow network-bind)")
-        lines.append('(allow network-outbound (remote ip "127.0.0.1:*"))')
+        lines.append('(allow network-bind (local ip "*:*"))')
+        lines.append('(allow network-outbound (remote ip "localhost:*"))')
     else:
         lines.append("(allow network*)")
 

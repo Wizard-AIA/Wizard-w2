@@ -105,7 +105,7 @@ def test_sbpl_profile_denies_by_default_and_allows_only_loopback() -> None:
     assert '(allow file-read* (subpath "/usr"))' in profile
     assert '(allow file-read* file-write* (subpath "/work"))' in profile
     assert "(deny network*)" in profile
-    assert '(allow network-outbound (remote ip "127.0.0.1:*"))' in profile
+    assert '(allow network-outbound (remote ip "localhost:*"))' in profile
     assert "(allow network*)" not in profile.replace("(deny network*)", "")
 
 
