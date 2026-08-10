@@ -21,9 +21,10 @@ stop.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -152,8 +153,24 @@ def run(timeout: float = 60.0) -> SelfTestResult:
     """
     capability = detect()
 
-    with tempfile.TemporaryDirectory(prefix="wizard-selftest-") as directory:
-        workspace = Path(directory)
+    # A plain directory under WORKSPACE_DIR, not `tempfile.TemporaryDirectory`:
+    # `mkdtemp` documents its result as "readable, writable, and searchable
+    # only by the creating user" and gets there on Windows by giving the
+    # directory a fresh, non-inherited ACL -- so it grants the current user
+    # Full Control even on a host where the real workspace root does not. A
+    # real session's workspace is created with plain `Path.mkdir()`
+    # (`resolve_workspace_dir` in `tools/runtime.py`), which inherits
+    # whatever ACL the parent already has. Reusing that exact call is what
+    # makes this probe fail the same way a real session's `icacls
+    # /setintegritylevel` does when the workspace root sits somewhere the
+    # user doesn't have WRITE_DAC on -- `tempfile` would silently paper over
+    # that and report containment that no real session actually gets.
+    from src.config import settings
+
+    directory = settings.WORKSPACE_DIR / f"wizard-selftest-{uuid.uuid4().hex[:12]}"
+    directory.mkdir(parents=True)
+    try:
+        workspace = directory
         probe_path = workspace / "probe.py"
         entry = probe_path
 
@@ -210,6 +227,8 @@ def run(timeout: float = 60.0) -> SelfTestResult:
             payload = json.loads(line[len("WIZARD_SELFTEST ") :])
         except json.JSONDecodeError as exc:
             return SelfTestResult(False, f"Unreadable report: {exc}", {}, {})
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
     checks = payload.get("checks") or {}
     applied = payload.get("applied") or {}
