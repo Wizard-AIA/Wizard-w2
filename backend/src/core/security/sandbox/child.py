@@ -206,7 +206,7 @@ def _seccomp_deny_inet() -> tuple[bool, str]:
         _SockFilter(jeq | 0x05, 1, 0, arch),
         _SockFilter(ret, 0, 0, kill_arch),
         _SockFilter(ld | 0x00, 0, 0, 0),  # A = nr
-        _SockFilter(jeq | 0x05, 0, 5, socket_nr),
+        _SockFilter(jeq | 0x05, 0, 6, socket_nr),
         _SockFilter(ld | 0x00, 0, 0, 16),  # A = args[0], the domain
         _SockFilter(jeq | 0x05, 3, 0, af_inet),
         _SockFilter(jeq | 0x05, 2, 0, af_inet6),
