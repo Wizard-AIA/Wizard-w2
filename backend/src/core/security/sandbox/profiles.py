@@ -44,15 +44,19 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
     for root in policy.writable:
         lines.append(f"(allow file-read* file-write* (subpath {_sbpl_string(root)}))")
 
-    # Special devices and temp directories needed by Python's dyld/ctypes/locale runtime
+    # Special devices and temp directories needed by Python's dyld/ctypes/locale runtime.
+    # macOS symlinks (/var -> /private/var, /tmp -> /private/tmp, /etc -> /private/etc) require
+    # both paths allowed in SBPL.
     lines.append(
         '(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/dtracehelper"))'
     )
     lines.append('(allow file-write-data (literal "/dev/null") (literal "/dev/zero"))')
     lines.append(
-        '(allow file-read* (subpath "/private/var/db/dyld") (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))'
+        '(allow file-read* (subpath "/private/var") (subpath "/var") (subpath "/private/tmp") (subpath "/tmp") (subpath "/private/etc") (subpath "/etc"))'
     )
-    lines.append('(allow file-read* file-write* (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))')
+    lines.append(
+        '(allow file-read* file-write* (subpath "/private/tmp") (subpath "/tmp") (subpath "/private/var/tmp") (subpath "/var/tmp"))'
+    )
 
     if policy.network == "deny":
         lines.append("(deny network*)")
