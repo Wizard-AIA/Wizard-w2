@@ -7,6 +7,8 @@ gets reviewed at all from a Windows- or Linux-developer machine.
 
 from __future__ import annotations
 
+import os
+
 from src.core.security.sandbox.policy import SandboxPolicy
 
 
@@ -38,9 +40,15 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
     ]
 
     for root in policy.readable:
-        lines.append(f"(allow file-read* (subpath {_sbpl_string(root)}))")
+        if os.path.isfile(root):
+            lines.append(f"(allow file-read* (literal {_sbpl_string(root)}))")
+        else:
+            lines.append(f"(allow file-read* (subpath {_sbpl_string(root)}))")
     for root in policy.writable:
-        lines.append(f"(allow file-read* file-write* (subpath {_sbpl_string(root)}))")
+        if os.path.isfile(root):
+            lines.append(f"(allow file-read* file-write* (literal {_sbpl_string(root)}))")
+        else:
+            lines.append(f"(allow file-read* file-write* (subpath {_sbpl_string(root)}))")
 
     # Special devices and temp directories needed by Python's dyld/ctypes/locale runtime.
     # macOS symlinks (/var -> /private/var, /tmp -> /private/tmp, /etc -> /private/etc) require
