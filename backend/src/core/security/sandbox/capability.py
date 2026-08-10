@@ -63,9 +63,12 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
     binary = shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
     if not os.path.exists(binary):
         return False, "sandbox-exec is not present on this system"
+    # Probe with a deny-default profile: on modern macOS (14+ Sonoma / 15+ Sequoia),
+    # sandboxd terminates non-entitled custom deny-default processes with SIGABRT (-6).
+    profile = "(version 1)(deny default)(allow process-exec)(allow process-fork)(allow sysctl-read)(allow file-read*)"
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
-            [binary, "-p", "(version 1)(allow default)", sys.executable, "-c", "import sys"],
+            [binary, "-p", profile, sys.executable, "-c", "import sys"],
             capture_output=True,
             timeout=10,
             check=False,
@@ -76,7 +79,7 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
         detail = (result.stderr or b"").decode("utf-8", "replace").strip()
         return (
             False,
-            f"sandbox-exec cannot execute python on this system ({detail or 'exit code ' + str(result.returncode)})",
+            f"sandbox-exec cannot enforce profiles on this macOS kernel ({detail or 'exit code ' + str(result.returncode)})",
         )
     return True, "sandbox-exec accepts a profile"
 
