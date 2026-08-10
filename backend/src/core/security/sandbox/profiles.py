@@ -34,7 +34,7 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
         "(allow mach-lookup)",
         "(allow signal (target self))",
         "(allow file-read-metadata)",
-        "(allow ipc-posix-shm*)",
+        "(allow ipc-posix-shm)",
     ]
 
     for root in policy.readable:
