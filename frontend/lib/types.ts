@@ -4,6 +4,13 @@
  * The backend emits one frame per orchestrator event. Everything the UI renders
  * is derived from these frames as they arrive — nothing is reconstructed after
  * the fact, which is what allows genuine token-by-token rendering.
+ *
+ * These are hand-maintained rather than generated: most of what's below is the
+ * WebSocket event protocol, which has no OpenAPI representation (FastAPI only
+ * describes REST). REST request/response shapes are covered separately by
+ * `api-types.generated.ts`, produced from `backend/openapi.json` via
+ * `pnpm generate:api-types` -- see that file before hand-duplicating a schema
+ * that already exists as a Pydantic model in `backend/src/api/schemas.py`.
  */
 
 export type EventType =

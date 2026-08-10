@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from src.api.deps import SESSION_HEADER, get_session, require_api_key
+from src.api.deps import SESSION_HEADER, get_connection_store, get_session, require_api_key
 from src.api.schemas import (
     ConnectionImportRequest,
     ConnectionImportResponse,
@@ -34,7 +34,7 @@ from src.core.connectors import (
 )
 from src.core.connectors.gate import authorize, require_writable
 from src.core.connectors.ingest import import_target
-from src.core.connectors.store import connection_store
+from src.core.connectors.store import ConnectionStore
 from src.core.data_mode import normalize
 from src.core.session import Session
 from src.utils.errors import safe_error_message
@@ -44,7 +44,7 @@ from src.utils.logging import logger
 router = APIRouter(prefix="/api", tags=["connections"])
 
 
-def _summary(spec: ConnectionSpec) -> ConnectionSummary:
+def _summary(spec: ConnectionSpec, store: ConnectionStore) -> ConnectionSummary:
     entry = kind_by_name(spec.kind)
     return ConnectionSummary(
         id=spec.id,
@@ -53,7 +53,7 @@ def _summary(spec: ConnectionSpec) -> ConnectionSummary:
         options=dict(spec.options),
         read_only=spec.read_only,
         created_at=spec.created_at,
-        has_secret=bool(connection_store.secret_for(spec)),
+        has_secret=bool(store.secret_for(spec)),
         available=entry.available() if entry else False,
         install_hint=entry.install_hint if entry else "",
     )
@@ -81,14 +81,14 @@ def _split_options(options: dict, secret: str | None) -> tuple[dict, str | None]
     return scrubbed, secret if secret is not None else embedded
 
 
-def _require_spec(connection_id: str) -> ConnectionSpec:
-    spec = connection_store.get(connection_id)
+def _require_spec(connection_id: str, store: ConnectionStore) -> ConnectionSpec:
+    spec = store.get(connection_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"No connection with id {connection_id!r}.")
     return spec
 
 
-def _open(spec: ConnectionSpec):
+def _open(spec: ConnectionSpec, store: ConnectionStore):
     """Builds a connector, turning a missing driver into a 501 with the remedy.
 
     501 rather than 500 because the server is working and the feature is simply
@@ -96,7 +96,7 @@ def _open(spec: ConnectionSpec):
     is absent.
     """
     try:
-        return build(spec, connection_store.secret_for(spec))
+        return build(spec, store.secret_for(spec))
     except DriverMissing as exc:
         raise HTTPException(status_code=501, detail=f"{exc.message} {exc.detail}")
     except ConnectorError as exc:
@@ -109,7 +109,7 @@ def _open(spec: ConnectionSpec):
 
 
 @asynccontextmanager
-async def open_connector(spec: ConnectionSpec) -> AsyncIterator[Connector]:
+async def open_connector(spec: ConnectionSpec, store: ConnectionStore) -> AsyncIterator[Connector]:
     """Builds a connector and guarantees ``close()`` runs, on every exit path.
 
     The four routes below used to repeat ``connector = _open(spec)`` followed
@@ -118,7 +118,7 @@ async def open_connector(spec: ConnectionSpec) -> AsyncIterator[Connector]:
     is cancelled -- is enforced once rather than trusted to be copied
     correctly at every call site, including any added later.
     """
-    connector = _open(spec)
+    connector = _open(spec, store)
     try:
         yield connector
     finally:
@@ -156,20 +156,27 @@ def _check_data_mode(session: Session, spec: ConnectionSpec) -> None:
 
 # ------------------------------------------------------------------ #
 @router.get("/connections", response_model=ConnectionListResponse)
-async def list_connections(session: Session = Depends(get_session)) -> ConnectionListResponse:
+async def list_connections(
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
+) -> ConnectionListResponse:
     """Every saved connection, plus what this install can actually reach.
 
     Network-free on purpose: this renders on every page load, so it reports what
     is configured and which drivers are importable, and probes nothing.
     """
     return ConnectionListResponse(
-        connections=[_summary(spec) for spec in connection_store.list()],
+        connections=[_summary(spec, connection_store) for spec in connection_store.list()],
         kinds=[ConnectorKindResponse(**entry.to_dict()) for entry in available_kinds()],  # type: ignore[arg-type]
     )
 
 
 @router.post("/connections", response_model=ConnectionSummary, dependencies=[Depends(require_api_key)])
-async def create_connection(request: ConnectionRequest, session: Session = Depends(get_session)) -> ConnectionSummary:
+async def create_connection(
+    request: ConnectionRequest,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
+) -> ConnectionSummary:
     """Saves a connection. Reaches nothing, so it is not permission-gated.
 
     Storing a hostname is not connecting to it -- the gate is on opening the
@@ -188,12 +195,15 @@ async def create_connection(request: ConnectionRequest, session: Session = Depen
     spec = ConnectionSpec(name=name, kind=request.kind, options=options)
     if not connection_store.save(spec, secret=secret):
         raise HTTPException(status_code=500, detail="Could not save the connection.")
-    return _summary(spec)
+    return _summary(spec, connection_store)
 
 
 @router.put("/connections/{connection_id}", response_model=ConnectionSummary, dependencies=[Depends(require_api_key)])
 async def update_connection(
-    connection_id: str, request: ConnectionRequest, session: Session = Depends(get_session)
+    connection_id: str,
+    request: ConnectionRequest,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
 ) -> ConnectionSummary:
     """Edits a saved connection in place.
 
@@ -206,7 +216,7 @@ async def update_connection(
     retype the password must not erase it. ``read_only`` is deliberately *not*
     editable here: it has its own route with its own confirmation.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     name = (request.name or "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="A connection needs a name.")
@@ -240,18 +250,22 @@ async def update_connection(
             if handle.origin == spec.name:
                 handle.origin = name
         session.data_policy.rekey(spec.name, name)
-    return _summary(updated)
+    return _summary(updated, connection_store)
 
 
 @router.delete("/connections/{connection_id}", dependencies=[Depends(require_api_key)])
-async def delete_connection(connection_id: str, session: Session = Depends(get_session)) -> dict[str, str]:
+async def delete_connection(
+    connection_id: str,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
+) -> dict[str, str]:
     """Removes a connection, its stored secret, and anything imported from it.
 
     The imported tables go too. Leaving them would keep rows from a source the
     user just disconnected queryable by generated code, and their data-policy
     overrides would outlive the thing they were set on.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     for name in [handle.name for handle in session.datasets.values() if handle.origin == spec.name]:
         session.remove_dataset(name)
     session.data_policy.forget(spec.name)
@@ -267,19 +281,23 @@ async def delete_connection(connection_id: str, session: Session = Depends(get_s
     response_model=ConnectionTestResponse,
     dependencies=[Depends(require_api_key)],
 )
-async def test_connection(connection_id: str, session: Session = Depends(get_session)) -> ConnectionTestResponse:
+async def test_connection(
+    connection_id: str,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
+) -> ConnectionTestResponse:
     """Reaches the source and reports what happened.
 
     Not gated, and it never raises for a refused connection: this is the
     diagnostic someone runs *while* typing a hostname, and a diagnostic that
     fails instead of reporting is useless at exactly the moment it is needed.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     _check_data_mode(session, spec)
     # A test *is* a connect -- it opens a socket to the source -- so the profile
     # binds here too. A `deny` ruling stops it; an `ask` is answered by the click.
     _permit(session, "db_connect", spec.id)
-    async with open_connector(spec) as connector:
+    async with open_connector(spec, connection_store) as connector:
         try:
             await asyncio.to_thread(connector.test)
         except ConnectorError as exc:
@@ -295,12 +313,16 @@ async def test_connection(connection_id: str, session: Session = Depends(get_ses
     response_model=ConnectionSchemaResponse,
     dependencies=[Depends(require_api_key)],
 )
-async def discover_connection(connection_id: str, session: Session = Depends(get_session)) -> ConnectionSchemaResponse:
+async def discover_connection(
+    connection_id: str,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
+) -> ConnectionSchemaResponse:
     """Lists what the source contains. Gated: metadata leaves the source."""
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     _check_data_mode(session, spec)
     _permit(session, "db_connect", spec.id)
-    async with open_connector(spec) as connector:
+    async with open_connector(spec, connection_store) as connector:
         try:
             schema = await asyncio.to_thread(connector.discover)
         except ConnectorError as exc:
@@ -318,20 +340,21 @@ async def import_from_connection(
     request: ConnectionImportRequest,
     response: Response,
     session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
 ) -> ConnectionImportResponse:
     """Reads one table into the session, exactly as an upload would.
 
     Gated: this is the moment rows enter the analysis and become reachable by
     generated code and by a cloud-bound prompt.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     _check_data_mode(session, spec)
     _permit(session, "db_connect", spec.id)
     target = (request.target or "").strip()
     if not target:
         raise HTTPException(status_code=422, detail="Name the table to import.")
 
-    async with open_connector(spec) as connector:
+    async with open_connector(spec, connection_store) as connector:
         try:
             result = await asyncio.to_thread(import_target, session, spec, connector, target, request.make_active)
         except ConnectorError as exc:
@@ -355,7 +378,10 @@ async def import_from_connection(
     dependencies=[Depends(require_api_key)],
 )
 async def write_to_connection(
-    connection_id: str, request: ConnectionWriteRequest, session: Session = Depends(get_session)
+    connection_id: str,
+    request: ConnectionWriteRequest,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
 ) -> ConnectionTestResponse:
     """Writes one of this session's tables back to the source.
 
@@ -370,7 +396,7 @@ async def write_to_connection(
        approving a write to ``staging.results`` is not approving one to
        ``prod.orders``.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     _check_data_mode(session, spec)
     writable = require_writable(spec)
     if not writable.allowed:
@@ -385,7 +411,7 @@ async def write_to_connection(
         raise HTTPException(status_code=422, detail="Name the table to write to.")
     _permit(session, "db_write", f"{spec.id}:{target}")
 
-    async with open_connector(spec) as connector:
+    async with open_connector(spec, connection_store) as connector:
         try:
             await asyncio.to_thread(connector.write, target, handle.df)
         except ConnectorError as exc:
@@ -404,7 +430,10 @@ async def write_to_connection(
     dependencies=[Depends(require_api_key)],
 )
 async def set_write_back(
-    connection_id: str, request: WriteBackRequest, session: Session = Depends(get_session)
+    connection_id: str,
+    request: WriteBackRequest,
+    session: Session = Depends(get_session),
+    connection_store: ConnectionStore = Depends(get_connection_store),
 ) -> ConnectionSummary:
     """Turns write-back on or off for one connection.
 
@@ -416,7 +445,7 @@ async def set_write_back(
     Enabling does **not** grant a write. It says this connection *may* be written
     to at all; every session still asks the first time the agent actually writes.
     """
-    spec = _require_spec(connection_id)
+    spec = _require_spec(connection_id, connection_store)
     if request.enable and (request.confirm or "").strip() != spec.name:
         raise HTTPException(
             status_code=400,
@@ -434,7 +463,7 @@ async def set_write_back(
     if not connection_store.save(updated, secret=None):
         raise HTTPException(status_code=500, detail="Could not update the connection.")
     logger.info("Changed write-back for a connection", connection=spec.name, write_back=request.enable)
-    return _summary(updated)
+    return _summary(updated, connection_store)
 
 
 __all__ = ["router"]

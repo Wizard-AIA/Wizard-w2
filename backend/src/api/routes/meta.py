@@ -7,7 +7,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.deps import get_session, require_api_key
+from src.api.deps import get_credential_store, get_session, require_api_key
 from src.api.schemas import (
     DataModeRequest,
     DataModeResponse,
@@ -30,7 +30,7 @@ from src.api.schemas import (
     UsageResponse,
 )
 from src.config import settings
-from src.core.credentials import credential_store
+from src.core.credentials import CredentialStore
 from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
 from src.core.embeddings import embedding_service
 from src.core.execution import isolation_for
@@ -374,7 +374,11 @@ async def list_providers(session: Session = Depends(get_session)) -> ProvidersRe
 
 
 @router.put("/api/providers/{provider}/credentials", dependencies=[Depends(require_api_key)])
-async def set_provider_credential(provider: str, request: ProviderCredentialRequest) -> dict:
+async def set_provider_credential(
+    provider: str,
+    request: ProviderCredentialRequest,
+    credential_store: CredentialStore = Depends(get_credential_store),
+) -> dict:
     """Stores an API key on this machine. The key is never read back."""
     if not provider_exists(provider):
         raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}")
@@ -387,7 +391,10 @@ async def set_provider_credential(provider: str, request: ProviderCredentialRequ
 
 
 @router.delete("/api/providers/{provider}/credentials", dependencies=[Depends(require_api_key)])
-async def delete_provider_credential(provider: str) -> dict:
+async def delete_provider_credential(
+    provider: str,
+    credential_store: CredentialStore = Depends(get_credential_store),
+) -> dict:
     if not provider_exists(provider):
         raise HTTPException(status_code=404, detail=f"Unknown provider {provider!r}")
     removed = await asyncio.to_thread(credential_store.delete, provider)

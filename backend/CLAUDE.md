@@ -15,6 +15,9 @@ uv pip install --system -r requirements-optional.txt      # Redis / OpenAI gatew
 uvicorn src.api.api:app --reload --port 8000              # from backend/
 python backend/main.py path/to/data.csv                   # CLI REPL
 
+# Dump OpenAPI schema (feeds frontend's `pnpm generate:api-types`)
+python scripts/generate_openapi.py                        # from backend/ -> backend/openapi.json
+
 # Test (run from repo ROOT — pyproject sets testpaths/pythonpath)
 pytest
 pytest backend/tests/unit -q

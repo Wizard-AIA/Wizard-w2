@@ -9,6 +9,10 @@ Loads only when work touches `frontend/`. Global rules: [root CLAUDE.md](../CLAU
 cd frontend && pnpm install
 pnpm dev                                         # Next.js dev server (:3000)
 pnpm lint && npx tsc --noEmit && pnpm build      # The three CI gates
+
+# Regenerate lib/api-types.generated.ts from the backend's REST schemas
+# (run from backend/ first: python scripts/generate_openapi.py)
+pnpm generate:api-types
 ```
 
 ## Routes

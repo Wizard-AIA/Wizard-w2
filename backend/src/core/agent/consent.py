@@ -117,6 +117,19 @@ class ConsentBroker:
         """How many requests are outstanding. Exists for tests and diagnostics."""
         return len(self._pending.get(session_id, {}))
 
+    def reset(self) -> None:
+        """Drops every outstanding request, across every session.
+
+        For test teardown: `abandon` only reaches one session, and this is a
+        process-wide singleton, so a request left behind by one test would
+        otherwise still be pending when the next test's session id happens to
+        collide with it. Unlike `abandon`, this does not resolve the dropped
+        futures -- a test process tears down its event loop between tests, so
+        setting a result on a future from a prior loop would raise instead of
+        release anything.
+        """
+        self._pending.clear()
+
     def _discard(self, session_id: str, request_id: str) -> None:
         outstanding = self._pending.get(session_id)
         if outstanding is None:
