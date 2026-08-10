@@ -31,12 +31,10 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
         "(allow process-exec)",
         "(allow process-fork)",
         "(allow sysctl-read)",
-        "(allow sysctl*)",
         "(allow mach-lookup)",
         "(allow signal (target self))",
         "(allow file-read-metadata)",
-        "(allow user-preference-read)",
-        "(allow ipc-posix-shm)",
+        "(allow ipc-posix-shm*)",
     ]
 
     for root in policy.readable:
