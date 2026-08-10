@@ -2,7 +2,7 @@
 
 Pure functions with no side effects, so what the sandbox will be told can be
 asserted exactly in a test on any OS -- which is the only way the macOS profile
-gets reviewed at all from a Windows or Linux developer machine.
+gets reviewed at all from a Windows- or Linux-developer machine.
 """
 
 from __future__ import annotations
@@ -31,9 +31,12 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
         "(allow process-exec)",
         "(allow process-fork)",
         "(allow sysctl-read)",
+        "(allow sysctl*)",
         "(allow mach-lookup)",
         "(allow signal (target self))",
         "(allow file-read-metadata)",
+        "(allow user-preference-read)",
+        "(allow ipc-posix-shm)",
     ]
 
     for root in policy.readable:
@@ -41,10 +44,11 @@ def sbpl_profile(policy: SandboxPolicy) -> str:
     for root in policy.writable:
         lines.append(f"(allow file-read* file-write* (subpath {_sbpl_string(root)}))")
 
-    # /dev/null and /dev/urandom are needed by the interpreter itself; naming
-    # them individually keeps the rest of /dev denied.
-    lines.append('(allow file-write-data (literal "/dev/null"))')
-    lines.append('(allow file-read* (literal "/dev/urandom") (literal "/dev/random"))')
+    # Special devices and temp directories needed by Python's dyld/ctypes/locale runtime
+    lines.append('(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/urandom") (literal "/dev/random") (literal "/dev/dtracehelper"))')
+    lines.append('(allow file-write-data (literal "/dev/null") (literal "/dev/zero"))')
+    lines.append('(allow file-read* (subpath "/private/var/db/dyld") (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))')
+    lines.append('(allow file-read* file-write* (subpath "/private/tmp") (subpath "/var/tmp") (subpath "/tmp"))')
 
     if policy.network == "deny":
         lines.append("(deny network*)")
