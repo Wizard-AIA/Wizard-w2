@@ -62,6 +62,12 @@ jobs:
       # Run from the repo root: pyproject sets testpaths and pythonpath.
       run: pytest --cov=backend/src --cov-report=xml --cov-report=term-missing
 
+    - name: Run sandbox containment selftest
+      # Runs kernel-level containment tests (seccomp BPF / Landlock on Linux)
+      env:
+        WIZARD_SANDBOX_SELFTEST: "1"
+      run: pytest backend/tests/sandbox/ -v
+
     - name: Upload coverage
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
       with:
