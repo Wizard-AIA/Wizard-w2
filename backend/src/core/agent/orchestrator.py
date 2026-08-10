@@ -2178,6 +2178,31 @@ class AnalysisOrchestrator:
             return ""
         return name
 
+    #: Extensions generated code can plausibly produce as a downloadable
+    #: artifact, given the toolkit offered in `prompts.py` (pandas/pyarrow for
+    #: tabular I/O, openpyxl/xlsxwriter for Excel, matplotlib/plotly for
+    #: plots). An allowlist rather than a denylist of reserved names: an
+    #: unforeseen temp file (`.pid`, `.sock`, `debug.log`) is excluded by
+    #: default instead of needing to be named to keep it out.
+    _DOWNLOAD_EXTENSIONS = frozenset(
+        {
+            ".csv",
+            ".tsv",
+            ".xlsx",
+            ".xls",
+            ".parquet",
+            ".feather",
+            ".json",
+            ".html",
+            ".txt",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".svg",
+            ".pdf",
+        }
+    )
+
     @staticmethod
     def _collect_downloads(state: RunState, session: Session) -> list[str]:
         """Files the run actually produced in the session workspace."""
@@ -2186,7 +2211,9 @@ class AnalysisOrchestrator:
             return sorted(
                 path.name
                 for path in session.workspace.iterdir()
-                if path.is_file() and path.name not in reserved and not path.name.startswith(".")
+                if path.is_file()
+                and path.name not in reserved
+                and path.suffix.lower() in AnalysisOrchestrator._DOWNLOAD_EXTENSIONS
             )
         except OSError:
             return []

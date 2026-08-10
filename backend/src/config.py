@@ -584,6 +584,13 @@ class Settings(BaseSettings):
     MAX_INMEMORY_ROWS: int = 2_000_000
     PROFILE_SAMPLE_ROWS: int = 200_000  # rows used for profiling/catalog on big data
     PROMPT_MAX_COLUMNS: int = 60  # wide-frame guard for prompt context
+    #: Below this row count, `categorize_low_cardinality` leaves object columns
+    #: alone -- the `category` dtype's overhead isn't worth it on a small frame.
+    CATEGORIZATION_MIN_ROWS: int = 1000
+    #: An object column becomes `category` when its unique-value ratio is below
+    #: this. Lower catches only genuinely repetitive columns; higher risks
+    #: converting near-unique columns for no memory benefit.
+    CATEGORIZATION_RATIO_THRESHOLD: float = 0.5
 
     # Connections (Milestone 4). An upload is bounded by MAX_UPLOAD_BYTES before
     # anything reads it; a table is not, and `Session._materialize` writes each
