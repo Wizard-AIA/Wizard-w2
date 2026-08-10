@@ -81,6 +81,7 @@ locates the checkout root by walking up looking for `backend/main.py` +
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
 | `wizard update` | `git pull --ff-only`, reinstalls dependencies (the same steps as `init`), re-checks the compat marker. Restarts the daemon afterward if it was running before. Scoped to the checkout only this milestone — see below. |
+| `wizard skills add/list/update/discard/remove/token` | Fronts `backend/main.py skills` — the same install machinery (fetch, pin to a commit, show every skill's full contents, ask before writing) the REST routes and web UI's install-from-GitHub flow use, now also reachable from the compiled binary. Runs in the wizard-managed venv from `wizard init`; `add`/`update` prompt on a real terminal unless `--yes` is given. |
 | `wizard version` | Prints this binary's compiled-in compat version. |
 
 ## What's deliberately out of scope this milestone

@@ -23,6 +23,7 @@ Usage:
   wizard attach   Follow the backend/frontend logs live.
   wizard logs     Print log file paths (add --tail N for recent lines).
   wizard update   git pull, reinstall dependencies, re-check compatibility.
+  wizard skills   Install and manage skills (add/list/update/discard/remove/token).
   wizard version  Print this binary's version and compat marker.
 
 Run from inside a Wizard checkout (or any subdirectory of one).
@@ -70,6 +71,8 @@ func run(args []string) int {
 		return commands.RunLogs(env, rest)
 	case "update":
 		return commands.RunUpdate(env, rest)
+	case "skills":
+		return commands.RunSkills(env, rest)
 	case "__supervise":
 		// Hidden: only `wizard start` invokes this, as a detached child of
 		// itself. Not part of the documented interface -- see supervise.go.
