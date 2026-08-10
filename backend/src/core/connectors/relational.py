@@ -19,6 +19,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 
 from src.config import settings
+from src.utils.logging import logger
 
 from .base import DEFAULT_SAMPLE_ROWS, refuse_write
 from .registry import ConnectorKind, register
@@ -31,6 +32,12 @@ from .spec import (
     TargetInfo,
     inject_secret_into_dsn,
 )
+
+
+#: Rows pulled per round-trip while bounding `fetch()`. Small enough that the
+#: cap below is enforced within one chunk's worth of overshoot, large enough
+#: that a normal-sized result set is not paid for one round-trip per row.
+_FETCH_CHUNK_ROWS = 10_000
 
 
 #: Which ``connect_args`` key each dialect family spells its connect timeout with.
@@ -195,14 +202,40 @@ class RelationalConnector:
         caller that instead formats the value into ``query`` gets the same
         injection ``text()`` was supposed to prevent; this signature exists so
         that caller has a safe alternative to reach for.
+
+        Bounded by ``CONNECTOR_MAX_ROWS``, the same ceiling ``ingest.py`` holds
+        an import to. Unlike ``sample()`` the query is arbitrary SQL text, so the
+        limit cannot be pushed into the statement itself -- instead the result is
+        read in chunks and stops being pulled once the ceiling is passed, so a
+        query against a huge table pays for one chunk over the cap rather than
+        the whole result set.
         """
         sqlalchemy = _sqlalchemy()
         engine = self._connect()
+        cap = int(settings.CONNECTOR_MAX_ROWS)
         try:
             with engine.connect() as connection:
-                return pd.read_sql(sqlalchemy.text(query), connection, params=params)
+                chunks: list[pd.DataFrame] = []
+                rows = 0
+                for chunk in pd.read_sql(
+                    sqlalchemy.text(query), connection, params=params, chunksize=_FETCH_CHUNK_ROWS
+                ):
+                    chunks.append(chunk)
+                    rows += len(chunk)
+                    if rows > cap:
+                        break
         except Exception as exc:
             raise ConnectorError("The query failed.", detail=str(exc)) from exc
+
+        frame = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+        if len(frame) > cap:
+            frame = frame.head(cap)
+            logger.warning(
+                "A connector fetch hit the row ceiling",
+                connection=self.spec.name,
+                row_limit=cap,
+            )
+        return frame
 
     def write(self, target: str, df: pd.DataFrame) -> None:
         refuse_write(self.spec)
