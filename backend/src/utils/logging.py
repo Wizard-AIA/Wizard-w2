@@ -1,5 +1,6 @@
 import inspect
 import logging
+import os
 import sys
 import time
 from functools import wraps
@@ -15,6 +16,11 @@ def configure_logger():
         level=logging.INFO,
     )
 
+    # Read directly from the environment rather than `src.config.settings`:
+    # `config.py` imports `logger` from this module at import time, so
+    # importing `settings` back here would be circular.
+    prod = os.environ.get("ENV", "").strip().lower() == "prod"
+
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -25,12 +31,13 @@ def configure_logger():
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             # ConsoleRenderer lives in `structlog.dev`, not `structlog.processors`.
-            # This only ever ran interactively -- a ternary evaluates just the
-            # branch it takes, and every automated run (CI, anything redirected
-            # to a file) is not a tty and took the JSON branch. So the crash was
-            # invisible to the test suite and hit the first person to start the
-            # server in a real terminal.
-            structlog.dev.ConsoleRenderer() if sys.stdout.isatty() else structlog.processors.JSONRenderer(),
+            # JSON is forced in prod regardless of tty -- a centralized log
+            # ingestor (Datadog, Loki, CloudWatch) needs structured lines even
+            # when the process happens to have a tty attached (e.g. `docker run
+            # -it`). Outside prod, a real terminal still gets the readable
+            # renderer; every automated run (CI, anything redirected to a file)
+            # is not a tty and takes the JSON branch either way.
+            structlog.processors.JSONRenderer() if prod or not sys.stdout.isatty() else structlog.dev.ConsoleRenderer(),
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),

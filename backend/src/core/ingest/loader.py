@@ -158,10 +158,12 @@ def downcast_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def categorize_low_cardinality(df: pd.DataFrame, ratio: float = 0.5) -> pd.DataFrame:
+def categorize_low_cardinality(df: pd.DataFrame, ratio: float | None = None) -> pd.DataFrame:
     """Converts repetitive object columns to ``category`` to cut memory."""
+    if ratio is None:
+        ratio = settings.CATEGORIZATION_RATIO_THRESHOLD
     row_count = len(df)
-    if row_count < 1000:
+    if row_count < settings.CATEGORIZATION_MIN_ROWS:
         return df
     for column in df.select_dtypes(include=["object"]).columns:
         try:
