@@ -287,6 +287,34 @@ def test_protected_dataset_cannot_be_deleted(client: TestClient, simple_df: pd.D
     assert response.status_code == 400
 
 
+def test_plot_html_served_inline_and_sandboxed(client: TestClient, simple_df: pd.DataFrame) -> None:
+    """Plots must render inline in the frontend's sandboxed iframe, and stay
+
+    confined server-side too: `attachment` (the FileResponse default) makes
+    browsers refuse to display an HTML chart inside a sandboxed iframe at
+    all, and a bare CSP is a second enforcement of the iframe's own sandbox
+    restrictions for anyone who opens the URL directly.
+    """
+    session_id = upload(client, simple_df)["session_id"]
+    session = session_manager.get(session_id)
+    assert session is not None
+    (session.workspace / "plot.html").write_text("<html><body>chart</body></html>", encoding="utf-8")
+
+    response = client.get("/api/workspace/file/plot.html", headers={SESSION_HEADER: session_id})
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["content-security-policy"] == "sandbox allow-scripts"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_dataset_download_stays_an_attachment(client: TestClient, simple_df: pd.DataFrame) -> None:
+    session_id = upload(client, simple_df)["session_id"]
+    response = client.get("/api/workspace/file/dataset.csv", headers={SESSION_HEADER: session_id})
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert "content-security-policy" not in response.headers
+
+
 # --------------------------------------------------------------------------- #
 # Sandbox routes (degraded, since Docker is disabled here)
 # --------------------------------------------------------------------------- #
