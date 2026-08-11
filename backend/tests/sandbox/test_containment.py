@@ -74,6 +74,23 @@ def test_outbound_network_is_blocked(enforced) -> None:
     assert result.checks["outbound_network"]["outcome"] == "blocked", result.checks["outbound_network"]["detail"]
 
 
+def test_a_memory_allocation_past_the_ceiling_is_blocked(enforced) -> None:
+    """Regression for #123: on Windows the job object carrying the memory
+
+    ceiling was created but never bound to the probe (`run()` used
+    `subprocess.run`, which throws away the `Popen` handle `plan.adopt`
+    needs), so this check always came back "allowed" there regardless of
+    whether a real session's job object worked.
+    """
+    supported = {feature.key: feature.supported for feature in enforced.features}
+    if not supported.get("memory"):
+        pytest.skip(f"memory containment is unavailable here: {enforced.features[0].detail}")
+
+    result = selftest.run(timeout=120)
+
+    assert result.checks["memory_ceiling"]["outcome"] == "blocked", result.checks["memory_ceiling"]["detail"]
+
+
 def test_the_verdict_agrees_with_the_checks(enforced) -> None:
     result = selftest.run(timeout=120)
 
