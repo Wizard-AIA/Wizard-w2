@@ -403,6 +403,92 @@ def test_an_inconclusive_network_check_is_not_reported_as_blocked() -> None:
     assert ok is True
 
 
+def test_an_unblocked_memory_allocation_fails_the_verdict() -> None:
+    """The probe allocates past the configured ceiling; a platform that claims
+
+    to enforce ``memory`` and lets it through is exactly the false-positive
+    `#123 <https://github.com/Wizard-AIA/Wizard-w2/issues/123>`_ reported: a
+    Windows job object that was created but never bound to the child, so
+    ``memory_ceiling`` came back ``"allowed"`` while `_judge` silently
+    ignored it.
+    """
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, detail = _judge(
+        {
+            "workspace_write": {"outcome": "allowed", "detail": ""},
+            "outside_write": {"outcome": "blocked", "detail": ""},
+            "memory_ceiling": {"outcome": "allowed", "detail": ""},
+        },
+        _capability(),
+    )
+
+    assert ok is False
+    assert "memory" in detail
+
+
+def test_an_uncapped_memory_check_is_not_reported_as_blocked() -> None:
+    """``mem_bytes=0`` (no ceiling configured) records ``inconclusive``, which
+
+    must not read as a failure — there was nothing to enforce.
+    """
+    from src.core.security.sandbox.selftest import _judge
+
+    ok, _ = _judge(
+        {
+            "workspace_write": {"outcome": "allowed", "detail": ""},
+            "outside_write": {"outcome": "blocked", "detail": ""},
+            "memory_ceiling": {"outcome": "inconclusive", "detail": ""},
+        },
+        _capability(),
+    )
+
+    assert ok is True
+
+
+def test_run_binds_the_probe_into_its_job_object(monkeypatch, tmp_path: Path) -> None:
+    """`run()` used to call `subprocess.run`, which has no way to hand the
+
+    spawned child back to `plan.adopt` -- the call that puts a Windows probe
+    into the job object carrying its memory/process ceilings
+    (`windows.assign_to_job`). The job was built with the right limits and
+    then simply never attached, so the probe ran unconstrained and the
+    self-test reported memory/process containment as absent even when a real
+    session (`HostSession`, which does call `adopt`) enforces both.
+
+    No real process (or `icacls`) is spawned here (this file's rule):
+    `subprocess.Popen` is stubbed with a fake that satisfies the
+    `communicate()`/`returncode` surface `run()` uses, and `plan_spawn` is
+    stubbed too so building the plan cannot itself shell out. What is pinned
+    is purely that `run()` calls `plan.adopt` with whatever `Popen` returned.
+    """
+    from src.core.security.sandbox import selftest as selftest_module
+    from src.core.security.sandbox.spawn import SpawnPlan
+
+    monkeypatch.setattr("src.config.settings.WORKSPACE_DIR", tmp_path)
+
+    class _FakeProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return b"WIZARD_SELFTEST {}\n", b""
+
+    adopted = []
+    monkeypatch.setattr(selftest_module.subprocess, "Popen", lambda *a, **k: _FakeProcess())
+    monkeypatch.setattr(
+        selftest_module,
+        "plan_spawn",
+        lambda policy, argv, workspace: SpawnPlan(
+            argv=argv, adopt=lambda process: adopted.append(process), mechanism="test"
+        ),
+    )
+
+    selftest_module.run(timeout=10)
+
+    assert len(adopted) == 1
+    assert isinstance(adopted[0], _FakeProcess)
+
+
 def test_the_child_module_imports_nothing_from_src() -> None:
     """It is loaded by file path from a process that has no `src` on its path,
     and a sandbox that has denied the repository cannot import its own bootstrap.

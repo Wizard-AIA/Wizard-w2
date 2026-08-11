@@ -197,29 +197,44 @@ def run(timeout: float = 60.0) -> SelfTestResult:
             return SelfTestResult(False, f"Could not prepare the probe: {exc}", {}, {})
 
         environment = dict(plan.env)
+        # `Popen` + `plan.adopt`, not `subprocess.run`: on Windows the job
+        # object carrying the memory/process ceilings only binds to the child
+        # through `adopt` (`AssignProcessToJobObject`), which needs the live
+        # `Popen` handle `run()` throws away. Skipping it left the probe
+        # spawned but never placed in its job -- unconstrained, and honestly
+        # (if misleadingly) reporting memory/process containment as absent
+        # even when a real session's `HostSession` (which does call `adopt`)
+        # enforces both. Mirrors the exact spawn shape `host_runtime.py` uses.
         try:
-            completed = subprocess.run(  # noqa: S603 - argv we built, no shell
+            process = subprocess.Popen(  # noqa: S603 - argv we built, no shell
                 plan.argv,
                 cwd=str(workspace),
-                capture_output=True,
-                timeout=timeout,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env={**_base_environment(), **environment},
             )
-        except subprocess.TimeoutExpired:
-            return SelfTestResult(False, f"The probe did not finish within {timeout:.0f}s", {}, {})
         except OSError as exc:
             return SelfTestResult(False, f"Could not run the probe: {exc}", {}, {})
+
+        try:
+            if plan.adopt is not None:
+                plan.adopt(process)
+            try:
+                raw_stdout, raw_stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                return SelfTestResult(False, f"The probe did not finish within {timeout:.0f}s", {}, {})
         finally:
             if plan.teardown is not None:
                 plan.teardown()
 
-        stdout = (completed.stdout or b"").decode("utf-8", "replace")
-        stderr = (completed.stderr or b"").decode("utf-8", "replace").strip()
+        stdout = (raw_stdout or b"").decode("utf-8", "replace")
+        stderr = (raw_stderr or b"").decode("utf-8", "replace").strip()
 
         line = next((ln for ln in stdout.splitlines() if ln.startswith("WIZARD_SELFTEST ")), "")
         if not line:
-            detail = f"the probe produced no report (exit code {completed.returncode}, stderr={stderr[:300]!r}, stdout={stdout[:300]!r})"
+            detail = f"the probe produced no report (exit code {process.returncode}, stderr={stderr[:300]!r}, stdout={stdout[:300]!r})"
             logger.warning("Sandbox self-test produced no report", detail=detail)
             return SelfTestResult(False, detail, {}, {})
 
@@ -261,6 +276,9 @@ def _judge(checks: dict, capability) -> tuple[bool, str]:
 
     if supported.get("network") and checks.get("outbound_network", {}).get("outcome") == "allowed":
         failures.append("an outbound connection was not blocked")
+
+    if supported.get("memory") and checks.get("memory_ceiling", {}).get("outcome") == "allowed":
+        failures.append("an allocation past the configured memory ceiling was not blocked")
 
     if failures:
         return False, "; ".join(failures)
