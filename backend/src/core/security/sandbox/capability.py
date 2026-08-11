@@ -85,6 +85,40 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
     return True, "sandbox-exec accepts a profile"
 
 
+def _probe_rlimit_as() -> tuple[bool, str]:
+    """Whether this host actually lets a process lower its own ``RLIMIT_AS``.
+
+    Probed rather than assumed, the same reasoning as :func:`_probe_sandbox_exec`:
+    observed on GitHub's ``macos-latest`` runners, ``setrlimit(RLIMIT_AS, ...)``
+    is refused outright (a ``ValueError`` from the binding itself, before the
+    kernel is even asked) for reasons unrelated to the ceiling requested --
+    `child._apply_memory_limit` already reports this honestly per session, but
+    :func:`detect` had been claiming the mechanism works unconditionally. Run
+    in a throwaway subprocess so a refusal -- or, in principle, a ceiling that
+    actually took -- never touches this process's own limits.
+    """
+    probe = (
+        "import resource\n"
+        "soft, hard = resource.getrlimit(resource.RLIMIT_AS)\n"
+        "ceiling = (1 << 30) if hard in (resource.RLIM_INFINITY, -1) else min(1 << 30, hard)\n"
+        "resource.setrlimit(resource.RLIMIT_AS, (ceiling, hard))\n"
+    )
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"RLIMIT_AS could not be probed ({exc})"
+    if result.returncode != 0:
+        stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
+        detail = stderr.splitlines()[-1] if stderr else f"exit code {result.returncode}"
+        return False, f"RLIMIT_AS was refused on this host ({detail})"
+    return True, "RLIMIT_AS"
+
+
 def _linux_capability() -> SandboxCapability:
     from src.core.security.sandbox.child import landlock_abi
 
@@ -108,13 +142,14 @@ def _linux_capability() -> SandboxCapability:
 
 def _macos_capability() -> SandboxCapability:
     supported, detail = _probe_sandbox_exec()
+    memory_supported, memory_detail = _probe_rlimit_as()
     return SandboxCapability(
         platform="darwin",
         mechanism="sandbox-exec",
         features=(
             Feature("filesystem", supported, detail),
             Feature("network", supported, detail if not supported else "the profile denies all but loopback"),
-            Feature("memory", True, "RLIMIT_AS"),
+            Feature("memory", memory_supported, memory_detail),
             Feature("processes", True, "RLIMIT_NPROC"),
         ),
     )

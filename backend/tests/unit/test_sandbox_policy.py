@@ -154,15 +154,35 @@ def test_windows_states_that_network_is_not_enforced() -> None:
 
 def test_macos_capability_is_probed_not_inferred_from_the_version(monkeypatch) -> None:
     """`sandbox-exec` has been deprecated since 10.14 and still works well past
-    it, so a version check would refuse a mechanism that functions. The probe is
-    stubbed here — running it would spawn a process.
+    it, so a version check would refuse a mechanism that functions. Both probes
+    are stubbed here — running either would spawn a process.
     """
     monkeypatch.setattr(capability, "_probe_sandbox_exec", lambda: (False, "sandbox-exec is not present"))
+    monkeypatch.setattr(capability, "_probe_rlimit_as", lambda: (True, "RLIMIT_AS"))
     detected = capability._macos_capability()
 
     assert detected.mechanism == "sandbox-exec"
     assert not detected.features[0].supported
     assert "not present" in detected.features[0].detail
+
+
+def test_macos_memory_is_probed_not_assumed(monkeypatch) -> None:
+    """Regression: `_macos_capability` used to claim ``memory`` supported
+
+    unconditionally (`Feature("memory", True, "RLIMIT_AS")`), the same kind of
+    optimistic claim #123 flagged on Windows. `setrlimit(RLIMIT_AS, ...)` is
+    refused outright on some macOS hosts (observed on GitHub's `macos-latest`
+    runners) — a static claim there made `_judge` trust an allocation that
+    actually sailed straight through. Stubbed here — running the real probe
+    would spawn a process.
+    """
+    monkeypatch.setattr(capability, "_probe_sandbox_exec", lambda: (True, "sandbox-exec accepts a profile"))
+    monkeypatch.setattr(capability, "_probe_rlimit_as", lambda: (False, "RLIMIT_AS was refused on this host"))
+    detected = capability._macos_capability()
+
+    memory = next(feature for feature in detected.features if feature.key == "memory")
+    assert memory.supported is False
+    assert "refused" in memory.detail
 
 
 # --------------------------------------------------------------------------- #
