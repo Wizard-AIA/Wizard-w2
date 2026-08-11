@@ -96,15 +96,32 @@ async def get_file(file_path: str, session: Session = Depends(get_session_for_li
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
 
+    is_plot = target.suffix.lower() == ".html"
+    headers = {
+        # Generated HTML charts are rendered in a sandboxed iframe; make sure
+        # a stale chart is never served after a re-run.
+        "Cache-Control": "no-store",
+    }
+    if is_plot:
+        # Plotly writes raw HTML from dataset values (column names, labels). A
+        # `sandbox` CSP is a second, server-side enforcement of the same
+        # restrictions as the frontend's `<iframe sandbox="allow-scripts">`,
+        # so a direct navigation to this URL (bypassing the iframe) is still
+        # confined to a scriptable-but-isolated origin: no same-origin
+        # access, no top-level navigation, no forms/popups.
+        headers["Content-Security-Policy"] = "sandbox allow-scripts"
+        headers["X-Content-Type-Options"] = "nosniff"
+
     return FileResponse(
         path=target,
         media_type=MEDIA_TYPES.get(target.suffix.lower(), "application/octet-stream"),
         filename=target.name,
-        headers={
-            # Generated HTML charts are rendered in a sandboxed iframe; make sure
-            # a stale chart is never served after a re-run.
-            "Cache-Control": "no-store",
-        },
+        # Charts must render inline inside the iframe; every other workspace
+        # file (datasets, exports) is a deliberate download via `download=`
+        # anchors in the frontend, so `attachment` (the default) stays for
+        # those.
+        content_disposition_type="inline" if is_plot else "attachment",
+        headers=headers,
     )
 
 
