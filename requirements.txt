@@ -23,38 +23,38 @@
 #   seaborn                a second copy of the sandbox's toolkit.
 
 # Web layer
-fastapi==0.111.0
-uvicorn==0.30.1
-python-multipart==0.0.31
-pydantic==2.8.2
-pydantic-settings==2.3.4
-structlog==24.2.0
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32
+pydantic==2.13.4
+pydantic-settings==2.15.0
+structlog==26.1.0
 
 # HTTP client. Used in production for provider embeddings and by the test client.
-httpx==0.27.0
+httpx==0.28.1
 
 # Data stack. Ingestion, profiling and Feather transport into the runtime --
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
-pandas==2.2.2
-numpy==1.26.4
-pyarrow==23.0.1
-scipy==1.14.0
-matplotlib==3.9.1.post1
-tabulate==0.9.0
+pandas==3.0.5
+numpy==2.5.2
+pyarrow==25.0.1
+scipy==1.18.0
+matplotlib==3.11.1
+tabulate==0.10.0
 # Required to ingest .xlsx/.xls uploads.
 openpyxl==3.1.5
 
 # Model access
-langchain>=0.2.0,<0.3.0
-langchain-ollama==0.1.1
+langchain>=1.3.14,<1.4.0
+langchain-ollama==1.1.0
 
 # Execution sandbox
-docker==7.1.0
+docker==7.2.0
 
 # Tools
 duckduckgo-search>=6.1.7
 
 # Test tooling
-pytest>=8.0.0,<9.0.0
-pytest-asyncio==0.23.8
+pytest>=9.1.1,<10.0.0
+pytest-asyncio==1.4.0

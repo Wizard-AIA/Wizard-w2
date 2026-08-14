@@ -10,5 +10,5 @@
 # Pinned deliberately -- unpinned, a release that adds or promotes a rule
 # fails master with no code change, which is what happened when UP042
 # (str+Enum -> StrEnum) started being reported.
-ruff==0.14.14
+ruff==0.16.2
 pytest-cov==7.1.0
