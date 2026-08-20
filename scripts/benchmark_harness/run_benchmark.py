@@ -197,10 +197,19 @@ def main() -> None:
     print(f"Mode: {args.mode}  Models: {models}")
     print(f"Cases: {args.cases}  n={args.n}\n")
 
-    results = []
-    for case_id in args.cases:
-        print(f"=== {case_id} ===")
-        results.append(asyncio.run(run_cell(args.mode, case_id, args.dataset, models, args.n)))
+    async def run_all_cases() -> list[dict]:
+        # One event loop for the whole run, not one per case: the LLM client is
+        # cached at process scope (matches production's one-loop-per-process-life
+        # assumption), so a fresh asyncio.run() per case reuses a client still
+        # bound to the previous case's now-closed loop and fails with "Event loop
+        # is closed" until the stale client happens to get evicted.
+        all_results = []
+        for case_id in args.cases:
+            print(f"=== {case_id} ===")
+            all_results.append(await run_cell(args.mode, case_id, args.dataset, models, args.n))
+        return all_results
+
+    results = asyncio.run(run_all_cases())
 
     args.out.parent.mkdir(exist_ok=True)
     args.out.write_text(json.dumps(results, indent=2, default=str))

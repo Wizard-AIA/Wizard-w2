@@ -25,3 +25,9 @@ repos:
       - id: commitlint
         stages: [commit-msg]
         additional_dependencies: ['@commitlint/config-conventional']
+        # Use the system Node rather than nodeenv downloading its own: nodeenv's
+        # "latest stable" lookup fetches https://nodejs.org/dist/index.json via
+        # Python's http.client, which truncates the response on some platform/
+        # OpenSSL combinations (reproducible outside pre-commit too; curl is
+        # unaffected). Avoids the fetch entirely instead of chasing that bug.
+        language_version: system
