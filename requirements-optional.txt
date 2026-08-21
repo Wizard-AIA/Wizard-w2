@@ -9,12 +9,12 @@ redis>=8.1.0
 
 # Talk to an OpenAI-compatible endpoint instead of a local Ollama daemon
 # (API_PROVIDER=openai, custom_gateway, or lmstudio).
-langchain-openai>=1.4.3
+langchain-openai>=1.5.2
 
 # Anthropic's Messages API, which is not OpenAI-shaped and needs its own client.
 # Only required when a role is assigned to the `anthropic` provider; without it
 # that provider reports what to install rather than failing obscurely.
-langchain-anthropic>=1.5.4
+langchain-anthropic>=1.5.6
 
 # ---------------------------------------------------------------------------
 # Data source connectors
@@ -32,13 +32,13 @@ langchain-anthropic>=1.5.4
 # a question of which dialect driver is also installed (psycopg, pymysql, ...).
 # SQLite needs nothing beyond the standard library, which is why it is what the
 # test suite uses to exercise the connector for real.
-sqlalchemy>=2.0
+sqlalchemy>=2.0.52
 
 # MongoDB and compatible document stores.
 pymongo>=4.17.0
 
 # S3, MinIO, Cloudflare R2 and other S3-compatible object storage.
-boto3>=1.43.68
+boto3>=1.43.73
 
 # ---------------------------------------------------------------------------
 # Local embeddings
