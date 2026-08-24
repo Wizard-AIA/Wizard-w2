@@ -1,0 +1,13 @@
+[cosmic-ray]
+# Scoped to the new analytical control plane's deterministic modules, not the whole backend --
+# see docs/analysis/mutation-testing.md for why, and for how this list grows per phase.
+module-path = [
+    "backend/src/core/agent/grounding.py",
+    "backend/src/core/agent/actions.py",
+]
+test-command = "python -m pytest -x -q backend/tests"
+timeout = 60.0
+excluded-modules = []
+
+[cosmic-ray.distributor]
+name = "local"

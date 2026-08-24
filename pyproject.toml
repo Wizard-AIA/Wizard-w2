@@ -66,3 +66,7 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+# Mutation testing config is cosmic-ray.toml at the repo root, not here -- cosmic-ray reads
+# its own [cosmic-ray] TOML file rather than a [tool.*] table. See
+# docs/analysis/mutation-testing.md.
