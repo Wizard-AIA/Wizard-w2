@@ -156,6 +156,37 @@ async def test_fast_mode_runs_end_to_end(loaded_session: Session, stub_llm) -> N
     assert EventType.FINAL in types
 
 
+async def test_run_carries_and_persists_analytical_state(loaded_session: Session, stub_llm) -> None:
+    """Phase 1: `analysis` rides alongside the existing result fields, and its
+    findings/assumptions agree with the Investigation-derived ones -- the loop's
+    observable behaviour is unchanged, it just now also carries structured state.
+    """
+    stub_llm(
+        [
+            "1. Print the row count",
+            "```python\nprint('rows:', len(df))\n```",
+            "The dataset contains 5 rows.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="how big is this data", mode="fast", emitter=collector
+    )
+
+    assert isinstance(result.analysis, dict)
+    assert result.analysis["findings"] == result.findings
+    assert result.analysis["assumptions"] == result.assumptions
+    assert result.analysis["objective"] is None  # not populated until a later phase
+
+    final = collector.of_type(EventType.FINAL)[0]
+    assert final.data["analysis"] == result.analysis
+
+    assert result.message_id is not None
+    stored = db_mgr.get_analysis_state(result.message_id)
+    assert stored == result.analysis
+
+
 async def test_answer_is_streamed_in_multiple_deltas(loaded_session: Session, stub_llm) -> None:
     """The point of the rewrite: tokens reach the client as they are produced."""
     stub_llm(

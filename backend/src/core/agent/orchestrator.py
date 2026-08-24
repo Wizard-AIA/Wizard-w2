@@ -63,6 +63,7 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
+from src.core.analysis.state import AnalyticalState
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
@@ -162,6 +163,9 @@ class RunState:
     blocked: bool = False
 
     investigation: Investigation = field(default_factory=Investigation)
+    #: Structured beliefs about this turn's analysis. `__post_init__` wires
+    #: `.investigation` to the field above so `.findings`/`.assumptions` stay live.
+    analysis: AnalyticalState = field(default_factory=AnalyticalState)
     iterations_used: int = 0
     tier: str = "balanced"
 
@@ -190,6 +194,9 @@ class RunState:
     #: `routes/export.py` -- since the workspace's `analysis.py` is overwritten
     #: by the next turn and cannot be relied on after the fact.
     message_id: int | None = None
+
+    def __post_init__(self) -> None:
+        self.analysis.investigation = self.investigation
 
     @property
     def elapsed_ms(self) -> int:
@@ -222,6 +229,8 @@ class RunResult:
     #: never reached `_finalize` (e.g. it errored before an answer existed).
     #: What `GET /api/export/{message_id}` is keyed on.
     message_id: int | None = None
+    #: The turn's structured analytical state -- see `core/analysis/state.py`.
+    analysis: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,6 +255,7 @@ class RunResult:
             "usage": self.usage,
             "skills_used": self.skills_used,
             "message_id": self.message_id,
+            "analysis": self.analysis,
         }
 
 
@@ -2116,6 +2126,13 @@ class AnalysisOrchestrator:
             {"code": state.code, "instruction": state.instruction, "steps": exported_steps},
         )
 
+        try:
+            from src.core.database import db_mgr
+
+            db_mgr.save_analysis_state(session.id, state.message_id, state.analysis.to_dict())
+        except Exception as exc:
+            logger.error("Could not persist analysis state", error=str(exc))
+
         state.phase = Phase.DONE
         downloads = self._collect_downloads(state, session)
         # Subagent LLM calls book under their own composite ids (see
@@ -2144,6 +2161,7 @@ class AnalysisOrchestrator:
             usage=state.usage,
             skills_used=state.skills_used,
             message_id=state.message_id,
+            analysis=state.analysis.to_dict(),
         )
 
     @staticmethod
@@ -2241,6 +2259,7 @@ class AnalysisOrchestrator:
             usage=state.usage,
             skills_used=state.skills_used,
             message_id=state.message_id,
+            analysis=state.analysis.to_dict(),
         )
 
 

@@ -275,12 +275,24 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     manager.append_chat_message("s1", "user", "hello")
     manager.save_memory(time.time(), "task", "plan", "code", "result", session_id="s1")
     manager.save_schema("t.csv", ["a"], 1, "a", session_id="s1")
+    manager.save_analysis_state("s1", 1, {"objective": None})
 
     manager.delete_session_data("s1")
 
     assert manager.get_chat_messages("s1") == []
     assert manager.get_memories(session_id="s1") == []
     assert manager.get_schemas(session_id="s1") == []
+    assert manager.get_analysis_state(1) is None
+    manager.close()
+
+
+def test_analysis_state_round_trips_and_keeps_the_latest_per_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "analysis_state.db"))
+    manager.save_analysis_state("s1", 7, {"open_questions": ["first pass"]})
+    manager.save_analysis_state("s1", 7, {"open_questions": ["revised after reflection"]})
+
+    assert manager.get_analysis_state(7) == {"open_questions": ["revised after reflection"]}
+    assert manager.get_analysis_state(999) is None
     manager.close()
 
 

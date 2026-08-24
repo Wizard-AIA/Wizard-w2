@@ -112,6 +112,17 @@ SCHEMA_STATEMENTS = (
         meta TEXT
     )
     """,
+    # One row per turn's `AnalyticalState` snapshot (see core/analysis/state.py).
+    # `message_id` links back to the `chat_messages` row for that turn's answer.
+    """
+    CREATE TABLE IF NOT EXISTS analysis_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        timestamp REAL NOT NULL,
+        state TEXT NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -123,6 +134,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_skill_candidates_kind ON skill_candidates(kind, dismissed)",
     "CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(skill, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_message ON analysis_state(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_session ON analysis_state(session_id, timestamp)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -796,8 +809,40 @@ class DatabaseManager:
                 conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM working_memory WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM schema_registry WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM analysis_state WHERE session_id = ?", (session_id,))
         except Exception as e:
             logger.error("Failed to delete session data", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Analytical state (core/analysis/state.py)
+    # ------------------------------------------------------------------ #
+    def save_analysis_state(self, session_id: str, message_id: int | None, state: dict[str, Any]) -> int:
+        """Persists one turn's `AnalyticalState` snapshot. Returns the new row id, or 0 on failure."""
+        try:
+            with self._write() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO analysis_state (session_id, message_id, timestamp, state) VALUES (?, ?, ?, ?)",
+                    (session_id, message_id, time.time(), json.dumps(state)),
+                )
+                return int(cursor.lastrowid or 0)
+        except Exception as e:
+            logger.error("Failed to save analysis state", error=str(e))
+            return 0
+
+    def get_analysis_state(self, message_id: int) -> dict[str, Any] | None:
+        """The most recent analytical state snapshot for a given turn's message id."""
+        try:
+            with self._read() as conn:
+                row = conn.execute(
+                    "SELECT state FROM analysis_state WHERE message_id = ? ORDER BY id DESC LIMIT 1",
+                    (message_id,),
+                ).fetchone()
+                if row is None or not row["state"]:
+                    return None
+                return json.loads(row["state"])
+        except Exception as e:
+            logger.error("Failed to fetch analysis state", error=str(e))
+            return None
 
     # ------------------------------------------------------------------ #
     # Schema Registry
