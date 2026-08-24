@@ -123,6 +123,20 @@ SCHEMA_STATEMENTS = (
         state TEXT NOT NULL
     )
     """,
+    # One row per revision of a turn's plan (see core/analysis/plan.py). Also
+    # embedded inside analysis_state's JSON blob; this table exists so history
+    # can be queried directly without parsing that blob -- ADR 0002.
+    """
+    CREATE TABLE IF NOT EXISTS plan_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        revision_index INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        why TEXT,
+        timestamp REAL NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -136,6 +150,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(skill, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_state_message ON analysis_state(message_id)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_state_session ON analysis_state(session_id, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_plan_revisions_message ON plan_revisions(message_id, revision_index)",
+    "CREATE INDEX IF NOT EXISTS idx_plan_revisions_session ON plan_revisions(session_id)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -810,6 +826,7 @@ class DatabaseManager:
                 conn.execute("DELETE FROM working_memory WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM schema_registry WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM analysis_state WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM plan_revisions WHERE session_id = ?", (session_id,))
         except Exception as e:
             logger.error("Failed to delete session data", error=str(e))
 
@@ -843,6 +860,40 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to fetch analysis state", error=str(e))
             return None
+
+    def save_plan_revisions(self, session_id: str, message_id: int | None, revisions: list[dict[str, Any]]) -> None:
+        """Persists a turn's full plan revision history. Append-only, never replaces a row."""
+        if not revisions:
+            return
+        try:
+            with self._write() as conn:
+                conn.executemany(
+                    "INSERT INTO plan_revisions"
+                    " (session_id, message_id, revision_index, text, why, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (session_id, message_id, revision["index"], revision["text"], revision["why"], revision["at"])
+                        for revision in revisions
+                    ],
+                )
+        except Exception as e:
+            logger.error("Failed to save plan revisions", error=str(e))
+
+    def get_plan_revisions(self, message_id: int) -> list[dict[str, Any]]:
+        """One turn's plan revision history, oldest first."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT revision_index, text, why, timestamp FROM plan_revisions"
+                    " WHERE message_id = ? ORDER BY revision_index",
+                    (message_id,),
+                ).fetchall()
+                return [
+                    {"index": row["revision_index"], "text": row["text"], "why": row["why"], "at": row["timestamp"]}
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error("Failed to fetch plan revisions", error=str(e))
+            return []
 
     # ------------------------------------------------------------------ #
     # Schema Registry

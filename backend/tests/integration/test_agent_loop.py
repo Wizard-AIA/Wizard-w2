@@ -16,6 +16,7 @@ from stubs import ScriptedLLM
 from src.config import settings
 from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
+from src.core.database import db_mgr
 from src.core.ingest.documents import ContextDocument, DocumentChunk
 from src.core.session import Session
 from src.core.skills.registry import skill_registry
@@ -218,6 +219,35 @@ async def test_reflect_revises_the_plan_and_says_so(loaded_session: Session, stu
     assert "New first step" in revisions[0].data["plan"]
     assert revisions[0].data["previous"] == "1. Original plan"
     assert "New first step" in result.plan
+
+
+async def test_plan_revision_history_is_appended_not_overwritten(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """ADR 0002: a reflection appends a revision; it does not erase the one before it."""
+    stub_llm(
+        [
+            "1. Original plan",
+            "```python\nprint('surprising result')\n```",
+            "ACTION: reflect\nGOAL: rethink",
+            "Column A is not what I assumed.\n1. New first step\n2. New second step",
+            "ACTION: answer\nGOAL: report",
+            "```python\npass\n```",
+            "Done.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="analyse", mode="auto", emitter=collector)
+
+    revisions = result.analysis["plan"]["revisions"]
+    assert len(revisions) == 2
+    assert revisions[0]["text"] == "1. Original plan"
+    assert "New first step" in revisions[1]["text"]
+    assert revisions[0]["index"] == 0
+    assert revisions[1]["index"] == 1
+    assert result.analysis["plan"]["intended_analyses"] == ["New first step", "New second step"]
+
+    stored = db_mgr.get_plan_revisions(result.message_id)
+    assert [row["text"] for row in stored] == [row["text"] for row in revisions]
 
 
 async def test_reflection_is_withheld_from_the_compact_tier(loaded_session: Session, stub_llm, monkeypatch) -> None:  # noqa: F811

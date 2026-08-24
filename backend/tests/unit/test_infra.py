@@ -276,6 +276,7 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     manager.save_memory(time.time(), "task", "plan", "code", "result", session_id="s1")
     manager.save_schema("t.csv", ["a"], 1, "a", session_id="s1")
     manager.save_analysis_state("s1", 1, {"objective": None})
+    manager.save_plan_revisions("s1", 1, [{"index": 0, "text": "1. Plan", "why": "", "at": 1.0}])
 
     manager.delete_session_data("s1")
 
@@ -283,6 +284,7 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     assert manager.get_memories(session_id="s1") == []
     assert manager.get_schemas(session_id="s1") == []
     assert manager.get_analysis_state(1) is None
+    assert manager.get_plan_revisions(1) == []
     manager.close()
 
 
@@ -293,6 +295,32 @@ def test_analysis_state_round_trips_and_keeps_the_latest_per_message(tmp_path) -
 
     assert manager.get_analysis_state(7) == {"open_questions": ["revised after reflection"]}
     assert manager.get_analysis_state(999) is None
+    manager.close()
+
+
+def test_plan_revisions_persist_in_order_and_stay_scoped_to_their_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "plan_revisions.db"))
+    manager.save_plan_revisions(
+        "s1",
+        7,
+        [
+            {"index": 0, "text": "1. Original plan", "why": "initial", "at": 1.0},
+            {"index": 1, "text": "1. Revised plan", "why": "reflection", "at": 2.0},
+        ],
+    )
+    manager.save_plan_revisions("s1", 8, [{"index": 0, "text": "1. Other turn's plan", "why": "", "at": 3.0}])
+
+    revisions = manager.get_plan_revisions(7)
+    assert [row["text"] for row in revisions] == ["1. Original plan", "1. Revised plan"]
+    assert manager.get_plan_revisions(999) == []
+    manager.close()
+
+
+def test_save_plan_revisions_tolerates_an_empty_list(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "plan_revisions_empty.db"))
+    manager.save_plan_revisions("s1", 7, [])
+
+    assert manager.get_plan_revisions(7) == []
     manager.close()
 
 

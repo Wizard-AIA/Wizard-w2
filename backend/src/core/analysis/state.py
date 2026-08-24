@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from src.core.analysis.objective import AnalyticalObjective
+from src.core.analysis.plan import AnalyticalPlan
 
 
 if TYPE_CHECKING:
@@ -21,9 +22,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class AnalyticalState:
-    """One turn's beliefs: objective, understanding, hypotheses, evidence, confidence."""
+    """One turn's beliefs: objective, plan, understanding, hypotheses, evidence, confidence."""
 
     objective: AnalyticalObjective | None = None
+    plan: AnalyticalPlan = field(default_factory=AnalyticalPlan)
     #: Populated by Phase 4's data-understanding engine; a plain dict until then.
     understanding: dict[str, Any] | None = None
     #: Populated by Phase 7's hypothesis management.
@@ -51,6 +53,7 @@ class AnalyticalState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "objective": self.objective.to_dict() if self.objective is not None else None,
+            "plan": self.plan.to_dict(),
             "understanding": self.understanding,
             "hypotheses": self.hypotheses,
             "findings": self.findings,
@@ -64,8 +67,10 @@ class AnalyticalState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AnalyticalState:
         objective_data = data.get("objective")
+        plan_data = data.get("plan")
         return cls(
             objective=AnalyticalObjective.from_dict(objective_data) if objective_data else None,
+            plan=AnalyticalPlan.from_dict(plan_data) if plan_data else AnalyticalPlan(),
             understanding=data.get("understanding"),
             hypotheses=list(data.get("hypotheses") or []),
             evidence_refs=list(data.get("evidence_refs") or []),

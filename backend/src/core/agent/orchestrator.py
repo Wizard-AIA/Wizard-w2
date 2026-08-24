@@ -540,6 +540,7 @@ class AnalysisOrchestrator:
         unmet request into every later prompt as if it had been satisfied.
         """
         state.plan = SEARCH_PATTERN.sub("", state.plan).strip() or state.instruction
+        state.analysis.plan.revise(state.plan, why=reason or "Web search directive dropped.")
         if reason:
             state.warnings.append(reason)
 
@@ -580,6 +581,7 @@ class AnalysisOrchestrator:
             elif approved_plan is not None:
                 # The user confirmed a plan produced by an earlier turn.
                 state.plan = approved_plan
+                state.analysis.plan.revise(state.plan, why="Plan approved by the user in a prior turn.")
             else:
                 should_continue = await self._orient(state, session, emitter, previous_code, budget)
                 if not should_continue:
@@ -671,12 +673,14 @@ class AnalysisOrchestrator:
             state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
             state.plan = "Reused a previously verified solution for this question."
+            state.analysis.plan.revise(state.plan, why="Reused a previously verified solution for this question.")
             await emit(emitter, EventType.STATUS, content="Reusing a verified solution", phase=Phase.GENERATING.value)
             return True
 
         # 2. Deterministic fast path for trivial inspection.
         if self.is_simple(state.instruction):
             state.plan = f"Directly answer the inspection request: {state.instruction}"
+            state.analysis.plan.revise(state.plan, why="Simple inspection request; planning was skipped.")
             await emit(
                 emitter, EventType.STATUS, content="Simple request, skipping planning", phase=Phase.GENERATING.value
             )
@@ -721,6 +725,7 @@ class AnalysisOrchestrator:
             # The model spent its whole budget thinking. Its reasoning is the
             # only thing it produced, and it is better than an empty plan.
             state.plan = state.thought[:1000] or f"Answer the question directly: {state.instruction}"
+        state.analysis.plan.revise(state.plan, why="Initial plan from the manager.")
 
         await emit(emitter, EventType.STEP_END, id="plan", ok=True, duration_ms=state.elapsed_ms)
 
@@ -855,6 +860,7 @@ class AnalysisOrchestrator:
 
         prompt = create_replan_prompt(state.instruction, results, state.thought)
         state.plan = await self._stream_plan(prompt, session, emitter)
+        state.analysis.plan.revise(state.plan, why="Plan revised after a web search.")
 
     # ------------------------------------------------------------------ #
     # The loop
@@ -1241,6 +1247,7 @@ class AnalysisOrchestrator:
         lead = revised.splitlines()[0].strip() if revised.splitlines() else ""
         if lead:
             state.investigation.note_finding(lead)
+        state.analysis.plan.revise(revised, why=lead or "Plan revised from what execution showed.")
 
         state.investigation.record(
             Step(
@@ -2130,6 +2137,9 @@ class AnalysisOrchestrator:
             from src.core.database import db_mgr
 
             db_mgr.save_analysis_state(session.id, state.message_id, state.analysis.to_dict())
+            db_mgr.save_plan_revisions(
+                session.id, state.message_id, [revision.to_dict() for revision in state.analysis.plan.revisions]
+            )
         except Exception as exc:
             logger.error("Could not persist analysis state", error=str(exc))
 
