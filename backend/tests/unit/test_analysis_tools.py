@@ -8,7 +8,7 @@ import pytest
 
 from src.core.database import db_mgr
 from src.core.llm.registry import classify
-from src.core.prompts import create_prompt, generate_system_context
+from src.core.prompts import create_answer_prompt, create_prompt, generate_system_context
 from src.core.rag.retriever import ContextRetriever, lexical_overlap, tokenize
 from src.core.tools.catalog import CatalogEngine
 from src.core.tools.evaluator import Evaluator
@@ -235,6 +235,25 @@ def test_worker_prompt_states_the_dataframe_is_preloaded(simple_df: pd.DataFrame
     prompt = create_prompt("summarise", simple_df)
     assert "ALREADY loaded" in prompt
     assert "Never reload it from disk" in prompt
+
+
+def test_answer_prompt_surfaces_a_critic_finding_and_the_reaction_instruction() -> None:
+    prompt = create_answer_prompt(
+        "how many rows",
+        "print(len(df))",
+        "10",
+        critic_findings=["Possible target leakage via 'leaky'."],
+    )
+
+    assert "<critic_findings>" in prompt
+    assert "Possible target leakage via 'leaky'." in prompt
+    assert "weaken, qualify or flag as unresolved" in prompt
+
+
+def test_answer_prompt_omits_the_critic_block_when_there_are_no_findings() -> None:
+    prompt = create_answer_prompt("how many rows", "print(len(df))", "10")
+
+    assert "<critic_findings>" not in prompt
 
 
 # --------------------------------------------------------------------------- #

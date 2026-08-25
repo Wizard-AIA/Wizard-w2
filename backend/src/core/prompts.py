@@ -758,6 +758,7 @@ def create_answer_prompt(
     findings: list[str] | None = None,
     assumptions: list[str] | None = None,
     verification: str = "",
+    critic_findings: list[str] | None = None,
 ) -> str:
     """Turns a completed investigation into a written answer.
 
@@ -789,6 +790,18 @@ def create_answer_prompt(
 
     verification_block = f"\n<verification_result>\n{verification}\n</verification_result>\n" if verification else ""
 
+    critic_block = ""
+    if critic_findings:
+        joined = "\n".join(f"- {item}" for item in critic_findings)
+        critic_block = f"\n<critic_findings>\n{joined}\n</critic_findings>\n"
+
+    critic_instruction = (
+        "9. If a critic finding is listed, address it directly -- state the concern and weaken, qualify or "
+        "flag as unresolved the claim it applies to. Do not present a flagged result as unqualified fact.\n"
+        if critic_findings
+        else ""
+    )
+
     return f"""<role>
 You are a data analyst explaining a finished result to the person who asked for it.
 </role>
@@ -806,7 +819,7 @@ You are a data analyst explaining a finished result to the person who asked for 
 <execution_output>
 {trimmed}
 </execution_output>
-{verification_block}{assumptions_block}
+{verification_block}{assumptions_block}{critic_block}
 <instructions>
 1. Answer the question directly in the first sentence, using the actual numbers from the output.
 2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
@@ -823,7 +836,7 @@ You are a data analyst explaining a finished result to the person who asked for 
    not call a near-zero value "strong". Do not say a dataset or column is fully/100% complete unless
    every relevant row in the output actually shows 100% -- if any row is lower, name which one and by
    how much instead of stating a blanket claim.
-</instructions>"""
+{critic_instruction}</instructions>"""
 
 
 def _middle_out(text: str, limit: int) -> str:

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from src.core.analysis.hypotheses import HypothesisSet
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.plan import AnalyticalPlan
 from src.core.analysis.provenance import EvidenceGraph
@@ -29,14 +30,16 @@ class AnalyticalState:
     plan: AnalyticalPlan = field(default_factory=AnalyticalPlan)
     #: Populated by Phase 4's data-understanding engine; a plain dict until then.
     understanding: dict[str, Any] | None = None
-    #: Populated by Phase 7's hypothesis management.
-    hypotheses: list[dict[str, Any]] = field(default_factory=list)
+    #: See core/analysis/hypotheses.py.
+    hypotheses: HypothesisSet = field(default_factory=HypothesisSet)
     #: The provenance graph -- see core/analysis/provenance.py.
     evidence: EvidenceGraph = field(default_factory=EvidenceGraph)
     #: Node ids from `evidence` worth surfacing directly, in the order they became relevant.
     evidence_refs: list[str] = field(default_factory=list)
     #: Populated by Phase 6's validation framework.
     validations: list[dict[str, Any]] = field(default_factory=list)
+    #: Populated by Phase 7's adversarial critic.
+    critic_findings: list[dict[str, Any]] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     #: Populated by Phase 9's confidence rubric.
     confidence: dict[str, Any] | None = None
@@ -58,12 +61,13 @@ class AnalyticalState:
             "objective": self.objective.to_dict() if self.objective is not None else None,
             "plan": self.plan.to_dict(),
             "understanding": self.understanding,
-            "hypotheses": self.hypotheses,
+            "hypotheses": self.hypotheses.to_dict(),
             "findings": self.findings,
             "assumptions": self.assumptions,
             "evidence": self.evidence.to_dict(),
             "evidence_refs": self.evidence_refs,
             "validations": self.validations,
+            "critic_findings": self.critic_findings,
             "open_questions": self.open_questions,
             "confidence": self.confidence,
         }
@@ -76,10 +80,11 @@ class AnalyticalState:
             objective=AnalyticalObjective.from_dict(objective_data) if objective_data else None,
             plan=AnalyticalPlan.from_dict(plan_data) if plan_data else AnalyticalPlan(),
             understanding=data.get("understanding"),
-            hypotheses=list(data.get("hypotheses") or []),
+            hypotheses=HypothesisSet.from_dict(data.get("hypotheses")),
             evidence=EvidenceGraph.from_dict(data.get("evidence") or {}),
             evidence_refs=list(data.get("evidence_refs") or []),
             validations=list(data.get("validations") or []),
+            critic_findings=list(data.get("critic_findings") or []),
             open_questions=list(data.get("open_questions") or []),
             confidence=data.get("confidence"),
             _findings_snapshot=list(data.get("findings") or []),

@@ -48,6 +48,7 @@ class EventType(StrEnum):
     PLAN_REVISED = "plan_revised"  # {plan, why}
     ASSUMPTION = "assumption"  # {text, kind}
     VERIFICATION = "verification"  # {status, detail}
+    CRITIC_FINDING = "critic_finding"  # {category, severity, message, suggested_reaction}
     #: Which skill informed this turn. Emitted rather than left implicit in a
     #: prompt nobody sees: "the agent can name which skill informed a decision"
     #: is a Milestone 5 acceptance criterion, and a frame is the only way it can

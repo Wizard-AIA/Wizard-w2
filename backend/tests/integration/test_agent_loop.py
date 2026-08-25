@@ -579,6 +579,49 @@ async def test_unseeded_sampling_is_flagged_by_the_reproducibility_validator(loa
     )
 
 
+async def test_a_simpsons_paradox_is_caught_and_reaches_the_answer_prompt(session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 7's acceptance criterion: a Simpson's-paradox fixture produces a finding the agent
+    acts on -- here, by seeing it in the prompt that writes the final answer (Rule 4: the critic
+    itself never edits `state.output`)."""
+    counts = [
+        ("A", "small", 1, 81),
+        ("A", "small", 0, 6),
+        ("A", "large", 1, 192),
+        ("A", "large", 0, 71),
+        ("B", "small", 1, 234),
+        ("B", "small", 0, 36),
+        ("B", "large", 1, 55),
+        ("B", "large", 0, 25),
+    ]
+    rows = [
+        {"treatment": treatment, "stone_size": size, "success": outcome}
+        for treatment, size, outcome, n in counts
+        for _ in range(n)
+    ]
+    session.add_dataset("treatments.csv", pd.DataFrame(rows))
+    stub = stub_llm(
+        [
+            "1. Compute the overall success rate",
+            "```python\nprint(df['success'].mean())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Treatment B has the higher success rate overall.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(
+        session=session, instruction="which treatment works better", mode="auto", emitter=collector
+    )
+
+    critic_events = collector.of_type(EventType.CRITIC_FINDING)
+    assert any(event.data["category"] == "simpsons_paradox" for event in critic_events)
+    assert any(f["category"] == "simpsons_paradox" for f in result.analysis["critic_findings"])
+    answer_prompt = stub.prompts[-1]
+    assert "<critic_findings>" in answer_prompt
+    assert "reverses once segmented" in answer_prompt
+
+
 async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """Phase 3's acceptance criterion: every grounded figure traces to an execution and a
     dataset version -- not asserted from logs, but from the graph itself.

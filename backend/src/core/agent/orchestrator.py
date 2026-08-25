@@ -63,7 +63,7 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
-from src.core.analysis import understanding
+from src.core.analysis import critic, understanding
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
 from src.core.analysis.validation.registry import run_validators
@@ -1916,34 +1916,58 @@ class AnalysisOrchestrator:
 
         state.verification = detail
         self._record_validation_evidence(state, status, detail)
-        self._run_validators(state, session, status, detail)
+        ctx = ValidationContext(
+            instruction=state.instruction,
+            plan=state.plan,
+            code=state.code,
+            output=state.output,
+            df=session.df,
+            tables=session.tables,
+            understanding=state.analysis.understanding,
+            recomputation_status=status,
+            recomputation_detail=detail,
+        )
+        self._run_validators(state, ctx)
+        await self._run_critic(state, ctx, emitter)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
         await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
 
     @staticmethod
-    def _run_validators(state: RunState, session: Session, status: str, detail: str) -> None:
+    def _run_validators(state: RunState, ctx: ValidationContext) -> None:
         """Runs the tier's affordable validators and folds their findings into the turn.
 
         Reached only when `_verify` itself ran, so this never fires below balanced tier -- the
         same gate that already turns off the recomputation these findings are partly built from.
         """
         try:
-            ctx = ValidationContext(
-                instruction=state.instruction,
-                plan=state.plan,
-                code=state.code,
-                output=state.output,
-                df=session.df,
-                tables=session.tables,
-                understanding=state.analysis.understanding,
-                recomputation_status=status,
-                recomputation_detail=detail,
-            )
             findings = run_validators(ctx, state.tier)
             state.analysis.validations.extend(finding.to_dict() for finding in findings)
             state.warnings.extend(finding.message for finding in findings if finding.severity != "info")
         except Exception as exc:
             logger.error("Could not run validators", error=str(exc))
+
+    @staticmethod
+    async def _run_critic(state: RunState, ctx: ValidationContext, emitter: Emitter | None) -> None:
+        """Runs the deterministic critic and surfaces what it found.
+
+        The critic never edits a result (PLAN.md Rule 4): a finding is stored and emitted, and its
+        message reaches `_answer`'s prompt so the model writing the answer can react -- weaken a
+        claim, flag it, or note it is unresolved -- but nothing here rewrites `state.output` itself.
+        """
+        try:
+            findings = critic.critique(ctx)
+            for finding in findings:
+                state.analysis.critic_findings.append(finding.to_dict())
+                await emit(
+                    emitter,
+                    EventType.CRITIC_FINDING,
+                    category=finding.category,
+                    severity=finding.severity,
+                    message=finding.message,
+                    suggested_reaction=finding.suggested_reaction,
+                )
+        except Exception as exc:
+            logger.error("Could not run critic", error=str(exc))
 
     @staticmethod
     def _record_validation_evidence(state: RunState, status: str, detail: str) -> None:
@@ -2043,6 +2067,9 @@ class AnalysisOrchestrator:
             findings=state.investigation.findings,
             assumptions=state.investigation.assumptions,
             verification=state.verification,
+            critic_findings=[
+                entry["message"] for entry in state.analysis.critic_findings if entry["severity"] != "info"
+            ],
         )
 
         chunks: list[str] = []

@@ -6,6 +6,7 @@ source of truth during a live turn.
 from __future__ import annotations
 
 from src.core.agent.actions import Investigation
+from src.core.analysis.hypotheses import HypothesisSet
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.provenance import EvidenceGraph
 from src.core.analysis.state import AnalyticalState
@@ -65,10 +66,11 @@ def test_state_defaults_are_all_empty_or_none() -> None:
 
     assert state.objective is None
     assert state.understanding is None
-    assert state.hypotheses == []
+    assert state.hypotheses.items == {}
     assert state.evidence.nodes == {}
     assert state.evidence_refs == []
     assert state.validations == []
+    assert state.critic_findings == []
     assert state.open_questions == []
     assert state.confidence is None
     assert state.findings == []
@@ -101,13 +103,18 @@ def test_state_round_trips_through_dict_including_objective() -> None:
     investigation.note_finding("a single outlier region explains most of the spike")
     evidence = EvidenceGraph()
     execution_id = evidence.add_node("execution", "compute total", output="15")
+    hypotheses = HypothesisSet()
+    hyp_id = hypotheses.add("primary", "the promo drove the spike")
+    hypotheses.record_evidence(hyp_id, execution_id, supports=True)
+    hypotheses.set_status(hyp_id, "supported")
     state = AnalyticalState(
         objective=objective,
         understanding={"grain": "one row per order"},
-        hypotheses=[{"label": "regional promo", "status": "supported"}],
+        hypotheses=hypotheses,
         evidence=evidence,
         evidence_refs=[execution_id],
         validations=[{"kind": "computational", "status": "verified"}],
+        critic_findings=[{"category": "leakage", "severity": "error", "message": "x", "detail": ""}],
         open_questions=["was the promo region-specific or timing coincidence?"],
         confidence={"overall": "medium"},
         investigation=investigation,
@@ -117,10 +124,12 @@ def test_state_round_trips_through_dict_including_objective() -> None:
 
     assert restored.objective == objective
     assert restored.understanding == {"grain": "one row per order"}
-    assert restored.hypotheses == [{"label": "regional promo", "status": "supported"}]
+    assert restored.hypotheses.get(hyp_id).status == "supported"
+    assert restored.hypotheses.get(hyp_id).evidence_for == [execution_id]
     assert restored.evidence.nodes[execution_id].data == {"output": "15"}
     assert restored.evidence_refs == [execution_id]
     assert restored.validations == [{"kind": "computational", "status": "verified"}]
+    assert restored.critic_findings == [{"category": "leakage", "severity": "error", "message": "x", "detail": ""}]
     assert restored.open_questions == ["was the promo region-specific or timing coincidence?"]
     assert restored.confidence == {"overall": "medium"}
     # The snapshot, not a live Investigation -- from_dict never reconstructs one.
