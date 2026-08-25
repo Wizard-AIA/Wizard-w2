@@ -73,7 +73,7 @@ from src.core.analysis.validation.registry import cache_key as validation_cache_
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
-from src.core.llm import LLMRole, llm_provider, model_registry
+from src.core.llm import LLMRole, TaskTier, classify_task_complexity, llm_provider, model_registry
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
 from src.core.llm.usage import usage_ledger
@@ -154,6 +154,8 @@ class RunState:
 
     instruction: str
     mode: str = "auto"
+    task_tier: TaskTier = TaskTier.STANDARD
+    manager_model: str | None = None
     phase: Phase = Phase.IDLE
 
     thought: str = ""
@@ -244,6 +246,7 @@ class RunResult:
     iterations: int = 0
     tier: str = "balanced"
     mode: str = "auto"
+    task_tier: str = TaskTier.STANDARD.value
     verification: str = ""
     grounding: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, Any] = field(default_factory=dict)
@@ -273,6 +276,7 @@ class RunResult:
             "iterations": self.iterations,
             "tier": self.tier,
             "mode": self.mode,
+            "task_tier": self.task_tier,
             "verification": self.verification,
             "grounding": self.grounding,
             "usage": self.usage,
@@ -363,6 +367,10 @@ class AnalysisOrchestrator:
         return candidate if candidate in MODES else "auto"
 
     @staticmethod
+    def _manager_model(state: RunState, session: Session) -> str | None:
+        return state.manager_model or session.models.manager
+
+    @staticmethod
     def _redact_for(session: Session, role: str) -> bool:
         """Whether the prompt for ``role`` must be stripped of real values.
 
@@ -384,7 +392,7 @@ class AnalysisOrchestrator:
             origin=handle.origin if handle else "",
         )
 
-    async def _budget_for(self, session: Session, mode: str) -> TierBudget:
+    async def _budget_for(self, session: Session, mode: str, manager_model: str | None = None) -> TierBudget:
         """Sizes this turn to the model actually behind the manager role.
 
         Discovery is a blocking HTTP call with its own cache, so it runs off the
@@ -395,7 +403,7 @@ class AnalysisOrchestrator:
         try:
             spec = llm_provider.resolve(
                 LLMRole.MANAGER,
-                model=session.models.manager,
+                model=manager_model or session.models.manager,
                 provider=session.models.manager_provider,
                 # The session's mode, not the configured default: sizing a turn
                 # must not be the one call that disagrees about which provider
@@ -606,7 +614,23 @@ class AnalysisOrchestrator:
             return self._result(state, "failed")
 
         try:
-            budget = await self._budget_for(session, mode)
+            state.task_tier = classify_task_complexity(
+                instruction,
+                {
+                    "has_documents": session.has_documents,
+                    "multi_step": instruction.count(" and ") >= 2,
+                },
+            )
+            selector = getattr(llm_provider, "model_for_task", None)
+            if selector is not None:
+                state.manager_model = await asyncio.to_thread(
+                    selector,
+                    LLMRole.MANAGER,
+                    state.task_tier,
+                    session.models.manager,
+                    session.models.manager_provider,
+                )
+            budget = await self._budget_for(session, mode, state.manager_model)
             state.tier = budget.tier
 
             if approved_search is not None:
@@ -628,7 +652,7 @@ class AnalysisOrchestrator:
                 # escalation inside `_review`; both reload it naturally).
                 llm_provider.release(
                     LLMRole.MANAGER,
-                    session.models.manager,
+                    self._manager_model(state, session),
                     session.models.manager_provider,
                     keep_if_shared_with=(LLMRole.WORKER, session.models.worker),
                 )
@@ -769,7 +793,7 @@ class AnalysisOrchestrator:
             understanding=state.analysis.understanding,
         )
 
-        raw = await self._stream_plan(prompt, session, emitter)
+        raw = await self._stream_plan(prompt, session, emitter, state)
 
         # Reasoning is separated here, not just rendered separately. `state.plan`
         # is embedded in every later decision prompt and in the answer prompt, so
@@ -839,7 +863,7 @@ class AnalysisOrchestrator:
 
         return True
 
-    async def _stream_plan(self, prompt: str, session: Session, emitter: Emitter | None) -> str:
+    async def _stream_plan(self, prompt: str, session: Session, emitter: Emitter | None, state: RunState) -> str:
         """Streams the manager response, splitting reasoning from plan as it arrives.
 
         The model emits a reasoning block then the plan. Rather than waiting for
@@ -879,7 +903,7 @@ class AnalysisOrchestrator:
             prompt,
             on_delta=on_delta,
             role=LLMRole.MANAGER,
-            model=session.models.manager,
+            model=self._manager_model(state, session),
             temperature=session.models.temperature,
             provider=session.models.manager_provider,
             max_tokens=settings.output_budget("plan"),
@@ -915,7 +939,7 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STEP_END, id="search", ok=bool(results), duration_ms=state.elapsed_ms)
 
         prompt = create_replan_prompt(state.instruction, results, state.thought)
-        state.plan = await self._stream_plan(prompt, session, emitter)
+        state.plan = await self._stream_plan(prompt, session, emitter, state)
         state.analysis.plan.revise(state.plan, why="Plan revised after a web search.")
 
     # ------------------------------------------------------------------ #
@@ -1100,7 +1124,7 @@ class AnalysisOrchestrator:
             raw = await llm_provider.acomplete(
                 prompt,
                 role=LLMRole.MANAGER,
-                model=session.models.manager,
+                model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("decision"),
@@ -1325,7 +1349,7 @@ class AnalysisOrchestrator:
             revised = await llm_provider.acomplete(
                 prompt,
                 role=LLMRole.MANAGER,
-                model=session.models.manager,
+                model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("plan"),
@@ -2373,7 +2397,7 @@ class AnalysisOrchestrator:
                 prompt,
                 on_delta=on_delta,
                 role=LLMRole.MANAGER,
-                model=session.models.manager,
+                model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
                 max_tokens=settings.output_budget("answer"),
@@ -2739,6 +2763,7 @@ class AnalysisOrchestrator:
             iterations=state.iterations_used,
             tier=state.tier,
             mode=state.mode,
+            task_tier=state.task_tier.value,
             verification=state.verification,
             grounding=state.grounding.to_dict(),
             usage=state.usage,

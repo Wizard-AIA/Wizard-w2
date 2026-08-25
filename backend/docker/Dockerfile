@@ -53,6 +53,7 @@ RUN $PIP \
     "pyarrow==17.0.0" \
     "matplotlib==3.9.1.post1" \
     "duckdb==1.1.0" \
+    "polars==1.35.2" \
     "openpyxl==3.1.5"
 
 # Tier: standard. Statistics, machine learning and the interactive chart stack.

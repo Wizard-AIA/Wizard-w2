@@ -238,6 +238,26 @@ def test_preview_sorts(client: TestClient) -> None:
     assert [row["n"] for row in payload["data"]] == [3, 2, 1]
 
 
+def test_arrow_preview_stream_is_session_scoped_and_binary(client: TestClient) -> None:
+    pyarrow = pytest.importorskip("pyarrow")
+    session_id = client.post("/api/session").json()["session_id"]
+    headers = {SESSION_HEADER: session_id}
+    client.post(
+        "/api/datasets?clean=false",
+        files={"file": ("d.csv", csv_bytes(pd.DataFrame({"n": range(12)})), "text/csv")},
+        headers=headers,
+    )
+
+    response = client.get("/api/workspace/stream-arrow?offset=5&limit=3&batch_size=2", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.apache.arrow.stream")
+    assert response.headers["x-arrow-total-rows"] == "12"
+
+    table = pyarrow.ipc.open_stream(response.content).read_all()
+    assert table.column_names == ["n"]
+    assert table.column("n").to_pylist() == [5, 6, 7]
+
+
 def test_preview_rejects_an_unknown_sort_column(client: TestClient, simple_df: pd.DataFrame) -> None:
     session_id = upload(client, simple_df)["session_id"]
     response = client.get("/api/data/preview?sort_by=nope", headers={SESSION_HEADER: session_id})

@@ -221,6 +221,9 @@ class Settings(BaseSettings):
     MODEL_TYPE: Provider = "ollama"
     MODEL_NAME: str = ""
     WORKER_MODEL_NAME: str = ""
+    #: Optional small local model used for metadata and other lightweight turns.
+    #: Empty means the provider discovers a suitable installed model.
+    FAST_MODEL_NAME: str = ""
     VISION_MODEL_NAME: str = ""
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     FEEDBACK_FILE: str = "feedback_data.json"

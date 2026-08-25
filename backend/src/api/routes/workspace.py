@@ -9,12 +9,13 @@ per session through an explicit handler that resolves and re-checks the path.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, StreamingResponse
 
-from src.api.deps import get_session, get_session_for_link, require_api_key
+from src.api.deps import get_session, get_session_for_link, require_api_key, require_dataset
 from src.api.schemas import WorkspaceFile, WorkspaceListing
 from src.core.session import Session
 
@@ -66,6 +67,67 @@ def resolve_within(root: Path, relative: str) -> Path:
     return candidate
 
 
+class _ArrowChunkSink:
+    """Small file-like sink that lets an IPC writer hand chunks to the client."""
+
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+        self.position = 0
+        self.closed = False
+
+    def write(self, data: bytes) -> int:
+        chunk = bytes(data)
+        self.chunks.append(chunk)
+        self.position += len(chunk)
+        return len(chunk)
+
+    def tell(self) -> int:
+        return self.position
+
+    def flush(self) -> None:
+        return None
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        # The IPC writer may close its sink after the end marker. Keep the
+        # object readable by the generator until its pending bytes are drained.
+        return None
+
+    def drain(self) -> Iterator[bytes]:
+        chunks, self.chunks = self.chunks, []
+        yield from chunks
+
+
+def _arrow_chunks(df, batch_size: int) -> Iterator[bytes]:
+    """Encode a frame as one Arrow stream while retaining only pending chunks."""
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+
+    sink = _ArrowChunkSink()
+    schema = pa.Schema.from_pandas(df.iloc[:0], preserve_index=False)
+    writer = ipc.new_stream(sink, schema)
+    closed = False
+    try:
+        for start in range(0, len(df), batch_size):
+            batch = pa.RecordBatch.from_pandas(df.iloc[start : start + batch_size], schema=schema, preserve_index=False)
+            writer.write_batch(batch)
+            yield from sink.drain()
+        writer.close()
+        closed = True
+        yield from sink.drain()
+    finally:
+        if not closed:
+            writer.close()
+
+
 @router.get("/files", response_model=WorkspaceListing)
 async def list_files(session: Session = Depends(get_session)) -> WorkspaceListing:
     root = session.workspace
@@ -87,6 +149,47 @@ async def list_files(session: Session = Depends(get_session)) -> WorkspaceListin
             )
         )
     return WorkspaceListing(files=files)
+
+
+@router.get("/stream-arrow")
+async def stream_arrow(
+    dataset: str | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=500_000),
+    batch_size: int = Query(default=10_000, ge=1, le=100_000),
+    sort_by: str | None = None,
+    sort_order: str = Query(default="asc", pattern="^(asc|desc)$"),
+    session: Session = Depends(require_dataset),
+) -> StreamingResponse:
+    """Streams a session-scoped preview as an Apache Arrow IPC stream.
+
+    Pagination keeps the browser request bounded while the binary format avoids
+    the large intermediate JSON string and per-cell JSON object allocation used
+    by the legacy preview route. ``limit`` can be raised by data tooling that
+    genuinely needs a larger contiguous extract.
+    """
+    handle = session.datasets.get(dataset) if dataset else session.active_handle
+    if handle is None:
+        raise HTTPException(status_code=404, detail="Requested dataset is not loaded in this session.")
+
+    frame = handle.df
+    if sort_by:
+        if sort_by not in frame.columns:
+            raise HTTPException(status_code=400, detail=f"Unknown column '{sort_by}'.")
+        frame = frame.sort_values(by=sort_by, ascending=sort_order == "asc", kind="stable")
+
+    total_rows = len(frame)
+    selected = frame.iloc[offset : offset + limit]
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Arrow-Total-Rows": str(total_rows),
+        "X-Arrow-Offset": str(offset),
+    }
+    return StreamingResponse(
+        _arrow_chunks(selected, batch_size),
+        media_type="application/vnd.apache.arrow.stream",
+        headers=headers,
+    )
 
 
 @router.get("/file/{file_path:path}")

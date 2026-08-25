@@ -22,6 +22,7 @@ plan on an Ollama reasoning model and generate code on an LM Studio one.
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -32,6 +33,7 @@ from typing import Any
 from src.config import settings
 from src.core.data_mode import check_provider
 from src.core.llm.resources import LOCAL_PROVIDERS, ResidentPlan, plan_for_models
+from src.core.llm.router import TaskTier
 from src.core.llm.usage import extract_usage, usage_ledger
 from src.providers import describe
 from src.utils.logging import logger
@@ -134,6 +136,50 @@ class LLMProvider:
         except Exception as exc:  # pragma: no cover - discovery is best effort
             logger.warning("Model discovery failed while resolving a default", role=role.value, error=str(exc))
             return ""
+
+    def model_for_task(
+        self,
+        role: LLMRole,
+        task_tier: TaskTier,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> str:
+        """Resolve a model for a turn, downscaling only safe manager work.
+
+        Explicit per-session and environment model choices always win. For an
+        unpinned manager on a lightweight request, the provider is queried for
+        an installed small model. If none exists, normal model discovery is
+        used, so routing can never turn an available request into a failure.
+        """
+        configured = (model or "").strip()
+        if role != LLMRole.MANAGER or task_tier != TaskTier.LIGHTWEIGHT or configured:
+            return configured or self.default_model_for(role, provider)
+
+        fast_name = settings.FAST_MODEL_NAME.strip()
+        from src.core.llm.registry import model_registry
+
+        try:
+            models = model_registry.list_models(provider=provider)
+            installed = {entry.name for entry in models}
+            if fast_name and fast_name in installed:
+                return fast_name
+
+            for entry in models:
+                if "embedding" in entry.capabilities or "vision" in entry.capabilities:
+                    continue
+                parameter_size = str(entry.parameter_size or "").strip().upper().rstrip("B")
+                try:
+                    is_small = 0 < float(parameter_size) <= 4
+                except ValueError:
+                    is_small = bool(
+                        re.search(r"(?:^|[-_:])(?:0?\.\d+|[1-4](?:\.\d+)?)b(?:$|[-_:])", entry.name.lower())
+                    )
+                if is_small:
+                    return entry.name
+        except Exception as exc:  # pragma: no cover - discovery is best effort
+            logger.debug("Fast model discovery failed", provider=provider, error=str(exc))
+
+        return self.default_model_for(role, provider)
 
     def resolve(
         self,

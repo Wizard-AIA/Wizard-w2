@@ -203,6 +203,11 @@ class CodeExecutor:
         import numpy as np
 
         try:
+            import polars as pl
+        except ImportError:
+            pl = None
+
+        try:
             import seaborn as sns
         except ImportError:
             sns = None
@@ -213,6 +218,7 @@ class CodeExecutor:
         namespace: dict[str, Any] = {
             "pd": pd,
             "np": np,
+            "pl": pl,
             "plt": plt,
             "sns": sns,
             "stats": StatisticalToolkit,
