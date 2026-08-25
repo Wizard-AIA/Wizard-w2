@@ -273,3 +273,4 @@ For design rationale, historical context, and implementation details beyond thes
 - [docs/connectors.md](../docs/connectors.md) — Connector architecture, registry, credential handling, consent, write-back
 - [docs/skills.md](../docs/skills.md) — Skill layers, promotion pipeline, GitHub install flow, trust boundary
 - [docs/llm.md](../docs/llm.md) — Provider system, model registry, memory fitting, reasoning, usage, downloading, embeddings
+- [docs/analysis/architecture-gap.md](../docs/analysis/architecture-gap.md) — Analytical control plane: state, plan, provenance, validation, hypotheses, confidence; see `docs/analysis/` for glossary, ADRs, migration and benchmark strategy

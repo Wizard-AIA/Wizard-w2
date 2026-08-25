@@ -1,79 +1,44 @@
 """Executive summary generation.
 
-Previously read ``working_memory.memories`` as a plain list attribute. That
-attribute stopped existing when memory moved to SQLite, so ``GET /report``
-raised ``AttributeError`` and returned 500 on every call. It now queries the
-store directly and handles the empty case.
+Phase 12: reads immutable `AnalysisRun` snapshots (`db_mgr.get_recent_analysis_runs`), not
+`working_memory` -- a report renders from what a turn's evidence actually established, with every
+figure traceable to an execution, rather than from a free-text `result` string. The shared model
+and the three renderers (executive/research/technical) live in `core.analysis.reports`; this
+module is only the API-facing default and the interaction-count summary `/api/report` returns.
 """
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
-from src.core.memory import working_memory
+from src.core.analysis.reports import ReportMode, render
+from src.core.analysis.runs import AnalysisRun
+from src.core.database import db_mgr
 
 
 class ReportingEngine:
-    """Aggregates session interactions into a readable markdown report."""
+    """Renders a session's recent analysis runs into a readable report."""
 
     @staticmethod
-    def generate_executive_summary(timespan_seconds: int = 3600, session_id: str | None = None) -> str:
-        entries = working_memory.recent(timespan_seconds=timespan_seconds, session_id=session_id)
-
-        if not entries:
+    def generate_executive_summary(
+        timespan_seconds: int = 3600, session_id: str | None = None, mode: ReportMode = "executive"
+    ) -> str:
+        runs = db_mgr.get_recent_analysis_runs(session_id=session_id, timespan_seconds=timespan_seconds)
+        if not runs:
             return (
                 "## No analysis to summarise yet\n\n"
                 "Run a few questions against your dataset and the report will collect the findings here."
             )
-
-        lines = [
-            "# Analysis Report",
-            f"*Generated {time.strftime('%Y-%m-%d %H:%M:%S')} — {len(entries)} interaction(s).*",
-            "",
-            "## Findings",
-        ]
-
-        for index, entry in enumerate(entries, start=1):
-            instruction = (entry.get("instruction") or "Untitled request").strip()
-            result = (entry.get("result") or "").strip()
-            summary = result[:400] + ("..." if len(result) > 400 else "")
-            lines.append(f"### {index}. {instruction}")
-            goal = ReportingEngine._extract_goal(entry.get("plan") or "")
-            if goal:
-                lines.append(f"**Approach:** {goal}")
-            lines.append(f"**Outcome:** {summary or 'No output recorded.'}")
-            lines.append("")
-
-        scores = [
-            entry.get("meta", {}).get("quality_score")
-            for entry in entries
-            if isinstance(entry.get("meta"), dict) and entry.get("meta", {}).get("quality_score") is not None
-        ]
-        lines.append("## Reliability")
-        lines.append("- Generated code was statically screened before every execution.")
-        lines.append("- Execution took place in an isolated container where Docker was available.")
-        if scores:
-            lines.append(f"- Mean heuristic quality score: {sum(scores) / len(scores):.1f}/100")
-
-        return "\n".join(lines)
+        sections = [render(AnalysisRun.from_dict(data), mode=mode) for data in runs]
+        return "\n\n---\n\n".join(sections)
 
     @staticmethod
-    def _extract_goal(plan: str) -> str:
-        """First meaningful line of a plan, trimmed for display."""
-        for line in plan.strip().splitlines():
-            cleaned = line.strip().lstrip("0123456789.-) ").strip()
-            if cleaned and not cleaned.startswith("<"):
-                return cleaned[:160]
-        return ""
-
-    @staticmethod
-    def summary_payload(timespan_seconds: int = 3600, session_id: str | None = None) -> dict[str, Any]:
-        entries = working_memory.recent(timespan_seconds=timespan_seconds, session_id=session_id)
-        return {
-            "report": ReportingEngine.generate_executive_summary(timespan_seconds, session_id),
-            "interaction_count": len(entries),
-        }
+    def summary_payload(
+        timespan_seconds: int = 3600, session_id: str | None = None, mode: ReportMode = "executive"
+    ) -> dict[str, Any]:
+        runs = db_mgr.get_recent_analysis_runs(session_id=session_id, timespan_seconds=timespan_seconds)
+        report = ReportingEngine.generate_executive_summary(timespan_seconds, session_id, mode)
+        return {"report": report, "interaction_count": len(runs)}
 
 
 reporting_engine = ReportingEngine()

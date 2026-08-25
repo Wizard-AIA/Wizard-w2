@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { AnalysisWorkspace } from "@/components/chat/analysis-workspace"
 import { AnswerTrust } from "@/components/chat/answer-trust"
 import { InvestigationTrail } from "@/components/chat/investigation-trail"
 import { ReasoningPanel } from "@/components/chat/reasoning-panel"
@@ -241,6 +242,7 @@ export function Message({
                 tier={message.tier}
                 iterations={message.iteration}
               />
+              <AnalysisWorkspace analysis={message.analysis} />
               {/* With the trust surfaces rather than in the trail: where the
                   answer's reasoning came from is the same kind of question as
                   how far it can be trusted. */}

@@ -20,9 +20,11 @@ this: the script names the connection, never a credential.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from src.config import settings
+from src.core.analysis.runs import DatasetManifestEntry
 from src.core.security.code_guard import CodeGuard
 from src.core.session import Session
 
@@ -40,7 +42,14 @@ CONNECTOR_IMPORTS = [
 ]
 
 
-def dataset_loader_lines(session: Session, *, file_template: str, reader: str) -> tuple[list[str], bool]:
+def dataset_loader_lines(
+    session: Session,
+    *,
+    file_template: str,
+    reader: str,
+    manifest: Sequence[DatasetManifestEntry] | None = None,
+    active_table_key: str = "",
+) -> tuple[list[str], bool]:
     """Lines that rebuild ``tables`` (and ``df``) the way generated code expects.
 
     ``file_template`` takes one ``{key}`` placeholder -- e.g. ``"tables/{key}.feather"``
@@ -52,16 +61,32 @@ def dataset_loader_lines(session: Session, *, file_template: str, reader: str) -
     """
     lines: list[str] = ["tables = {}"]
     needs_connector = False
-    for handle in session.datasets.values():
-        key = handle.table_key
-        if handle.origin:
+    entries = (
+        list(manifest)
+        if manifest is not None
+        else [
+            DatasetManifestEntry(
+                name=handle.name,
+                table_key=handle.table_key,
+                content_hash=handle.content_hash,
+                rows=len(handle.df),
+                columns=tuple(map(str, handle.df.columns)),
+                origin=handle.origin,
+                target=str(handle.profile.get("target", "")),
+            )
+            for handle in session.datasets.values()
+        ]
+    )
+    for entry in entries:
+        key = entry.table_key
+        if entry.origin:
             needs_connector = True
-            target = handle.profile.get("target", key)
-            lines.append(f"# '{handle.name}' is read from the connection '{handle.origin}', looked up by name")
+            target = entry.target or key
+            lines.append(f"# '{entry.name}' is read from the connection '{entry.origin}', looked up by name")
             lines.append("# at run time -- this script never carries a credential.")
-            lines.append(f"_spec = connection_store.by_name({handle.origin!r})")
+            lines.append(f"_spec = connection_store.by_name({entry.origin!r})")
             lines.append("if _spec is None:")
-            lines.append(f'    raise RuntimeError("No saved connection named {handle.origin!r} on this machine.")')
+            lines.append(f'    raise RuntimeError("No saved connection named {entry.origin!r} on this machine.")')
             lines.append("_conn = build_connector(_spec, connection_store.secret_for(_spec))")
             lines.append("try:")
             lines.append(f"    tables[{key!r}] = _conn.sample({target!r}, limit={settings.CONNECTOR_MAX_ROWS})")
@@ -72,11 +97,12 @@ def dataset_loader_lines(session: Session, *, file_template: str, reader: str) -
             lines.append(f'tables[{key!r}] = {reader}("{path}")')
         lines.append("")
 
-    active = session.active_handle
-    if active is None and session.datasets:
-        active = next(iter(session.datasets.values()))
-    if active is not None:
-        lines.append(f"df = tables[{active.table_key!r}]")
+    active_key = active_table_key
+    if not active_key:
+        active = session.active_handle
+        active_key = active.table_key if active is not None else (entries[0].table_key if entries else "")
+    if active_key:
+        lines.append(f"df = tables[{active_key!r}]")
     return lines, needs_connector
 
 
@@ -99,7 +125,15 @@ def _guard_warning(code: str) -> list[str]:
     ]
 
 
-def build_script(instruction: str, steps: list[dict[str, str]], session: Session, *, bundle: bool = False) -> str:
+def build_script(
+    instruction: str,
+    steps: list[dict[str, str]],
+    session: Session,
+    *,
+    bundle: bool = False,
+    manifest: Sequence[DatasetManifestEntry] | None = None,
+    active_table_key: str = "",
+) -> str:
     """Assembles the runnable ``.py`` from the steps that actually executed.
 
     ``bundle=True`` targets a downloaded zip (CSV copies ship alongside);
@@ -113,6 +147,8 @@ def build_script(instruction: str, steps: list[dict[str, str]], session: Session
         session,
         file_template="data/{key}.csv" if bundle else "tables/{key}.feather",
         reader="pd.read_csv" if bundle else "pd.read_feather",
+        manifest=manifest,
+        active_table_key=active_table_key,
     )
 
     header = [
@@ -145,7 +181,13 @@ def build_script(instruction: str, steps: list[dict[str, str]], session: Session
 
 
 def build_notebook(
-    instruction: str, steps: list[dict[str, str]], session: Session, *, bundle: bool = False
+    instruction: str,
+    steps: list[dict[str, str]],
+    session: Session,
+    *,
+    bundle: bool = False,
+    manifest: Sequence[DatasetManifestEntry] | None = None,
+    active_table_key: str = "",
 ) -> dict[str, Any]:
     """The same content as `build_script`, split into nbformat-4 cells.
 
@@ -159,6 +201,8 @@ def build_notebook(
         session,
         file_template="data/{key}.csv" if bundle else "tables/{key}.feather",
         reader="pd.read_csv" if bundle else "pd.read_feather",
+        manifest=manifest,
+        active_table_key=active_table_key,
     )
 
     intro = [

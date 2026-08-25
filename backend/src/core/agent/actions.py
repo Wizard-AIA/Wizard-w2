@@ -238,6 +238,8 @@ class Step:
     observation: str
     ok: bool = True
     code: str = ""
+    duration_ms: int = 0
+    retries: int = 0
 
     def render(self, limit: int) -> str:
         """The transcript form fed into the next decision."""

@@ -316,6 +316,93 @@ def test_session_dispose_releases_any_subagent_still_registered(loaded_session: 
     assert usage_ledger.totals(child_id)["calls"] == 0
 
 
+async def test_competing_routes_are_compared_on_the_full_tier_for_a_comparative_objective(
+    loaded_session: Session, recording_llm, tier
+) -> None:
+    """Phase 8: a `parallel` fan-out that names two competing methods on a high-impact
+    objective produces a `ROUTE_COMPARISON` naming which method's assumptions actually fit,
+    not a silent pick between two disagreeing figures.
+    """
+    tier("full")
+    corr_a = "```python\nprint('pearson_correlation of A and C:', df['A'].corr(df['C']))\n```"
+    corr_b = "```python\nprint('spearman_correlation of A and C:', df['A'].corr(df['C'], method='spearman'))\n```"
+    recording_llm(
+        [
+            "1. Compare two correlation methods.",
+            CODE_A,
+            "ACTION: parallel\nGOAL: pearson_correlation of A and C | spearman_correlation of A and C",
+            corr_a,
+            corr_b,
+            "ACTION: answer\nGOAL: report it",
+            VERIFY_CODE,
+            "Done.",
+        ]
+    )
+
+    result, collector = await _run(loaded_session, instruction="compare two correlation methods for A and C")
+
+    assert result.status == "completed"
+    comparisons = collector.of_type(EventType.ROUTE_COMPARISON)
+    assert len(comparisons) == 1
+    event_data = comparisons[0].data
+    assert event_data["verdict"] in {"agree", "disagree", "inconclusive"}
+    stored = result.analysis["route_comparisons"]
+    assert len(stored) == 1
+    assert stored[0] == {key: value for key, value in event_data.items() if key != "group"}
+
+
+async def test_competing_routes_are_not_compared_below_the_full_tier(
+    loaded_session: Session, recording_llm, tier
+) -> None:
+    """Balanced tier still runs `parallel`, but Phase 8's route comparison is full-tier only."""
+    tier("balanced")
+    corr_a = "```python\nprint('pearson_correlation of A and C:', df['A'].corr(df['C']))\n```"
+    corr_b = "```python\nprint('spearman_correlation of A and C:', df['A'].corr(df['C'], method='spearman'))\n```"
+    recording_llm(
+        [
+            "1. Compare two correlation methods.",
+            CODE_A,
+            "ACTION: parallel\nGOAL: pearson_correlation of A and C | spearman_correlation of A and C",
+            corr_a,
+            corr_b,
+            "ACTION: answer\nGOAL: report it",
+            VERIFY_CODE,
+            "Done.",
+        ]
+    )
+
+    result, collector = await _run(loaded_session, instruction="compare two correlation methods for A and C")
+
+    assert result.status == "completed"
+    assert collector.of_type(EventType.ROUTE_COMPARISON) == []
+    assert result.analysis["route_comparisons"] == []
+
+
+async def test_competing_routes_are_not_compared_for_a_plain_descriptive_objective(
+    loaded_session: Session, recording_llm, tier
+) -> None:
+    """Full tier alone is not enough -- the objective must also be high-impact or ambiguous."""
+    tier("full")
+    recording_llm(
+        [
+            "1. Compare two totals.",
+            CODE_A,
+            "ACTION: parallel\nGOAL: sum column A | sum column C",
+            CODE_A,
+            CODE_C,
+            "ACTION: answer\nGOAL: report it",
+            VERIFY_CODE,
+            "Done.",
+        ]
+    )
+
+    result, collector = await _run(loaded_session, instruction="what is the total of column A")
+
+    assert result.status == "completed"
+    assert collector.of_type(EventType.ROUTE_COMPARISON) == []
+    assert result.analysis["route_comparisons"] == []
+
+
 async def test_subagent_disabled_globally_removes_it_from_the_menu(
     loaded_session: Session, recording_llm, tier, monkeypatch
 ) -> None:

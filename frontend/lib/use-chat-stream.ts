@@ -17,17 +17,24 @@ import { recordUsageFrame } from "./usage-store"
 import type {
   ActionKind,
   AnalysisMode,
+  AnalysisSnapshot,
   ApprovalRequest,
   Artifact,
   ChatMessage,
+  Confidence,
+  ConfidenceComponent,
+  CriticFinding,
   Grounding,
+  Hypothesis,
   Phase,
+  RouteComparison,
   RunStep,
   ServerEvent,
   SkillCandidate,
   SkillUse,
   SubagentBranch,
   TrailEntry,
+  ValidationFinding,
   Verification,
 } from "./types"
 
@@ -80,6 +87,119 @@ function blankAssistant(): ChatMessage {
     subagents: {},
     streaming: true,
     phase: "planning",
+  }
+}
+
+function blankAnalysis(): AnalysisSnapshot {
+  return {
+    objective: null,
+    planRevisions: [],
+    hypotheses: [],
+    evidence: { nodes: [], edges: [] },
+    evidenceRefs: [],
+    validations: [],
+    criticFindings: [],
+    routeComparisons: [],
+    openQuestions: [],
+    confidence: null,
+  }
+}
+
+/**
+ * Parses `final.analysis` -- the whole-turn snapshot mirroring
+ * `AnalyticalState.to_dict()` -- into `AnalysisSnapshot`. Authoritative: this
+ * replaces whatever `critic_finding`/`route_comparison`/`confidence` frames
+ * built up live, since the backend's own lists are already cumulative for
+ * the whole turn and merging would double every entry.
+ */
+function parseAnalysisSnapshot(raw: unknown): AnalysisSnapshot {
+  const data = (raw ?? {}) as Record<string, unknown>
+  const objective = data.objective as Record<string, unknown> | null | undefined
+  const plan = (data.plan ?? {}) as Record<string, unknown>
+  const evidence = (data.evidence ?? {}) as Record<string, unknown>
+  const confidence = data.confidence as Record<string, unknown> | null | undefined
+
+  return {
+    objective: objective
+      ? {
+          question: String(objective.question ?? ""),
+          analyticalType: (objective.analytical_type as string | null) ?? null,
+          unitOfAnalysis: (objective.unit_of_analysis as string | null) ?? null,
+          population: (objective.population as string | null) ?? null,
+          timeDimension: (objective.time_dimension as string | null) ?? null,
+          likelyVariables: (objective.likely_variables as Record<string, string[]>) ?? {},
+          constraints: (objective.constraints as string[]) ?? [],
+          expectedOutput: (objective.expected_output as string | null) ?? null,
+          ambiguity: (objective.ambiguity as string[]) ?? [],
+        }
+      : null,
+    planRevisions: ((plan.revisions as Record<string, unknown>[]) ?? []).map((revision) => ({
+      index: Number(revision.index ?? 0),
+      text: String(revision.text ?? ""),
+      why: String(revision.why ?? ""),
+      at: Number(revision.at ?? 0),
+    })),
+    hypotheses: ((data.hypotheses as Record<string, unknown>[]) ?? []).map((hypothesis) => ({
+      id: String(hypothesis.id ?? ""),
+      kind: (hypothesis.kind as Hypothesis["kind"]) ?? "exploratory",
+      statement: String(hypothesis.statement ?? ""),
+      status: (hypothesis.status as Hypothesis["status"]) ?? "untested",
+      evidenceFor: (hypothesis.evidence_for as string[]) ?? [],
+      evidenceAgainst: (hypothesis.evidence_against as string[]) ?? [],
+    })),
+    evidence: {
+      nodes: ((evidence.nodes as Record<string, unknown>[]) ?? []).map((node) => ({
+        id: String(node.id ?? ""),
+        kind: String(node.kind ?? ""),
+        label: String(node.label ?? ""),
+        at: Number(node.at ?? 0),
+      })),
+      edges: ((evidence.edges as Record<string, unknown>[]) ?? []).map((edge) => ({
+        source: String(edge.source ?? ""),
+        target: String(edge.target ?? ""),
+        relation: String(edge.relation ?? ""),
+      })),
+    },
+    evidenceRefs: (data.evidence_refs as string[]) ?? [],
+    validations: ((data.validations as Record<string, unknown>[]) ?? []).map((finding) => ({
+      validator: String(finding.validator ?? ""),
+      severity: (finding.severity as ValidationFinding["severity"]) ?? "info",
+      message: String(finding.message ?? ""),
+      detail: (finding.detail as string) || undefined,
+    })),
+    criticFindings: ((data.critic_findings as Record<string, unknown>[]) ?? []).map((finding) => ({
+      category: String(finding.category ?? ""),
+      severity: (finding.severity as CriticFinding["severity"]) ?? "info",
+      message: String(finding.message ?? ""),
+      detail: (finding.detail as string) || undefined,
+      suggestedReaction: (finding.suggested_reaction as string) || undefined,
+    })),
+    routeComparisons: ((data.route_comparisons as Record<string, unknown>[]) ?? []).map((comparison) => ({
+      verdict: (comparison.verdict as RouteComparison["verdict"]) ?? "inconclusive",
+      routes: (comparison.routes as string[]) ?? [],
+      agreementDetail: String(comparison.agreement_detail ?? ""),
+      moreAppropriate: (comparison.more_appropriate as string | null) ?? null,
+      why: String(comparison.why ?? ""),
+      residualUncertainty: String(comparison.residual_uncertainty ?? ""),
+    })),
+    openQuestions: (data.open_questions as string[]) ?? [],
+    confidence: confidence
+      ? {
+          verdict: (confidence.verdict as Confidence["verdict"]) ?? "insufficient_evidence",
+          components: ((confidence.components as Record<string, unknown>[]) ?? []).map((component) => ({
+            name: String(component.name ?? ""),
+            level: (component.level as ConfidenceComponent["level"]) ?? "unknown",
+            reason: String(component.reason ?? ""),
+          })),
+          reasons: (confidence.reasons as string[]) ?? [],
+          stop: confidence.stop
+            ? {
+                reason: String((confidence.stop as Record<string, unknown>).reason ?? ""),
+                detail: String((confidence.stop as Record<string, unknown>).detail ?? ""),
+              }
+            : undefined,
+        }
+      : null,
   }
 }
 
@@ -501,6 +621,67 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
           break
         }
 
+        // The next three build up `message.analysis` live, while the turn is
+        // still streaming; `final` below replaces the whole snapshot with the
+        // authoritative one rather than merging, since the backend's own
+        // lists are already cumulative for the turn.
+        case "critic_finding": {
+          const finding: CriticFinding = {
+            category: String(event.category ?? ""),
+            severity: (event.severity as CriticFinding["severity"]) ?? "info",
+            message: String(event.message ?? ""),
+            suggestedReaction: (event.suggested_reaction as string) || undefined,
+          }
+          patchActive((message) => ({
+            ...message,
+            analysis: {
+              ...(message.analysis ?? blankAnalysis()),
+              criticFindings: [...(message.analysis?.criticFindings ?? []), finding],
+            },
+          }))
+          break
+        }
+
+        case "route_comparison": {
+          const comparison: RouteComparison = {
+            group: (event.group as string) || undefined,
+            verdict: (event.verdict as RouteComparison["verdict"]) ?? "inconclusive",
+            routes: (event.routes as string[]) ?? [],
+            agreementDetail: String(event.agreement_detail ?? ""),
+            moreAppropriate: (event.more_appropriate as string | null) ?? null,
+            why: String(event.why ?? ""),
+            residualUncertainty: String(event.residual_uncertainty ?? ""),
+          }
+          patchActive((message) => ({
+            ...message,
+            analysis: {
+              ...(message.analysis ?? blankAnalysis()),
+              routeComparisons: [...(message.analysis?.routeComparisons ?? []), comparison],
+            },
+          }))
+          break
+        }
+
+        case "confidence": {
+          const confidence: Confidence = {
+            verdict: (event.verdict as Confidence["verdict"]) ?? "insufficient_evidence",
+            components: ((event.components as Record<string, unknown>[]) ?? []).map((component) => ({
+              name: String(component.name ?? ""),
+              level: (component.level as ConfidenceComponent["level"]) ?? "unknown",
+              reason: String(component.reason ?? ""),
+            })),
+            reasons: (event.reasons as string[]) ?? [],
+            stop: event.stop_reason
+              ? { reason: String(event.stop_reason ?? ""), detail: String(event.stop_detail ?? "") }
+              : undefined,
+          }
+          patchActive((message) => ({
+            ...message,
+            analysis: { ...(message.analysis ?? blankAnalysis()), confidence },
+          }))
+          break
+        }
+
         case "approval_required": {
           const approval: ApprovalRequest = {
             tool: (event.tool as string) ?? "execute_plan",
@@ -582,6 +763,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
             tier: (event.tier as string) ?? message.tier,
             elapsedMs: Number(event.elapsed_ms ?? 0),
             messageId: (event.message_id as number | null | undefined) ?? message.messageId ?? null,
+            analysis: event.analysis ? parseAnalysisSnapshot(event.analysis) : message.analysis,
             streaming: false,
             phase: "done",
           }))

@@ -45,6 +45,7 @@ The deep architectural reference is divided into topic-focused documents:
 | **Connectors & Ingest** | [`docs/connectors.md`](connectors.md) | Snapshot ingest model, driver registry, SQL reflection, credential references, consent gates, and multi-lock write-back safety |
 | **Skills System** | [`docs/skills.md`](skills.md) | Layered registry (built-in/user/project), YAML subset parser, query-coverage ranking, promotion pipeline, GitHub install pipeline, trust boundary |
 | **LLM, Providers & Memory** | [`docs/llm.md`](llm.md) | Provider descriptor table, model registry caching, memory footprint estimation & keep-alive swapping, reasoning model streaming, usage tracking, model downloader, embeddings |
+| **Analytical Control Plane** | [`docs/analysis/architecture-gap.md`](analysis/architecture-gap.md) | Analytical state, structured plan revisions, evidence/provenance graph, data understanding, methodology & validation, hypotheses & critic, competing analysis, confidence & stopping, versioned runs — see `docs/analysis/` for the full set (glossary, state model, ADRs, migration, benchmark and mutation-testing strategy) |
 
 ---
 

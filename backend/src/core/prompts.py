@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from src.config import settings
+from src.core.analysis.understanding import render as render_understanding
 from src.core.rag.retriever import context_retriever
 
 
@@ -138,6 +139,7 @@ def generate_system_context(
     session_id: str | None = None,
     max_columns: int | None = None,
     redact: bool = False,
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Builds a size-bounded description of the active dataset.
 
@@ -145,6 +147,9 @@ def generate_system_context(
     values, per-column examples — leaving names, dtypes, null rates and shape.
     It is set per prompt from where that prompt is going, so a cloud-bound
     planner can be redacted while a local worker is not.
+
+    ``understanding`` is `core.analysis.understanding.understand`'s output, computed once per
+    turn by the orchestrator; only findings worth a warning are rendered, same as quality checks.
     """
     columns, truncated = context_retriever.select_columns(query or "", df, max_columns)
 
@@ -190,6 +195,11 @@ def generate_system_context(
         else ""
     )
 
+    understanding_notes = render_understanding(understanding) if understanding else ""
+    understanding_block = (
+        f"\n<data_understanding>\n{understanding_notes}\n</data_understanding>\n" if understanding_notes else ""
+    )
+
     return f"""<dataset_context>
 Shape: {len(df):,} rows x {len(df.columns)} columns.
 {truncation_note}{redaction_note}
@@ -211,7 +221,7 @@ Shape: {len(df):,} rows x {len(df.columns)} columns.
 
 <semantic_types>
 {semantic_block}
-</semantic_types>{_related_tables(query, session_id, columns)}
+</semantic_types>{understanding_block}{_related_tables(query, session_id, columns)}
 </dataset_context>"""
 
 
@@ -377,6 +387,7 @@ def create_prompt(
     negative_example: str | None = None,
     max_columns: int | None = None,
     redact: bool = False,
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Worker prompt: turn an approved plan into executable Python."""
     # The tier's column budget, not the global one. `TierBudget.max_columns`
@@ -385,7 +396,13 @@ def create_prompt(
     # and categorical values for 60 -- several thousand tokens it then had to
     # read before emitting anything, on the machine least able to afford it.
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
+        df,
+        catalog=catalog,
+        query=instruction,
+        session_id=session_id,
+        max_columns=max_columns,
+        redact=redact,
+        understanding=understanding,
     )
 
     plan_block = f"\n<approved_plan>\n{plan}\n</approved_plan>\n" if plan else ""
@@ -471,6 +488,7 @@ def create_planning_prompt(
     max_columns: int | None = None,
     redact: bool = False,
     skills: str = "",
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Manager prompt: produce a plan, not code.
 
@@ -482,7 +500,13 @@ def create_planning_prompt(
     the skill informed. A regression test pins that.
     """
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
+        df,
+        catalog=catalog,
+        query=instruction,
+        session_id=session_id,
+        max_columns=max_columns,
+        redact=redact,
+        understanding=understanding,
     )
 
     revision_block = ""
@@ -734,6 +758,9 @@ def create_answer_prompt(
     findings: list[str] | None = None,
     assumptions: list[str] | None = None,
     verification: str = "",
+    critic_findings: list[str] | None = None,
+    confidence_verdict: str | None = None,
+    confidence_reasons: list[str] | None = None,
 ) -> str:
     """Turns a completed investigation into a written answer.
 
@@ -765,6 +792,29 @@ def create_answer_prompt(
 
     verification_block = f"\n<verification_result>\n{verification}\n</verification_result>\n" if verification else ""
 
+    critic_block = ""
+    if critic_findings:
+        joined = "\n".join(f"- {item}" for item in critic_findings)
+        critic_block = f"\n<critic_findings>\n{joined}\n</critic_findings>\n"
+
+    critic_instruction = (
+        "9. If a critic finding is listed, address it directly -- state the concern and weaken, qualify or "
+        "flag as unresolved the claim it applies to. Do not present a flagged result as unqualified fact.\n"
+        if critic_findings
+        else ""
+    )
+
+    confidence_block = ""
+    confidence_instruction = ""
+    if confidence_verdict in ("insufficient_evidence", "cannot_answer"):
+        joined = "\n".join(f"- {item}" for item in confidence_reasons or [])
+        confidence_block = f"\n<confidence_verdict>\n{confidence_verdict}\n{joined}\n</confidence_verdict>\n"
+        confidence_instruction = (
+            "10. The confidence verdict above is "
+            f"'{confidence_verdict}' -- say so plainly, name the reasons listed, and do not present the "
+            "result as a settled answer.\n"
+        )
+
     return f"""<role>
 You are a data analyst explaining a finished result to the person who asked for it.
 </role>
@@ -782,7 +832,7 @@ You are a data analyst explaining a finished result to the person who asked for 
 <execution_output>
 {trimmed}
 </execution_output>
-{verification_block}{assumptions_block}
+{verification_block}{assumptions_block}{critic_block}{confidence_block}
 <instructions>
 1. Answer the question directly in the first sentence, using the actual numbers from the output.
 2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
@@ -799,7 +849,7 @@ You are a data analyst explaining a finished result to the person who asked for 
    not call a near-zero value "strong". Do not say a dataset or column is fully/100% complete unless
    every relevant row in the output actually shows 100% -- if any row is lower, name which one and by
    how much instead of stating a blanket claim.
-</instructions>"""
+{critic_instruction}{confidence_instruction}</instructions>"""
 
 
 def _middle_out(text: str, limit: int) -> str:

@@ -143,6 +143,8 @@ class GroundingReport:
     checked: int = 0
     grounded: int = 0
     ungrounded: list[str] = field(default_factory=list)
+    #: The literals that did ground, in answer order -- what provenance turns into claim nodes.
+    grounded_values: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -168,6 +170,7 @@ class GroundingReport:
             "checked": self.checked,
             "grounded": self.grounded,
             "ungrounded": self.ungrounded,
+            "grounded_values": self.grounded_values,
             "ok": self.ok,
             "ratio": round(self.ratio, 3),
         }
@@ -199,6 +202,7 @@ def check_grounding(answer: str, executed_output: str, instruction: str = "") ->
         scale = _scale_at(answer, match.start())
         if normalised in asked or any(_matches(token, value, scale) for value in observed):
             report.grounded += 1
+            report.grounded_values.append(token)
             continue
         report.ungrounded.append(token)
 

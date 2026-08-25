@@ -16,9 +16,12 @@ from stubs import ScriptedLLM
 from src.config import settings
 from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
+from src.core.analysis.provenance import EvidenceGraph
+from src.core.database import db_mgr
 from src.core.ingest.documents import ContextDocument, DocumentChunk
 from src.core.session import Session
 from src.core.skills.registry import skill_registry
+from src.core.tools.catalog import CatalogEngine
 
 
 def kinds(collector: EventCollector) -> list[str]:
@@ -195,6 +198,32 @@ async def test_inspect_costs_no_model_call(loaded_session: Session, stub_llm) ->
     assert len(stub.prompts) == 6
 
 
+async def test_inspect_surfaces_a_dirty_join_key_across_loaded_tables(session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 4's acceptance criterion for the join-key detector, exercised through the loop
+    rather than the module directly: `orders.customer_id` is an int, `customers.customer_id`
+    is the same values zero-padded as strings -- a merge on it would silently drop every row.
+    """
+    session.add_dataset("orders.csv", pd.DataFrame({"customer_id": [1, 2, 3], "amount": [5, 7, 9]}))
+    session.add_dataset("customers.csv", pd.DataFrame({"customer_id": ["01", "02", "03"], "name": ["a", "b", "c"]}))
+    stub_llm(
+        [
+            "1. Look first",
+            "```python\nprint('start')\n```",
+            "ACTION: inspect\nGOAL: describe the columns",
+            "ACTION: answer\nGOAL: report",
+            "```python\npass\n```",
+            "Done.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=session, instruction="join them", mode="auto", emitter=collector)
+
+    observation = collector.of_type(EventType.OBSERVATION)[1]
+    assert "Dirty join key" in observation.data["summary"]
+    assert result.analysis["understanding"]["join_keys"][0]["dirty"] is True
+
+
 async def test_reflect_revises_the_plan_and_says_so(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """The plan is a living document. A revision is not a retry, and the UI has
     to be able to tell them apart."""
@@ -218,6 +247,35 @@ async def test_reflect_revises_the_plan_and_says_so(loaded_session: Session, stu
     assert "New first step" in revisions[0].data["plan"]
     assert revisions[0].data["previous"] == "1. Original plan"
     assert "New first step" in result.plan
+
+
+async def test_plan_revision_history_is_appended_not_overwritten(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """ADR 0002: a reflection appends a revision; it does not erase the one before it."""
+    stub_llm(
+        [
+            "1. Original plan",
+            "```python\nprint('surprising result')\n```",
+            "ACTION: reflect\nGOAL: rethink",
+            "Column A is not what I assumed.\n1. New first step\n2. New second step",
+            "ACTION: answer\nGOAL: report",
+            "```python\npass\n```",
+            "Done.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="analyse", mode="auto", emitter=collector)
+
+    revisions = result.analysis["plan"]["revisions"]
+    assert len(revisions) == 2
+    assert revisions[0]["text"] == "1. Original plan"
+    assert "New first step" in revisions[1]["text"]
+    assert revisions[0]["index"] == 0
+    assert revisions[1]["index"] == 1
+    assert result.analysis["plan"]["intended_analyses"] == ["New first step", "New second step"]
+
+    stored = db_mgr.get_plan_revisions(result.message_id)
+    assert [row["text"] for row in stored] == [row["text"] for row in revisions]
 
 
 async def test_reflection_is_withheld_from_the_compact_tier(loaded_session: Session, stub_llm, monkeypatch) -> None:  # noqa: F811
@@ -497,6 +555,209 @@ async def test_a_verification_mismatch_is_surfaced(loaded_session: Session, stub
     assert verifications
     assert verifications[0].data["status"] == "mismatch"
     assert any("not trustworthy" in warning for warning in result.warnings)
+    assert any(v["validator"] == "computational" and v["severity"] == "error" for v in result.analysis["validations"])
+
+
+async def test_unseeded_sampling_is_flagged_by_the_reproducibility_validator(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 6's validation framework runs alongside `_verify`, not only inside it -- a validator
+    with nothing to do with recomputation still fires from the same turn's evidence."""
+    stub_llm(
+        [
+            "1. Sample",
+            "```python\nprint(df.sample(2))\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Here is a sample.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="show a sample", mode="auto", emitter=collector)
+
+    assert any(
+        v["validator"] == "reproducibility" and "not be exactly reproducible" in v["message"]
+        for v in result.analysis["validations"]
+    )
+
+
+async def test_a_simpsons_paradox_is_caught_and_reaches_the_answer_prompt(session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 7's acceptance criterion: a Simpson's-paradox fixture produces a finding the agent
+    acts on -- here, by seeing it in the prompt that writes the final answer (Rule 4: the critic
+    itself never edits `state.output`)."""
+    counts = [
+        ("A", "small", 1, 81),
+        ("A", "small", 0, 6),
+        ("A", "large", 1, 192),
+        ("A", "large", 0, 71),
+        ("B", "small", 1, 234),
+        ("B", "small", 0, 36),
+        ("B", "large", 1, 55),
+        ("B", "large", 0, 25),
+    ]
+    rows = [
+        {"treatment": treatment, "stone_size": size, "success": outcome}
+        for treatment, size, outcome, n in counts
+        for _ in range(n)
+    ]
+    session.add_dataset("treatments.csv", pd.DataFrame(rows))
+    stub = stub_llm(
+        [
+            "1. Compute the overall success rate",
+            "```python\nprint(df['success'].mean())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Treatment B has the higher success rate overall.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(
+        session=session, instruction="which treatment works better", mode="auto", emitter=collector
+    )
+
+    critic_events = collector.of_type(EventType.CRITIC_FINDING)
+    assert any(event.data["category"] == "simpsons_paradox" for event in critic_events)
+    assert any(f["category"] == "simpsons_paradox" for f in result.analysis["critic_findings"])
+    answer_prompt = stub.prompts[-1]
+    assert "<critic_findings>" in answer_prompt
+    assert "reverses once segmented" in answer_prompt
+
+
+async def test_confidence_verdict_is_reported_after_verification(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 9: confidence is computed and reported alongside verification, never left implicit."""
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is correct.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="total of A", mode="auto", emitter=collector)
+
+    confidence_events = collector.of_type(EventType.CONFIDENCE)
+    assert confidence_events
+    assert result.analysis["confidence"]["verdict"] == confidence_events[-1].data["verdict"]
+    assert "stop" in result.analysis["confidence"]
+
+
+async def test_a_dataset_lacking_the_evidence_produces_cannot_answer_with_named_reasons(
+    session: Session,
+    stub_llm,  # noqa: F811
+) -> None:
+    """Phase 9's acceptance criterion: a dataset too sparse to support the claim, combined with a
+    disagreeing recomputation, produces `cannot_answer` -- a success state naming the gap, never a
+    confident guess presented as settled."""
+    sparse = pd.DataFrame({"value": [1.0, None, None, None, None]})
+    session.add_dataset("sparse.csv", sparse, profile=CatalogEngine.analyze(sparse))
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['value'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('MISMATCH: got 1 expected 99')\n```",
+            "The total is 1.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=session, instruction="total of value", mode="auto", emitter=collector)
+
+    confidence_events = collector.of_type(EventType.CONFIDENCE)
+    assert confidence_events[-1].data["verdict"] == "cannot_answer"
+    assert result.analysis["confidence"]["verdict"] == "cannot_answer"
+    assert len(result.analysis["confidence"]["reasons"]) >= 3
+
+
+async def test_finalize_captures_an_immutable_run_snapshot(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 10: `_finalize` captures an `AnalysisRun` alongside the mutable analysis-state
+    snapshot -- what a later export or report renders from (ADR 0005)."""
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is correct.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    run = db_mgr.get_analysis_run(result.message_id)
+    assert run is not None
+    assert run["instruction"] == "total of A"
+    assert run["answer"] == result.answer
+    assert run["dataset_manifest"]
+    assert run["dataset_manifest"][0]["content_hash"]
+    assert run["steps"]
+    assert run["dataset_files"]
+    assert run["telemetry"]["actions"]
+    assert run["telemetry"]["tool_calls"]
+    assert run["telemetry"]["execution_durations_ms"]
+
+
+async def test_a_captured_run_renders_in_all_three_report_modes(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 12: a real turn's captured run renders through every mode with no error, and its
+    claims -- the answer's own grounded figures -- carry a real provenance chain, not a guess."""
+    from src.core.analysis.reports import build, render
+    from src.core.analysis.runs import AnalysisRun
+
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is 15.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    run = AnalysisRun.from_dict(db_mgr.get_analysis_run(result.message_id))
+    model = build(run)
+    assert model.claims, "the answer's grounded figure should have become a claim node"
+    assert model.every_claim_has_provenance
+
+    for mode in ("executive", "research", "technical"):
+        report = render(run, mode=mode)
+        assert "total of A" in report
+
+
+async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 3's acceptance criterion: every grounded figure traces to an execution and a
+    dataset version -- not asserted from logs, but from the graph itself.
+    """
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: 15')\n```",
+            "The total is 15.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="total of A", mode="auto", emitter=collector)
+
+    evidence = result.analysis["evidence"]
+    assert {"dataset", "code", "execution", "validation", "claim"} <= {node["kind"] for node in evidence["nodes"]}
+
+    graph = EvidenceGraph.from_dict(evidence)
+    claim_id = next(node.id for node in graph.nodes.values() if node.kind == "claim" and node.label == "15")
+    traced_kinds = {node.kind for node in graph.trace(claim_id)}
+    assert {"dataset", "code", "execution", "claim"} <= traced_kinds
+
+    assert db_mgr.get_evidence_graph(result.message_id) == evidence
 
 
 async def test_fast_mode_skips_verification(loaded_session: Session, stub_llm) -> None:  # noqa: F811
@@ -759,3 +1020,72 @@ async def test_usage_is_recorded_even_when_the_turn_fails(
     )
 
     assert db_mgr.skill_usage_summary().get("cohort-method", {}).get("uses") == 1
+
+
+async def test_repeating_the_same_analysis_reuses_every_phase_14_cache(
+    loaded_session: Session,
+    stub_llm,
+    monkeypatch,  # noqa: F811
+) -> None:
+    """Phase 14: a second turn against the exact same code and the exact same dataset skips the
+    verification model call, the data-understanding recomputation, and the validator re-run --
+    all three are pure functions of inputs that have not changed, so reusing the first turn's
+    results is exact, never an approximation. This is the benchmark harness's own `score_cost`
+    metric (model calls per turn) proved directly: the second turn needs one fewer LLM call for
+    the identical shape of turn.
+    """
+    import importlib
+
+    from src.core.analysis import understanding as understanding_module
+
+    orchestrator_module = importlib.import_module("src.core.agent.orchestrator")
+
+    understand_calls = 0
+    real_understand = understanding_module.understand
+
+    def counting_understand(*args, **kwargs):
+        nonlocal understand_calls
+        understand_calls += 1
+        return real_understand(*args, **kwargs)
+
+    monkeypatch.setattr(understanding_module, "understand", counting_understand)
+
+    validator_calls = 0
+    real_run_validators = orchestrator_module.run_validators
+
+    def counting_run_validators(*args, **kwargs):
+        nonlocal validator_calls
+        validator_calls += 1
+        return real_run_validators(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator_module, "run_validators", counting_run_validators)
+
+    full_turn = [
+        "1. Compute",
+        "```python\nprint(df['A'].sum())\n```",
+        "ACTION: answer\nGOAL: report",
+        "```python\nprint('VERIFIED: ok')\n```",
+        "The total is 15.",
+    ]
+    stub_llm(list(full_turn))
+    result1 = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    # A differently-worded instruction, so the (unrelated) semantic cache's exact-match lookup
+    # does not itself short-circuit this turn before Phase 14's caches are ever reached -- the
+    # code produced is still byte-identical, which is what every cache here actually keys on.
+    # No verify-code response this time -- a cache hit must mean it is never asked for.
+    second_turn_stub = stub_llm(
+        ["1. Compute", "```python\nprint(df['A'].sum())\n```", "ACTION: answer\nGOAL: report", "The total is 15."]
+    )
+    result2 = await orchestrator.run(
+        session=loaded_session, instruction="recompute the total of A", mode="auto", emitter=EventCollector()
+    )
+
+    assert result1.status == "completed"
+    assert result2.status == "completed"
+    assert len(second_turn_stub.prompts) == 4, "the verification model call should have been skipped"
+    assert result2.verification == result1.verification
+    assert understand_calls == 1, "the second turn should reuse the cached understanding"
+    assert validator_calls == 1, "the second turn should reuse the cached validator findings"

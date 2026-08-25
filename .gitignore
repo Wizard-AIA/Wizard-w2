@@ -66,6 +66,10 @@ backend/openapi.json
 .coverage
 coverage.xml
 
+# Mutation testing (cosmic-ray) session databases -- local scratch, never committed
+*.sqlite
+mutants/
+
 # General Logs & Results
 logs/
 results/

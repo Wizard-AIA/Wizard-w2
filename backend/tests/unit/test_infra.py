@@ -275,12 +275,148 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     manager.append_chat_message("s1", "user", "hello")
     manager.save_memory(time.time(), "task", "plan", "code", "result", session_id="s1")
     manager.save_schema("t.csv", ["a"], 1, "a", session_id="s1")
+    manager.save_analysis_state("s1", 1, {"objective": None})
+    manager.save_plan_revisions("s1", 1, [{"index": 0, "text": "1. Plan", "why": "", "at": 1.0}])
+    manager.save_evidence_graph(
+        "s1",
+        1,
+        {
+            "nodes": [{"id": "execution-0", "kind": "execution", "label": "compute", "data": {}, "at": 1.0}],
+            "edges": [],
+        },
+    )
 
     manager.delete_session_data("s1")
 
     assert manager.get_chat_messages("s1") == []
     assert manager.get_memories(session_id="s1") == []
     assert manager.get_schemas(session_id="s1") == []
+    assert manager.get_analysis_state(1) is None
+    assert manager.get_plan_revisions(1) == []
+    assert manager.get_evidence_graph(1) == {"nodes": [], "edges": []}
+    manager.close()
+
+
+def test_analysis_state_round_trips_and_keeps_the_latest_per_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "analysis_state.db"))
+    manager.save_analysis_state("s1", 7, {"open_questions": ["first pass"]})
+    manager.save_analysis_state("s1", 7, {"open_questions": ["revised after reflection"]})
+
+    assert manager.get_analysis_state(7) == {"open_questions": ["revised after reflection"]}
+    assert manager.get_analysis_state(999) is None
+    manager.close()
+
+
+def test_plan_revisions_persist_in_order_and_stay_scoped_to_their_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "plan_revisions.db"))
+    manager.save_plan_revisions(
+        "s1",
+        7,
+        [
+            {"index": 0, "text": "1. Original plan", "why": "initial", "at": 1.0},
+            {"index": 1, "text": "1. Revised plan", "why": "reflection", "at": 2.0},
+        ],
+    )
+    manager.save_plan_revisions("s1", 8, [{"index": 0, "text": "1. Other turn's plan", "why": "", "at": 3.0}])
+
+    revisions = manager.get_plan_revisions(7)
+    assert [row["text"] for row in revisions] == ["1. Original plan", "1. Revised plan"]
+    assert manager.get_plan_revisions(999) == []
+    manager.close()
+
+
+def test_save_plan_revisions_tolerates_an_empty_list(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "plan_revisions_empty.db"))
+    manager.save_plan_revisions("s1", 7, [])
+
+    assert manager.get_plan_revisions(7) == []
+    manager.close()
+
+
+def test_evidence_graph_round_trips_and_stays_scoped_to_its_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "evidence.db"))
+    graph = {
+        "nodes": [
+            {"id": "code-0", "kind": "code", "label": "compute total", "data": {"code": "print(1)"}, "at": 1.0},
+            {"id": "execution-0", "kind": "execution", "label": "compute total", "data": {"output": "15"}, "at": 2.0},
+        ],
+        "edges": [{"source": "code-0", "target": "execution-0", "relation": "produced"}],
+    }
+    manager.save_evidence_graph("s1", 7, graph)
+    manager.save_evidence_graph("s1", 8, {"nodes": [], "edges": []})
+
+    assert manager.get_evidence_graph(7) == graph
+    assert manager.get_evidence_graph(8) == {"nodes": [], "edges": []}
+    assert manager.get_evidence_graph(999) == {"nodes": [], "edges": []}
+    manager.close()
+
+
+def test_save_evidence_graph_tolerates_no_nodes_or_edges(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "evidence_empty.db"))
+    manager.save_evidence_graph("s1", 7, {})
+
+    assert manager.get_evidence_graph(7) == {"nodes": [], "edges": []}
+    manager.close()
+
+
+def test_analysis_run_round_trips_and_stays_scoped_to_its_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs.db"))
+    run = {"session_id": "s1", "message_id": 7, "instruction": "q", "answer": "a"}
+    manager.save_analysis_run("s1", 7, run)
+    manager.save_analysis_run("s1", 8, {"session_id": "s1", "message_id": 8, "instruction": "other", "answer": "b"})
+
+    assert manager.get_analysis_run(7) == run
+    assert manager.get_analysis_run(8)["instruction"] == "other"
+    assert manager.get_analysis_run(999) is None
+    manager.close()
+
+
+def test_analysis_run_is_captured_once_and_never_overwritten(tmp_path) -> None:
+    """A run is immutable once captured -- a second attempt at the same message id is a no-op,
+    never a silent overwrite of what the first turn actually produced."""
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_immutable.db"))
+    manager.save_analysis_run("s1", 7, {"instruction": "original"})
+    manager.save_analysis_run("s1", 7, {"instruction": "tampered"})
+
+    assert manager.get_analysis_run(7) == {"instruction": "original"}
+    manager.close()
+
+
+def test_session_deletion_removes_the_analysis_run(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_scoped.db"))
+    manager.save_analysis_run("s1", 7, {"instruction": "q"})
+
+    manager.delete_session_data("s1")
+
+    assert manager.get_analysis_run(7) is None
+    manager.close()
+
+
+def test_analysis_run_pruning_keeps_the_most_recent(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_prune.db"))
+    for index in range(20):
+        manager.save_analysis_run("s1", index, {"instruction": f"q{index}"})
+
+    manager.prune_analysis_runs(keep_last=5)
+
+    remaining = [index for index in range(20) if manager.get_analysis_run(index) is not None]
+    assert len(remaining) == 5
+    assert remaining == sorted(range(15, 20))
+    manager.close()
+
+
+def test_get_recent_analysis_runs_scopes_by_session_and_timespan(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_recent.db"))
+    manager.save_analysis_run("s1", 1, {"instruction": "s1 turn"})
+    manager.save_analysis_run("s2", 2, {"instruction": "s2 turn"})
+
+    scoped = manager.get_recent_analysis_runs(session_id="s1", timespan_seconds=3600)
+    unscoped = manager.get_recent_analysis_runs(session_id=None, timespan_seconds=3600)
+    outside_window = manager.get_recent_analysis_runs(session_id="s1", timespan_seconds=-1)
+
+    assert [run["instruction"] for run in scoped] == ["s1 turn"]
+    assert {run["instruction"] for run in unscoped} == {"s1 turn", "s2 turn"}
+    assert outside_window == []
     manager.close()
 
 

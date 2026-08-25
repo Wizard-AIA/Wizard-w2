@@ -8,7 +8,7 @@ import pytest
 
 from src.core.database import db_mgr
 from src.core.llm.registry import classify
-from src.core.prompts import create_prompt, generate_system_context
+from src.core.prompts import create_answer_prompt, create_prompt, generate_system_context
 from src.core.rag.retriever import ContextRetriever, lexical_overlap, tokenize
 from src.core.tools.catalog import CatalogEngine
 from src.core.tools.evaluator import Evaluator
@@ -192,6 +192,33 @@ def test_system_context_is_bounded_for_wide_frames(wide_df: pd.DataFrame) -> Non
     assert len(context) < 20_000
 
 
+def test_system_context_renders_notable_understanding_findings(simple_df: pd.DataFrame) -> None:
+    profile = {
+        "grain": {"grain": "mixed", "columns": ["order_id"], "mixed": True},
+        "join_keys": [],
+        "leakage": [],
+        "type_anomalies": [],
+    }
+
+    context = generate_system_context(simple_df, query="mean of A", understanding=profile)
+
+    assert "<data_understanding>" in context
+    assert "Mixed grain" in context
+
+
+def test_system_context_omits_the_understanding_block_when_nothing_is_notable(simple_df: pd.DataFrame) -> None:
+    clean_profile = {
+        "grain": {"grain": "row", "columns": [], "mixed": False},
+        "join_keys": [],
+        "leakage": [],
+        "type_anomalies": [],
+    }
+
+    context = generate_system_context(simple_df, query="mean of A", understanding=clean_profile)
+
+    assert "<data_understanding>" not in context
+
+
 def test_worker_prompt_carries_plan_and_error(simple_df: pd.DataFrame) -> None:
     prompt = create_prompt(
         "plot A",
@@ -208,6 +235,48 @@ def test_worker_prompt_states_the_dataframe_is_preloaded(simple_df: pd.DataFrame
     prompt = create_prompt("summarise", simple_df)
     assert "ALREADY loaded" in prompt
     assert "Never reload it from disk" in prompt
+
+
+def test_answer_prompt_surfaces_a_critic_finding_and_the_reaction_instruction() -> None:
+    prompt = create_answer_prompt(
+        "how many rows",
+        "print(len(df))",
+        "10",
+        critic_findings=["Possible target leakage via 'leaky'."],
+    )
+
+    assert "<critic_findings>" in prompt
+    assert "Possible target leakage via 'leaky'." in prompt
+    assert "weaken, qualify or flag as unresolved" in prompt
+
+
+def test_answer_prompt_omits_the_critic_block_when_there_are_no_findings() -> None:
+    prompt = create_answer_prompt("how many rows", "print(len(df))", "10")
+
+    assert "<critic_findings>" not in prompt
+
+
+def test_answer_prompt_surfaces_a_cannot_answer_confidence_verdict() -> None:
+    prompt = create_answer_prompt(
+        "how many rows",
+        "print(len(df))",
+        "10",
+        confidence_verdict="cannot_answer",
+        confidence_reasons=["Only 5 rows -- too few to generalise confidently."],
+    )
+
+    assert "<confidence_verdict>" in prompt
+    assert "cannot_answer" in prompt
+    assert "Only 5 rows" in prompt
+    assert "say so plainly" in prompt
+
+
+def test_answer_prompt_omits_the_confidence_block_for_a_plain_answerable_verdict() -> None:
+    prompt = create_answer_prompt(
+        "how many rows", "print(len(df))", "10", confidence_verdict="answerable", confidence_reasons=["fine"]
+    )
+
+    assert "<confidence_verdict>" not in prompt
 
 
 # --------------------------------------------------------------------------- #

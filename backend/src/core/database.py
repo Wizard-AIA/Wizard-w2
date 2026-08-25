@@ -112,6 +112,67 @@ SCHEMA_STATEMENTS = (
         meta TEXT
     )
     """,
+    # One row per turn's `AnalyticalState` snapshot (see core/analysis/state.py).
+    # `message_id` links back to the `chat_messages` row for that turn's answer.
+    """
+    CREATE TABLE IF NOT EXISTS analysis_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        timestamp REAL NOT NULL,
+        state TEXT NOT NULL
+    )
+    """,
+    # One row per revision of a turn's plan (see core/analysis/plan.py). Also
+    # embedded inside analysis_state's JSON blob; this table exists so history
+    # can be queried directly without parsing that blob -- ADR 0002.
+    """
+    CREATE TABLE IF NOT EXISTS plan_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        revision_index INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        why TEXT,
+        timestamp REAL NOT NULL
+    )
+    """,
+    # One row per node/edge of a turn's `EvidenceGraph` (see core/analysis/provenance.py).
+    # Also embedded inside analysis_state's JSON blob; queryable directly for tracing.
+    """
+    CREATE TABLE IF NOT EXISTS evidence_nodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        node_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        label TEXT NOT NULL,
+        data TEXT NOT NULL,
+        at REAL NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        source TEXT NOT NULL,
+        target TEXT NOT NULL,
+        relation TEXT NOT NULL
+    )
+    """,
+    # One immutable snapshot per turn (see core/analysis/runs.py) -- ADR 0005. `message_id` is
+    # unique: a run is captured exactly once, at `_finalize`, never updated afterwards, so a
+    # report or export rendered from this row is unaffected by any later turn in the session.
+    """
+    CREATE TABLE IF NOT EXISTS analysis_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        created_at REAL NOT NULL,
+        run TEXT NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -123,6 +184,16 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_skill_candidates_kind ON skill_candidates(kind, dismissed)",
     "CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(skill, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_message ON analysis_state(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_session ON analysis_state(session_id, timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_plan_revisions_message ON plan_revisions(message_id, revision_index)",
+    "CREATE INDEX IF NOT EXISTS idx_plan_revisions_session ON plan_revisions(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_nodes_message ON evidence_nodes(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_nodes_session ON evidence_nodes(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_edges_message ON evidence_edges(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_edges_session ON evidence_edges(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_message ON analysis_runs(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_session ON analysis_runs(session_id, created_at)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -796,8 +867,203 @@ class DatabaseManager:
                 conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM working_memory WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM schema_registry WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM analysis_state WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM plan_revisions WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM evidence_nodes WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM evidence_edges WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM analysis_runs WHERE session_id = ?", (session_id,))
         except Exception as e:
             logger.error("Failed to delete session data", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Analytical state (core/analysis/state.py)
+    # ------------------------------------------------------------------ #
+    def save_analysis_state(self, session_id: str, message_id: int | None, state: dict[str, Any]) -> int:
+        """Persists one turn's `AnalyticalState` snapshot. Returns the new row id, or 0 on failure."""
+        try:
+            with self._write() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO analysis_state (session_id, message_id, timestamp, state) VALUES (?, ?, ?, ?)",
+                    (session_id, message_id, time.time(), json.dumps(state)),
+                )
+                return int(cursor.lastrowid or 0)
+        except Exception as e:
+            logger.error("Failed to save analysis state", error=str(e))
+            return 0
+
+    def get_analysis_state(self, message_id: int) -> dict[str, Any] | None:
+        """The most recent analytical state snapshot for a given turn's message id."""
+        try:
+            with self._read() as conn:
+                row = conn.execute(
+                    "SELECT state FROM analysis_state WHERE message_id = ? ORDER BY id DESC LIMIT 1",
+                    (message_id,),
+                ).fetchone()
+                if row is None or not row["state"]:
+                    return None
+                return json.loads(row["state"])
+        except Exception as e:
+            logger.error("Failed to fetch analysis state", error=str(e))
+            return None
+
+    def save_plan_revisions(self, session_id: str, message_id: int | None, revisions: list[dict[str, Any]]) -> None:
+        """Persists a turn's full plan revision history. Append-only, never replaces a row."""
+        if not revisions:
+            return
+        try:
+            with self._write() as conn:
+                conn.executemany(
+                    "INSERT INTO plan_revisions"
+                    " (session_id, message_id, revision_index, text, why, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (session_id, message_id, revision["index"], revision["text"], revision["why"], revision["at"])
+                        for revision in revisions
+                    ],
+                )
+        except Exception as e:
+            logger.error("Failed to save plan revisions", error=str(e))
+
+    def get_plan_revisions(self, message_id: int) -> list[dict[str, Any]]:
+        """One turn's plan revision history, oldest first."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT revision_index, text, why, timestamp FROM plan_revisions"
+                    " WHERE message_id = ? ORDER BY revision_index",
+                    (message_id,),
+                ).fetchall()
+                return [
+                    {"index": row["revision_index"], "text": row["text"], "why": row["why"], "at": row["timestamp"]}
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error("Failed to fetch plan revisions", error=str(e))
+            return []
+
+    # ------------------------------------------------------------------ #
+    # Evidence graph (core/analysis/provenance.py)
+    # ------------------------------------------------------------------ #
+    def save_evidence_graph(self, session_id: str, message_id: int | None, graph: dict[str, Any]) -> None:
+        """Persists a turn's evidence graph as rows, one per node and per edge."""
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        if not nodes and not edges:
+            return
+        try:
+            with self._write() as conn:
+                if nodes:
+                    conn.executemany(
+                        "INSERT INTO evidence_nodes"
+                        " (session_id, message_id, node_id, kind, label, data, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                session_id,
+                                message_id,
+                                node["id"],
+                                node["kind"],
+                                node["label"],
+                                json.dumps(node.get("data") or {}),
+                                node["at"],
+                            )
+                            for node in nodes
+                        ],
+                    )
+                if edges:
+                    conn.executemany(
+                        "INSERT INTO evidence_edges (session_id, message_id, source, target, relation)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        [(session_id, message_id, edge["source"], edge["target"], edge["relation"]) for edge in edges],
+                    )
+        except Exception as e:
+            logger.error("Failed to save evidence graph", error=str(e))
+
+    def get_evidence_graph(self, message_id: int) -> dict[str, Any]:
+        """One turn's evidence graph, in the shape `EvidenceGraph.from_dict` expects."""
+        try:
+            with self._read() as conn:
+                node_rows = conn.execute(
+                    "SELECT node_id, kind, label, data, at FROM evidence_nodes WHERE message_id = ? ORDER BY id",
+                    (message_id,),
+                ).fetchall()
+                edge_rows = conn.execute(
+                    "SELECT source, target, relation FROM evidence_edges WHERE message_id = ? ORDER BY id",
+                    (message_id,),
+                ).fetchall()
+                return {
+                    "nodes": [
+                        {
+                            "id": row["node_id"],
+                            "kind": row["kind"],
+                            "label": row["label"],
+                            "data": json.loads(row["data"]),
+                            "at": row["at"],
+                        }
+                        for row in node_rows
+                    ],
+                    "edges": [
+                        {"source": row["source"], "target": row["target"], "relation": row["relation"]}
+                        for row in edge_rows
+                    ],
+                }
+        except Exception as e:
+            logger.error("Failed to fetch evidence graph", error=str(e))
+            return {"nodes": [], "edges": []}
+
+    # ------------------------------------------------------------------ #
+    # Analysis runs (core/analysis/runs.py) -- ADR 0005
+    # ------------------------------------------------------------------ #
+    def save_analysis_run(self, session_id: str, message_id: int, run: dict[str, Any]) -> None:
+        """Persists one turn's immutable `AnalysisRun` snapshot. Captured once, at `_finalize`,
+        and never updated afterwards -- `message_id` is unique so a later turn cannot overwrite it."""
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "INSERT INTO analysis_runs (session_id, message_id, created_at, run) VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(message_id) DO NOTHING",
+                    (session_id, message_id, time.time(), json.dumps(run)),
+                )
+        except Exception as e:
+            logger.error("Failed to save analysis run", error=str(e))
+
+    def get_analysis_run(self, message_id: int) -> dict[str, Any] | None:
+        """The immutable run snapshot for one turn, or `None` if it was never captured."""
+        try:
+            with self._read() as conn:
+                row = conn.execute("SELECT run FROM analysis_runs WHERE message_id = ?", (message_id,)).fetchone()
+                return json.loads(row["run"]) if row is not None else None
+        except Exception as e:
+            logger.error("Failed to fetch analysis run", error=str(e))
+            return None
+
+    def get_recent_analysis_runs(self, session_id: str | None, timespan_seconds: int) -> list[dict[str, Any]]:
+        """Runs captured within `timespan_seconds`, oldest first -- the same reporting window
+        `get_recent_memories` uses, over immutable run snapshots instead of working memory."""
+        cutoff = time.time() - timespan_seconds
+        try:
+            with self._read() as conn:
+                sql = "SELECT run FROM analysis_runs WHERE created_at >= ?"
+                params: list[Any] = [cutoff]
+                if session_id:
+                    sql += " AND session_id = ?"
+                    params.append(session_id)
+                sql += " ORDER BY created_at ASC"
+                rows = conn.execute(sql, params).fetchall()
+                return [json.loads(row["run"]) for row in rows]
+        except Exception as e:
+            logger.error("Failed to fetch recent analysis runs", error=str(e))
+            return []
+
+    def prune_analysis_runs(self, keep_last: int = 500) -> None:
+        """Bounds unbounded growth of the runs table, the same pattern `prune_memories` uses."""
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "DELETE FROM analysis_runs WHERE id NOT IN"
+                    " (SELECT id FROM analysis_runs ORDER BY created_at DESC, id DESC LIMIT ?)",
+                    (keep_last,),
+                )
+        except Exception as e:
+            logger.error("Failed to prune analysis runs", error=str(e))
 
     # ------------------------------------------------------------------ #
     # Schema Registry

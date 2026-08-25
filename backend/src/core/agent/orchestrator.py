@@ -45,6 +45,7 @@ Fixes carried in from the earlier audit, still load-bearing
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import posixpath
 import re
 import time
@@ -63,6 +64,12 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
+from src.core.analysis import competing, confidence, critic, stopping, understanding
+from src.core.analysis.objective import AnalyticalObjective
+from src.core.analysis.runs import ExecutedStep, capture, dataset_files_from_session, dataset_manifest_from_session
+from src.core.analysis.state import AnalyticalState
+from src.core.analysis.validation.base import ValidationContext
+from src.core.analysis.validation.registry import cache_key as validation_cache_key, run_validators
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
@@ -162,6 +169,9 @@ class RunState:
     blocked: bool = False
 
     investigation: Investigation = field(default_factory=Investigation)
+    #: Structured beliefs about this turn's analysis. `__post_init__` wires
+    #: `.investigation` to the field above so `.findings`/`.assumptions` stay live.
+    analysis: AnalyticalState = field(default_factory=AnalyticalState)
     iterations_used: int = 0
     tier: str = "balanced"
 
@@ -184,12 +194,32 @@ class RunState:
     #: `_finalize` merges their usage-ledger totals into the turn's own, since
     #: each books under its own id rather than this session's.
     subagent_ids: list[str] = field(default_factory=list)
+    #: Whether any decision this turn was a fallback rather than a reasoned model choice --
+    #: Phase 9's `confidence.py` model_uncertainty component input. See `Decision.inferred`.
+    any_decision_inferred: bool = False
+    action_log: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    approval_gates: list[dict[str, Any]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    execution_durations_ms: list[int] = field(default_factory=list)
+    retries_total: int = 0
     started_at: float = field(default_factory=time.time)
     #: The persisted `chat_messages` row id for this turn's answer, set by
     #: `_finalize`. What a later "export this turn" request keys on -- see
     #: `routes/export.py` -- since the workspace's `analysis.py` is overwritten
     #: by the next turn and cannot be relied on after the fact.
     message_id: int | None = None
+
+    def __post_init__(self) -> None:
+        self.analysis.investigation = self.investigation
+        self.analysis.objective = AnalyticalObjective.infer(self.instruction)
+        question_id = self.analysis.evidence.add_node("question", self.instruction)
+        objective_id = self.analysis.evidence.add_node(
+            "objective",
+            self.analysis.objective.analytical_type or "Unclassified objective",
+            objective=self.analysis.objective.to_dict(),
+        )
+        self.analysis.evidence.add_edge(question_id, objective_id, "informs")
 
     @property
     def elapsed_ms(self) -> int:
@@ -222,6 +252,8 @@ class RunResult:
     #: never reached `_finalize` (e.g. it errored before an answer existed).
     #: What `GET /api/export/{message_id}` is keyed on.
     message_id: int | None = None
+    #: The turn's structured analytical state -- see `core/analysis/state.py`.
+    analysis: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,6 +278,7 @@ class RunResult:
             "usage": self.usage,
             "skills_used": self.skills_used,
             "message_id": self.message_id,
+            "analysis": self.analysis,
         }
 
 
@@ -399,18 +432,26 @@ class AnalysisOrchestrator:
         treats a sub-task that failed.
         """
         permissions = session.permissions
+
+        def record(decision: str) -> None:
+            state.approval_gates.append({"category": category, "subject": subject, "decision": decision})
+
         if permissions.granted(category, subject):
+            record("previously_granted")
             return True
 
         ruling = permissions.ruling_for(category)
         if ruling == "allow":
+            record("allowed")
             return True
 
         if ruling == "deny":
+            record("denied")
             await self._refuse(state, emitter, denial_reason(category, subject, asked=False))
             return False
 
         if not state.can_prompt:
+            record("unattended_denial")
             await self._refuse(state, emitter, unattended_reason(category, subject))
             return False
 
@@ -427,6 +468,7 @@ class AnalysisOrchestrator:
         state.phase = resume_phase
 
         if not decision.approved:
+            record("denied")
             reason = decision.reason or denial_reason(category, subject, asked=True)
             await self._refuse(state, emitter, reason)
             return False
@@ -434,6 +476,7 @@ class AnalysisOrchestrator:
         # Remembered for the rest of the session, so an investigation that needs
         # the same library at iterations 4, 5 and 6 asks once rather than thrice.
         permissions.grant(category, subject)
+        record("approved")
         return True
 
     async def _refuse(self, state: RunState, emitter: Emitter | None, reason: str) -> None:
@@ -530,6 +573,7 @@ class AnalysisOrchestrator:
         unmet request into every later prompt as if it had been satisfied.
         """
         state.plan = SEARCH_PATTERN.sub("", state.plan).strip() or state.instruction
+        state.analysis.plan.revise(state.plan, why=reason or "Web search directive dropped.")
         if reason:
             state.warnings.append(reason)
 
@@ -570,6 +614,7 @@ class AnalysisOrchestrator:
             elif approved_plan is not None:
                 # The user confirmed a plan produced by an earlier turn.
                 state.plan = approved_plan
+                state.analysis.plan.revise(state.plan, why="Plan approved by the user in a prior turn.")
             else:
                 should_continue = await self._orient(state, session, emitter, previous_code, budget)
                 if not should_continue:
@@ -595,6 +640,27 @@ class AnalysisOrchestrator:
                 return self._result(state, "completed")
 
             await self._verify(state, session, emitter, budget)
+            while self._confidence_requires_more_work(state, budget):
+                state.tool_calls.append(
+                    {
+                        "tool": "stopping_policy",
+                        "decision": "continue",
+                        "reason": state.analysis.confidence.get("stop", {}).get("reason", "continue"),
+                    }
+                )
+                await self._investigate(
+                    state,
+                    session,
+                    emitter,
+                    previous_code,
+                    budget,
+                    start_iteration=state.iterations_used + 1,
+                    force_code=True,
+                )
+                if state.blocked:
+                    await self._finalize(state, session, emitter)
+                    return self._result(state, "completed")
+                await self._verify(state, session, emitter, budget)
             await self._review(state, session, emitter)
             if settings.VISION_ENABLED and state.image:
                 # `_review` awaits vision and council together and returns
@@ -654,6 +720,7 @@ class AnalysisOrchestrator:
         understood the question.
         """
         columns = [str(c) for c in session.df.columns]
+        self._ensure_understanding(state, session)
 
         # 1. Exact/semantic cache: a verified solution for this exact question.
         cached = semantic_cache.lookup(state.instruction, columns)
@@ -661,12 +728,14 @@ class AnalysisOrchestrator:
             state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
             state.plan = "Reused a previously verified solution for this question."
+            state.analysis.plan.revise(state.plan, why="Reused a previously verified solution for this question.")
             await emit(emitter, EventType.STATUS, content="Reusing a verified solution", phase=Phase.GENERATING.value)
             return True
 
         # 2. Deterministic fast path for trivial inspection.
         if self.is_simple(state.instruction):
             state.plan = f"Directly answer the inspection request: {state.instruction}"
+            state.analysis.plan.revise(state.plan, why="Simple inspection request; planning was skipped.")
             await emit(
                 emitter, EventType.STATUS, content="Simple request, skipping planning", phase=Phase.GENERATING.value
             )
@@ -697,6 +766,7 @@ class AnalysisOrchestrator:
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "manager"),
             skills=skills_block,
+            understanding=state.analysis.understanding,
         )
 
         raw = await self._stream_plan(prompt, session, emitter)
@@ -711,6 +781,7 @@ class AnalysisOrchestrator:
             # The model spent its whole budget thinking. Its reasoning is the
             # only thing it produced, and it is better than an empty plan.
             state.plan = state.thought[:1000] or f"Answer the question directly: {state.instruction}"
+        state.analysis.plan.revise(state.plan, why="Initial plan from the manager.")
 
         await emit(emitter, EventType.STEP_END, id="plan", ok=True, duration_ms=state.elapsed_ms)
 
@@ -845,6 +916,7 @@ class AnalysisOrchestrator:
 
         prompt = create_replan_prompt(state.instruction, results, state.thought)
         state.plan = await self._stream_plan(prompt, session, emitter)
+        state.analysis.plan.revise(state.plan, why="Plan revised after a web search.")
 
     # ------------------------------------------------------------------ #
     # The loop
@@ -856,11 +928,14 @@ class AnalysisOrchestrator:
         emitter: Emitter | None,
         previous_code: str | None,
         budget: TierBudget,
+        *,
+        start_iteration: int = 1,
+        force_code: bool = False,
     ):
         """Runs the observe -> decide -> act loop until the agent answers."""
         allowed = self._allowed_actions(session, budget)
 
-        for iteration in range(1, budget.iterations + 1):
+        for iteration in range(start_iteration, budget.iterations + 1):
             # Checked before the iteration is claimed, never during it: a call
             # in flight is already paid for, and cancelling it would leave the
             # provider mid-generation with nothing to show for the tokens. It
@@ -887,7 +962,24 @@ class AnalysisOrchestrator:
                 mode=state.mode,
             )
 
-            decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
+            if force_code and iteration == start_iteration:
+                decision = Decision(
+                    kind=ActionKind.CODE,
+                    goal=(state.analysis.open_questions[-1] if state.analysis.open_questions else state.instruction),
+                    rationale="The stopping policy found unresolved evidence; investigate it before answering.",
+                )
+            else:
+                decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
+            state.any_decision_inferred = state.any_decision_inferred or decision.inferred
+            state.action_log.append(
+                {
+                    "iteration": iteration,
+                    "kind": decision.kind.value,
+                    "goal": decision.goal,
+                    "rationale": decision.rationale,
+                    "inferred": decision.inferred,
+                }
+            )
 
             await emit(
                 emitter,
@@ -919,6 +1011,23 @@ class AnalysisOrchestrator:
         # Whatever the loop produced is what the answer is built from.
         state.output = state.investigation.executed_output or state.output
         state.code = state.investigation.last_successful_code or state.code
+
+    @staticmethod
+    def _confidence_requires_more_work(state: RunState, budget: TierBudget) -> bool:
+        """Return whether the policy authorizes another bounded iteration for a named gap.
+
+        Unknown confidence components alone are not a useful task for another model call. A
+        continuation requires structured unresolved evidence (an open question, plan uncertainty,
+        or unresolved hypothesis), which is the evidence the next action can actually address.
+        """
+        stop = (state.analysis.confidence or {}).get("stop") or {}
+        unresolved_hypotheses = any(
+            hypothesis.status == "unresolved" for hypothesis in state.analysis.hypotheses.items.values()
+        )
+        has_named_gap = bool(
+            state.analysis.open_questions or state.analysis.plan.open_uncertainties or unresolved_hypotheses
+        )
+        return bool(stop.get("should_stop") is False and has_named_gap and state.iterations_used < budget.iterations)
 
     def _allowed_actions(self, session: Session, budget: TierBudget) -> tuple[ActionKind, ...]:
         """The menu offered this turn.
@@ -1068,6 +1177,11 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STATUS, content="Examining the data", phase=Phase.INSPECTING.value)
 
         summary = await asyncio.to_thread(session.inspect, decision.goal, budget.max_columns)
+
+        profile = self._ensure_understanding(state, session)
+        notes = understanding.render(profile) if profile else ""
+        if notes:
+            summary = f"{summary}\n\n{notes}"
 
         state.investigation.record(
             Step(
@@ -1231,6 +1345,7 @@ class AnalysisOrchestrator:
         lead = revised.splitlines()[0].strip() if revised.splitlines() else ""
         if lead:
             state.investigation.note_finding(lead)
+        state.analysis.plan.revise(revised, why=lead or "Plan revised from what execution showed.")
 
         state.investigation.record(
             Step(
@@ -1364,6 +1479,7 @@ class AnalysisOrchestrator:
                 ]
 
         summary_lines: list[str] = []
+        route_results: list[competing.RouteResult] = []
         for (branch, subgoal, child_id), result in zip(branches, results, strict=True):
             # Registered -- and its usage read -- whether or not the branch
             # finished: a timeout or an exception can still land after it has
@@ -1374,6 +1490,7 @@ class AnalysisOrchestrator:
             if isinstance(result, BaseException) or result is None:
                 reason = str(result) if isinstance(result, BaseException) else "did not finish in time"
                 summary_lines.append(f"[{branch}] did not complete: {reason}")
+                route_results.append(competing.RouteResult(branch, competing.detect_method(subgoal), "", False))
                 await emit(
                     emitter,
                     EventType.SUBAGENT_END,
@@ -1386,6 +1503,15 @@ class AnalysisOrchestrator:
                 )
             else:
                 observation = result.investigation.executed_output or "No output was produced."
+                route_results.append(
+                    competing.RouteResult(
+                        branch,
+                        competing.detect_method(subgoal),
+                        observation,
+                        result.ok,
+                        code=result.investigation.last_successful_code or "",
+                    )
+                )
                 state.investigation.record(
                     Step(
                         index=state.iterations_used,
@@ -1433,6 +1559,36 @@ class AnalysisOrchestrator:
             # before dispatch), so this is the only frame that can carry it --
             # a client associates the trail entry with its branches from here.
             group=group,
+        )
+
+        if budget.tier == "full" and competing.is_high_impact_or_ambiguous(state.analysis.objective):
+            await self._compare_routes(state, session, emitter, route_results, group)
+
+    @staticmethod
+    async def _compare_routes(
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        route_results: list[competing.RouteResult],
+        group: str,
+    ) -> None:
+        """Phase 8: when a `parallel` fan-out ran competing routes on a high-impact or
+        ambiguous objective, compares what came back deterministically -- see
+        `analysis.competing.compare_routes`. Never picks a winner silently."""
+        if len(route_results) < 2:
+            return
+        comparison = competing.compare_routes(route_results, df=session.df)
+        state.analysis.route_comparisons.append(comparison.to_dict())
+        await emit(
+            emitter,
+            EventType.ROUTE_COMPARISON,
+            group=group,
+            verdict=comparison.verdict,
+            routes=comparison.routes,
+            agreement_detail=comparison.agreement_detail,
+            more_appropriate=comparison.more_appropriate,
+            why=comparison.why,
+            residual_uncertainty=comparison.residual_uncertainty,
         )
 
     async def _run_subagent(
@@ -1498,6 +1654,81 @@ class AnalysisOrchestrator:
             warnings=child_state.warnings,
             artifacts=child_state.artifacts,
         )
+
+    @staticmethod
+    def _ensure_understanding(state: RunState, session: Session) -> dict[str, Any] | None:
+        """Computes the turn's data-understanding profile once, cached on `state.analysis`.
+
+        Built on the catalog already profiled at upload, so this costs no LLM round trip and is
+        safe to run before the very first prompt of a turn -- unlike `_verify` or code generation,
+        nothing here waits on a model. Resolves a target (from an explicit "predict/target/
+        classify <column>" phrase in the instruction) and a time column (the one column already
+        profiled as temporal) so leakage and temporal checks actually fire in the live loop --
+        both stay `None`, and both checks stay silent, rather than guess.
+
+        Phase 14: also cached across turns, keyed by every loaded table's content hash plus the
+        resolved target/time_column/analytical_type -- `understand()` is a pure function of these,
+        so a repeated turn against unchanged data reuses the result instead of rescanning a
+        dataframe that has not moved (`understanding.cache_key`, `session.*_understanding` cache).
+        """
+        if state.analysis.understanding is not None:
+            return state.analysis.understanding
+        if session.df is None:
+            return None
+        try:
+            objective = state.analysis.objective
+            objective.resolve_variables(session.df.columns)
+            target = (objective.likely_variables.get("dependent") or [None])[0]
+            time_column = understanding.resolve_time_column(session.catalog)
+            table_hashes = tuple((handle.table_key, handle.content_hash) for handle in session.datasets.values())
+            key = understanding.cache_key(
+                table_hashes, target=target, time_column=time_column, analytical_type=objective.analytical_type
+            )
+            cached = session.get_cached_understanding(key)
+            if cached is not None:
+                state.analysis.understanding = cached
+                return cached
+            result = understanding.understand(
+                session.df,
+                tables=session.tables,
+                catalog=session.catalog,
+                target=target,
+                time_column=time_column,
+                analytical_type=objective.analytical_type,
+            )
+            session.cache_understanding(key, result)
+            state.analysis.understanding = result
+        except Exception as exc:
+            logger.error("Could not compute data understanding", error=str(exc))
+            state.analysis.understanding = {}
+        return state.analysis.understanding
+
+    @staticmethod
+    def _record_execution_evidence(state: RunState, session: Session, goal: str) -> None:
+        """Wires one successful step into the provenance graph: dataset -> code -> execution.
+
+        Never allowed to cost a turn that already produced a result -- a hashing failure on an
+        exotic dtype is bookkeeping's problem, not the analysis's.
+        """
+        try:
+            graph = state.analysis.evidence
+            handle = session.active_handle
+            dataset_id = graph.ensure_dataset(handle.content_hash, handle.name) if handle is not None else None
+            step_id = graph.add_node("step", goal)
+            code_id = graph.add_node("code", goal, code=state.code)
+            execution_id = graph.add_node("execution", goal, output=state.output[:2000])
+            result_id = graph.add_node("result", goal, output=state.output[:2000])
+            objective_id = graph.last("objective")
+            if objective_id:
+                graph.add_edge(objective_id, step_id, "informs")
+            graph.add_edge(step_id, code_id, "informs")
+            graph.add_edge(code_id, execution_id, "produced")
+            graph.add_edge(execution_id, result_id, "produced")
+            if dataset_id:
+                graph.add_edge(dataset_id, execution_id, "derived_from")
+            state.analysis.evidence_refs.extend((execution_id, result_id))
+        except Exception as exc:
+            logger.error("Could not record execution evidence", error=str(exc))
 
     async def _act_code(
         self,
@@ -1574,8 +1805,11 @@ class AnalysisOrchestrator:
                         observation=result.output,
                         ok=True,
                         code=state.code,
+                        duration_ms=state.execution_durations_ms[-1] if state.execution_durations_ms else 0,
+                        retries=state.retry_count,
                     )
                 )
+                self._record_execution_evidence(state, session, goal)
                 await emit(
                     emitter,
                     EventType.OBSERVATION,
@@ -1590,6 +1824,7 @@ class AnalysisOrchestrator:
             state.failed_error = result.output
             state.error = result.output
             state.retry_count += 1
+            state.retries_total += 1
             state.from_cache = False
 
             if state.retry_count > settings.MAX_CORRECTION_RETRIES:
@@ -1682,6 +1917,7 @@ class AnalysisOrchestrator:
             negative_example=negative_example,
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "worker"),
+            understanding=self._ensure_understanding(state, session),
         )
 
         raw = await llm_provider.acomplete(
@@ -1722,6 +1958,7 @@ class AnalysisOrchestrator:
         return stripped
 
     async def _execute(self, state: RunState, session: Session, emitter: Emitter | None) -> ExecutionResult:
+        started = time.perf_counter()
         state.phase = Phase.EXECUTING
         step_id = f"run-{state.iterations_used}-{state.retry_count}"
         await emit(emitter, EventType.STEP_START, id=step_id, label="Running code", kind="execute")
@@ -1770,6 +2007,12 @@ class AnalysisOrchestrator:
         for warning in result.warnings:
             await emit(emitter, EventType.WARNING, content=warning)
 
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        state.execution_durations_ms.append(duration_ms)
+        state.tool_calls.append({"tool": "code_executor", "ok": result.ok, "duration_ms": duration_ms})
+        if not result.ok:
+            state.failures.append(result.output[:500])
+
         await emit(emitter, EventType.STEP_END, id=step_id, ok=result.ok, duration_ms=state.elapsed_ms)
         return result
 
@@ -1783,15 +2026,27 @@ class AnalysisOrchestrator:
         denominator all produce confident, plausible, wrong numbers that no
         self-review catches -- because the model reviewing is the model that made
         the mistake. An independent recomputation does catch them.
+
+        Phase 14: skips the LLM call and the second execution entirely when this exact code
+        already ran against this exact dataset earlier this session (`session.*_verification`
+        cache, keyed on the code and the active dataset's content hash) -- re-deriving a result
+        that is guaranteed identical is a model call that would buy nothing.
         """
         if not settings.AGENT_VERIFY or not budget.allow_verification:
             return
         if state.blocked or state.error or not state.code or state.from_cache:
             return
-        if self._out_of_time(state):
+
+        handle = session.active_handle
+        verification_key = hashlib.blake2b(
+            f"{state.code}::{handle.content_hash if handle else ''}".encode(), digest_size=12
+        ).hexdigest()
+        cached = session.get_cached_verification(verification_key)
+
+        if cached is None and self._out_of_time(state):
             # A second code generation *and* a second execution. It is the most
             # expensive thing left in the turn, so it is the first thing a
-            # deadline gives up.
+            # deadline gives up -- unless a cache hit already made it free.
             logger.info("Skipping verification, turn deadline reached", elapsed_ms=state.elapsed_ms)
             return
 
@@ -1799,54 +2054,200 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STEP_START, id="verify", label="Verifying the result", kind="verify")
         await emit(emitter, EventType.STATUS, content="Verifying the result", phase=Phase.VERIFYING.value)
 
-        try:
-            raw = await llm_provider.acomplete(
-                create_verification_prompt(state.instruction, state.code, state.output),
-                role=LLMRole.WORKER,
-                model=session.models.worker,
-                temperature=session.models.temperature,
-                provider=session.models.worker_provider,
-                max_tokens=settings.output_budget("code"),
-                data_mode=session.data_mode,
-                session_id=session.id,
-            )
-        except LLMUnavailableError:
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        code = self._extract_code(raw)
-        if not code:
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        # Verification is independently generated code, so it can want a library
-        # the analysis itself did not. Gating it here is what stops the check
-        # being a way round the gate on the thing it is checking.
-        if not await self._permit_install(state, session, emitter, code):
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        result = await asyncio.to_thread(
-            session.executor.execute, code, session.df, None, session.tables, session.permissions.extra_roots
-        )
-        output = (result.output or "").strip()
-
-        if not result.ok:
-            # A verification that cannot run says nothing about the analysis.
-            status, detail = "inconclusive", "The verification step could not be executed."
-        elif MISMATCH_MARKER in output:
-            status, detail = "mismatch", output
-            state.warnings.append(
-                "Independent verification disagreed with the analysis. The result below is not trustworthy."
-            )
-        elif VERIFIED_MARKER in output:
-            status, detail = "verified", output
+        if cached is not None:
+            status, detail = cached
         else:
-            status, detail = "inconclusive", output
+            try:
+                raw = await llm_provider.acomplete(
+                    create_verification_prompt(state.instruction, state.code, state.output),
+                    role=LLMRole.WORKER,
+                    model=session.models.worker,
+                    temperature=session.models.temperature,
+                    provider=session.models.worker_provider,
+                    max_tokens=settings.output_budget("code"),
+                    data_mode=session.data_mode,
+                    session_id=session.id,
+                )
+            except LLMUnavailableError:
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            code = self._extract_code(raw)
+            if not code:
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            # Verification is independently generated code, so it can want a library
+            # the analysis itself did not. Gating it here is what stops the check
+            # being a way round the gate on the thing it is checking.
+            if not await self._permit_install(state, session, emitter, code):
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            result = await asyncio.to_thread(
+                session.executor.execute, code, session.df, None, session.tables, session.permissions.extra_roots
+            )
+            output = (result.output or "").strip()
+
+            if not result.ok:
+                # A verification that cannot run says nothing about the analysis, and might
+                # succeed on a retry -- never cached, unlike a definitive marker below.
+                status, detail = "inconclusive", "The verification step could not be executed."
+            elif MISMATCH_MARKER in output:
+                status, detail = "mismatch", output
+                state.warnings.append(
+                    "Independent verification disagreed with the analysis. The result below is not trustworthy."
+                )
+                session.cache_verification(verification_key, (status, detail))
+            elif VERIFIED_MARKER in output:
+                status, detail = "verified", output
+                session.cache_verification(verification_key, (status, detail))
+            else:
+                status, detail = "inconclusive", output
 
         state.verification = detail
+        self._record_validation_evidence(state, status, detail)
+        ctx = ValidationContext(
+            instruction=state.instruction,
+            plan=state.plan,
+            code=state.code,
+            output=state.output,
+            df=session.df,
+            tables=session.tables,
+            understanding=state.analysis.understanding,
+            method=competing.detect_method(state.code),
+            recomputation_status=status,
+            recomputation_detail=detail,
+        )
+        self._run_validators(state, ctx, session)
+        state.tool_calls.append({"tool": "validation_registry", "count": len(state.analysis.validations)})
+        await self._run_critic(state, ctx, emitter)
+        await self._compute_confidence(state, session, status, budget, emitter)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
         await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
+
+    @staticmethod
+    async def _compute_confidence(
+        state: RunState, session: Session, status: str, budget: TierBudget, emitter: Emitter | None
+    ) -> None:
+        """Phase 9: rolls this turn's already-computed evidence into an explainable confidence
+        verdict -- see `analysis.confidence.compute`. Reported alongside a stop-policy check
+        (`analysis.stopping.decide`), which controls whether the bounded investigation loop gets
+        another evidence-gathering iteration."""
+        handle = session.active_handle
+        completeness = handle.profile.get("global_quality", {}).get("completeness_score") if handle else None
+        row_count = len(session.df) if session.df is not None else None
+        route_verdict = state.analysis.route_comparisons[-1]["verdict"] if state.analysis.route_comparisons else None
+        unresolved = (
+            len(state.analysis.open_questions)
+            + sum(1 for entry in state.analysis.critic_findings if entry["severity"] == "error")
+            + sum(1 for hyp in state.analysis.hypotheses.items.values() if hyp.status == "unresolved")
+        )
+        ctx = confidence.ConfidenceContext(
+            completeness_score=completeness,
+            row_count=row_count,
+            verification_status=status,
+            route_comparison_verdict=route_verdict,
+            has_sensitivity_finding=any(entry["validator"] == "sensitivity" for entry in state.analysis.validations),
+            has_wrong_test_finding=any(entry["category"] == "wrong_test" for entry in state.analysis.critic_findings),
+            unresolved_count=unresolved,
+            decision_inferred=state.any_decision_inferred,
+        )
+        result = confidence.compute(ctx)
+        stop = stopping.decide(
+            result,
+            iterations_used=state.iterations_used,
+            iterations_budget=budget.iterations,
+            validated=status == "verified",
+        )
+        state.analysis.confidence = {**result.to_dict(), "stop": stop.to_dict()}
+        state.tool_calls.append(
+            {"tool": "confidence", "verdict": result.verdict, "stop": stop.should_stop, "reason": stop.reason}
+        )
+        await emit(
+            emitter,
+            EventType.CONFIDENCE,
+            verdict=result.verdict,
+            components=[component.to_dict() for component in result.components],
+            reasons=result.reasons,
+            stop_reason=stop.reason,
+            stop_detail=stop.detail,
+        )
+
+    @staticmethod
+    def _run_validators(state: RunState, ctx: ValidationContext, session: Session) -> None:
+        """Runs the tier's affordable validators and folds their findings into the turn.
+
+        Reached only when `_verify` itself ran, so this never fires below balanced tier -- the
+        same gate that already turns off the recomputation these findings are partly built from.
+
+        Phase 14: cached across turns by (tier, code, dataset, method, verification outcome) --
+        every validator here is a pure function of `ctx`, so an exact-match cache hit skips
+        re-running all eight without approximating anything (`session.*_validations` cache).
+        """
+        try:
+            handle = session.active_handle
+            key = validation_cache_key(
+                tier=state.tier,
+                code=state.code,
+                content_hash=handle.content_hash if handle else "",
+                method=ctx.method or "",
+                recomputation_status=ctx.recomputation_status or "",
+            )
+            cached = session.get_cached_validations(key)
+            if cached is None:
+                cached = [finding.to_dict() for finding in run_validators(ctx, state.tier)]
+                session.cache_validations(key, cached)
+            state.analysis.validations.extend(cached)
+            state.warnings.extend(finding["message"] for finding in cached if finding["severity"] != "info")
+        except Exception as exc:
+            logger.error("Could not run validators", error=str(exc))
+
+    @staticmethod
+    async def _run_critic(state: RunState, ctx: ValidationContext, emitter: Emitter | None) -> None:
+        """Runs the deterministic critic and surfaces what it found.
+
+        The critic never edits a result (PLAN.md Rule 4): a finding is stored and emitted, and its
+        message reaches `_answer`'s prompt so the model writing the answer can react -- weaken a
+        claim, flag it, or note it is unresolved -- but nothing here rewrites `state.output` itself.
+        """
+        try:
+            findings = critic.critique(ctx)
+            for finding in findings:
+                state.analysis.critic_findings.append(finding.to_dict())
+                if finding.severity == "error":
+                    question = f"{finding.category}: {finding.message}"
+                    if question not in state.analysis.open_questions:
+                        state.analysis.open_questions.append(question)
+                    if question not in state.analysis.plan.open_uncertainties:
+                        state.analysis.plan.open_uncertainties.append(question)
+                await emit(
+                    emitter,
+                    EventType.CRITIC_FINDING,
+                    category=finding.category,
+                    severity=finding.severity,
+                    message=finding.message,
+                    suggested_reaction=finding.suggested_reaction,
+                )
+            state.tool_calls.append({"tool": "critic", "count": len(findings)})
+        except Exception as exc:
+            logger.error("Could not run critic", error=str(exc))
+
+    @staticmethod
+    def _record_validation_evidence(state: RunState, status: str, detail: str) -> None:
+        """Links the independent recomputation to the execution it checked, if one was recorded."""
+        try:
+            graph = state.analysis.evidence
+            execution_id = graph.last("execution")
+            if execution_id is None:
+                return
+            validation_id = graph.add_node(
+                "validation", "independent recomputation", status=status, detail=detail[:500]
+            )
+            graph.add_edge(validation_id, execution_id, "validates")
+            state.analysis.evidence_refs.append(validation_id)
+        except Exception as exc:
+            logger.error("Could not record validation evidence", error=str(exc))
 
     # ------------------------------------------------------------------ #
     # Review
@@ -1883,6 +2284,7 @@ class AnalysisOrchestrator:
             ]
             if notes:
                 state.warnings.extend(notes)
+        state.tool_calls.append({"tool": "council_review", "ok": isinstance(review, dict)})
 
         if len(outcomes) > 1 and isinstance(outcomes[1], str) and outcomes[1]:
             state.artifacts.append({"kind": "plot_description", "text": outcomes[1]})
@@ -1917,6 +2319,15 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STATUS, content="Writing the answer", phase=Phase.ANSWERING.value)
 
         handle = session.active_handle
+        self._sync_plan_hypotheses(state)
+        confidence_state = state.analysis.confidence or {}
+        if confidence_state.get("verdict") in {"cannot_answer", "insufficient_evidence"}:
+            reasons = confidence_state.get("reasons") or ["The available evidence did not meet the answer threshold."]
+            state.answer = "I cannot responsibly answer this from the available evidence.\n\n" + "\n".join(
+                f"- {reason}" for reason in reasons
+            )
+            await emit(emitter, EventType.CONTENT_DELTA, content=state.answer)
+            return
         if handle is not None:
             for note in assumptions_from_profile(handle.profile):
                 state.investigation.note_assumption(note)
@@ -1930,6 +2341,11 @@ class AnalysisOrchestrator:
             findings=state.investigation.findings,
             assumptions=state.investigation.assumptions,
             verification=state.verification,
+            critic_findings=[
+                entry["message"] for entry in state.analysis.critic_findings if entry["severity"] != "info"
+            ],
+            confidence_verdict=(state.analysis.confidence or {}).get("verdict"),
+            confidence_reasons=(state.analysis.confidence or {}).get("reasons"),
         )
 
         chunks: list[str] = []
@@ -1976,6 +2392,13 @@ class AnalysisOrchestrator:
 
         await self._check_grounding(state, emitter)
 
+    @staticmethod
+    def _sync_plan_hypotheses(state: RunState) -> None:
+        """Materialise explicitly labelled plan hypotheses into analytical state."""
+        for statement in state.analysis.plan.hypotheses:
+            if not any(item.statement == statement for item in state.analysis.hypotheses.items.values()):
+                state.analysis.hypotheses.add("primary", statement)
+
     async def _check_grounding(self, state: RunState, emitter: Emitter | None):
         """Flags figures in the answer that were never actually computed.
 
@@ -1991,6 +2414,7 @@ class AnalysisOrchestrator:
             state.investigation.executed_output or state.output,
             state.instruction,
         )
+        self._record_claim_evidence(state)
         warning = state.grounding.warning()
         if warning:
             state.warnings.append(warning)
@@ -2000,6 +2424,25 @@ class AnalysisOrchestrator:
                 checked=state.grounding.checked,
                 ungrounded=len(state.grounding.ungrounded),
             )
+
+    @staticmethod
+    def _record_claim_evidence(state: RunState) -> None:
+        """Turns each grounded figure into a claim node traceable to the execution behind it.
+
+        Reuses `check_grounding`'s own extraction (`grounded_values`) rather than parsing the
+        answer a second time -- there is exactly one place that decides what a number means.
+        """
+        try:
+            graph = state.analysis.evidence
+            result_id = graph.last("result") or graph.last("execution")
+            if result_id is None or not state.grounding.grounded_values:
+                return
+            for value in state.grounding.grounded_values:
+                claim_id = graph.add_node("claim", value)
+                graph.add_edge(result_id, claim_id, "supports")
+                state.analysis.evidence_refs.append(claim_id)
+        except Exception as exc:
+            logger.error("Could not record claim evidence", error=str(exc))
 
     # ------------------------------------------------------------------ #
     async def _note_promotion(self, state: RunState, columns: list[str], emitter: Emitter | None):
@@ -2106,7 +2549,14 @@ class AnalysisOrchestrator:
         # in the same session and overwritten the workspace's `analysis.py`.
         # Mirrors the `blocks` filter `export.build_script` applies.
         exported_steps = [
-            {"goal": step.goal, "code": step.code}
+            {
+                "goal": step.goal,
+                "code": step.code,
+                "observation": step.observation,
+                "ok": step.ok,
+                "duration_ms": step.duration_ms,
+                "retries": step.retries,
+            }
             for step in state.investigation.steps
             if step.kind is ActionKind.CODE and step.ok and step.code
         ]
@@ -2115,6 +2565,58 @@ class AnalysisOrchestrator:
             state.answer,
             {"code": state.code, "instruction": state.instruction, "steps": exported_steps},
         )
+
+        try:
+            from src.core.database import db_mgr
+
+            state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
+            analysis_snapshot = state.analysis.to_dict()
+            db_mgr.save_analysis_state(session.id, state.message_id, analysis_snapshot)
+            db_mgr.save_plan_revisions(
+                session.id, state.message_id, [revision.to_dict() for revision in state.analysis.plan.revisions]
+            )
+            db_mgr.save_evidence_graph(session.id, state.message_id, state.analysis.evidence.to_dict())
+            if state.message_id is not None:
+                telemetry = {
+                    "actions": state.action_log,
+                    "tool_calls": state.tool_calls,
+                    "approval_gates": state.approval_gates,
+                    "failures": state.failures,
+                    "retries": state.retries_total,
+                    "execution_durations_ms": state.execution_durations_ms,
+                    "verification": state.verification,
+                    "critic_findings": len(state.analysis.critic_findings),
+                    "evidence_nodes": len(state.analysis.evidence.nodes),
+                    "evidence_edges": len(state.analysis.evidence.edges),
+                    "usage": state.usage,
+                }
+                run = capture(
+                    session_id=session.id,
+                    message_id=state.message_id,
+                    instruction=state.instruction,
+                    answer=state.answer,
+                    dataset_manifest=dataset_manifest_from_session(session),
+                    steps=[
+                        ExecutedStep(
+                            goal=step["goal"],
+                            code=step["code"],
+                            ok=step.get("ok", True),
+                            observation=step.get("observation", ""),
+                            duration_ms=step.get("duration_ms", 0),
+                            retries=step.get("retries", 0),
+                        )
+                        for step in exported_steps
+                    ],
+                    analysis=analysis_snapshot,
+                    warnings=state.warnings,
+                    dataset_files=dataset_files_from_session(session),
+                    telemetry=telemetry,
+                    active_table_key=session.active_handle.table_key if session.active_handle else "",
+                    artifacts=state.artifacts,
+                )
+                db_mgr.save_analysis_run(session.id, state.message_id, run.to_dict())
+        except Exception as exc:
+            logger.error("Could not persist analysis state", error=str(exc))
 
         state.phase = Phase.DONE
         downloads = self._collect_downloads(state, session)
@@ -2144,6 +2646,7 @@ class AnalysisOrchestrator:
             usage=state.usage,
             skills_used=state.skills_used,
             message_id=state.message_id,
+            analysis=state.analysis.to_dict(),
         )
 
     @staticmethod
@@ -2241,6 +2744,7 @@ class AnalysisOrchestrator:
             usage=state.usage,
             skills_used=state.skills_used,
             message_id=state.message_id,
+            analysis=state.analysis.to_dict(),
         )
 
 
