@@ -61,18 +61,22 @@ def dataset_loader_lines(
     """
     lines: list[str] = ["tables = {}"]
     needs_connector = False
-    entries = list(manifest) if manifest is not None else [
-        DatasetManifestEntry(
-            name=handle.name,
-            table_key=handle.table_key,
-            content_hash=handle.content_hash,
-            rows=len(handle.df),
-            columns=tuple(map(str, handle.df.columns)),
-            origin=handle.origin,
-            target=str(handle.profile.get("target", "")),
-        )
-        for handle in session.datasets.values()
-    ]
+    entries = (
+        list(manifest)
+        if manifest is not None
+        else [
+            DatasetManifestEntry(
+                name=handle.name,
+                table_key=handle.table_key,
+                content_hash=handle.content_hash,
+                rows=len(handle.df),
+                columns=tuple(map(str, handle.df.columns)),
+                origin=handle.origin,
+                target=str(handle.profile.get("target", "")),
+            )
+            for handle in session.datasets.values()
+        ]
+    )
     for entry in entries:
         key = entry.table_key
         if entry.origin:

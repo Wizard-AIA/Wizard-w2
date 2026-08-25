@@ -18,7 +18,9 @@ from typing import Any
 #: ask for (see prompts.create_planning_prompt), so this is a mechanical extraction, not a
 #: semantic one. Prose that doesn't match this shape simply yields no steps, never a guess.
 _STEP_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.+)$")
-_HYPOTHESIS_LINE = re.compile(r"^\s*(?:hypothesis|primary hypothesis|null hypothesis|alternative hypothesis)\s*:\s*(.+)$", re.I)
+_HYPOTHESIS_LINE = re.compile(
+    r"^\s*(?:hypothesis|primary hypothesis|null hypothesis|alternative hypothesis)\s*:\s*(.+)$", re.I
+)
 
 
 def parse_intended_analyses(text: str) -> list[str]:

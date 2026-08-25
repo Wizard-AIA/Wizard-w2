@@ -215,7 +215,8 @@ class RunState:
         self.analysis.objective = AnalyticalObjective.infer(self.instruction)
         question_id = self.analysis.evidence.add_node("question", self.instruction)
         objective_id = self.analysis.evidence.add_node(
-            "objective", self.analysis.objective.analytical_type or "Unclassified objective",
+            "objective",
+            self.analysis.objective.analytical_type or "Unclassified objective",
             objective=self.analysis.objective.to_dict(),
         )
         self.analysis.evidence.add_edge(question_id, objective_id, "informs")
@@ -1026,11 +1027,7 @@ class AnalysisOrchestrator:
         has_named_gap = bool(
             state.analysis.open_questions or state.analysis.plan.open_uncertainties or unresolved_hypotheses
         )
-        return bool(
-            stop.get("should_stop") is False
-            and has_named_gap
-            and state.iterations_used < budget.iterations
-        )
+        return bool(stop.get("should_stop") is False and has_named_gap and state.iterations_used < budget.iterations)
 
     def _allowed_actions(self, session: Session, budget: TierBudget) -> tuple[ActionKind, ...]:
         """The menu offered this turn.
