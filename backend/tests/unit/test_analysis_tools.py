@@ -192,6 +192,33 @@ def test_system_context_is_bounded_for_wide_frames(wide_df: pd.DataFrame) -> Non
     assert len(context) < 20_000
 
 
+def test_system_context_renders_notable_understanding_findings(simple_df: pd.DataFrame) -> None:
+    profile = {
+        "grain": {"grain": "mixed", "columns": ["order_id"], "mixed": True},
+        "join_keys": [],
+        "leakage": [],
+        "type_anomalies": [],
+    }
+
+    context = generate_system_context(simple_df, query="mean of A", understanding=profile)
+
+    assert "<data_understanding>" in context
+    assert "Mixed grain" in context
+
+
+def test_system_context_omits_the_understanding_block_when_nothing_is_notable(simple_df: pd.DataFrame) -> None:
+    clean_profile = {
+        "grain": {"grain": "row", "columns": [], "mixed": False},
+        "join_keys": [],
+        "leakage": [],
+        "type_anomalies": [],
+    }
+
+    context = generate_system_context(simple_df, query="mean of A", understanding=clean_profile)
+
+    assert "<data_understanding>" not in context
+
+
 def test_worker_prompt_carries_plan_and_error(simple_df: pd.DataFrame) -> None:
     prompt = create_prompt(
         "plot A",

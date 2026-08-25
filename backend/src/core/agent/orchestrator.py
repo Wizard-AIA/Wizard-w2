@@ -63,6 +63,7 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
+from src.core.analysis import understanding
 from src.core.analysis.state import AnalyticalState
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
@@ -666,6 +667,7 @@ class AnalysisOrchestrator:
         understood the question.
         """
         columns = [str(c) for c in session.df.columns]
+        self._ensure_understanding(state, session)
 
         # 1. Exact/semantic cache: a verified solution for this exact question.
         cached = semantic_cache.lookup(state.instruction, columns)
@@ -711,6 +713,7 @@ class AnalysisOrchestrator:
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "manager"),
             skills=skills_block,
+            understanding=state.analysis.understanding,
         )
 
         raw = await self._stream_plan(prompt, session, emitter)
@@ -1084,6 +1087,11 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STATUS, content="Examining the data", phase=Phase.INSPECTING.value)
 
         summary = await asyncio.to_thread(session.inspect, decision.goal, budget.max_columns)
+
+        profile = self._ensure_understanding(state, session)
+        notes = understanding.render(profile) if profile else ""
+        if notes:
+            summary = f"{summary}\n\n{notes}"
 
         state.investigation.record(
             Step(
@@ -1517,6 +1525,27 @@ class AnalysisOrchestrator:
         )
 
     @staticmethod
+    def _ensure_understanding(state: RunState, session: Session) -> dict[str, Any] | None:
+        """Computes the turn's data-understanding profile once, cached on `state.analysis`.
+
+        Built on the catalog already profiled at upload, so this costs no LLM round trip and is
+        safe to run before the very first prompt of a turn -- unlike `_verify` or code generation,
+        nothing here waits on a model.
+        """
+        if state.analysis.understanding is not None:
+            return state.analysis.understanding
+        if session.df is None:
+            return None
+        try:
+            state.analysis.understanding = understanding.understand(
+                session.df, tables=session.tables, catalog=session.catalog
+            )
+        except Exception as exc:
+            logger.error("Could not compute data understanding", error=str(exc))
+            state.analysis.understanding = {}
+        return state.analysis.understanding
+
+    @staticmethod
     def _record_execution_evidence(state: RunState, session: Session, goal: str) -> None:
         """Wires one successful step into the provenance graph: dataset -> code -> execution.
 
@@ -1720,6 +1749,7 @@ class AnalysisOrchestrator:
             negative_example=negative_example,
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "worker"),
+            understanding=self._ensure_understanding(state, session),
         )
 
         raw = await llm_provider.acomplete(

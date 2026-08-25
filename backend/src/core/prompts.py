@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from src.config import settings
+from src.core.analysis.understanding import render as render_understanding
 from src.core.rag.retriever import context_retriever
 
 
@@ -138,6 +139,7 @@ def generate_system_context(
     session_id: str | None = None,
     max_columns: int | None = None,
     redact: bool = False,
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Builds a size-bounded description of the active dataset.
 
@@ -145,6 +147,9 @@ def generate_system_context(
     values, per-column examples — leaving names, dtypes, null rates and shape.
     It is set per prompt from where that prompt is going, so a cloud-bound
     planner can be redacted while a local worker is not.
+
+    ``understanding`` is `core.analysis.understanding.understand`'s output, computed once per
+    turn by the orchestrator; only findings worth a warning are rendered, same as quality checks.
     """
     columns, truncated = context_retriever.select_columns(query or "", df, max_columns)
 
@@ -190,6 +195,11 @@ def generate_system_context(
         else ""
     )
 
+    understanding_notes = render_understanding(understanding) if understanding else ""
+    understanding_block = (
+        f"\n<data_understanding>\n{understanding_notes}\n</data_understanding>\n" if understanding_notes else ""
+    )
+
     return f"""<dataset_context>
 Shape: {len(df):,} rows x {len(df.columns)} columns.
 {truncation_note}{redaction_note}
@@ -211,7 +221,7 @@ Shape: {len(df):,} rows x {len(df.columns)} columns.
 
 <semantic_types>
 {semantic_block}
-</semantic_types>{_related_tables(query, session_id, columns)}
+</semantic_types>{understanding_block}{_related_tables(query, session_id, columns)}
 </dataset_context>"""
 
 
@@ -377,6 +387,7 @@ def create_prompt(
     negative_example: str | None = None,
     max_columns: int | None = None,
     redact: bool = False,
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Worker prompt: turn an approved plan into executable Python."""
     # The tier's column budget, not the global one. `TierBudget.max_columns`
@@ -385,7 +396,13 @@ def create_prompt(
     # and categorical values for 60 -- several thousand tokens it then had to
     # read before emitting anything, on the machine least able to afford it.
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
+        df,
+        catalog=catalog,
+        query=instruction,
+        session_id=session_id,
+        max_columns=max_columns,
+        redact=redact,
+        understanding=understanding,
     )
 
     plan_block = f"\n<approved_plan>\n{plan}\n</approved_plan>\n" if plan else ""
@@ -471,6 +488,7 @@ def create_planning_prompt(
     max_columns: int | None = None,
     redact: bool = False,
     skills: str = "",
+    understanding: dict[str, Any] | None = None,
 ) -> str:
     """Manager prompt: produce a plan, not code.
 
@@ -482,7 +500,13 @@ def create_planning_prompt(
     the skill informed. A regression test pins that.
     """
     context = generate_system_context(
-        df, catalog=catalog, query=instruction, session_id=session_id, max_columns=max_columns, redact=redact
+        df,
+        catalog=catalog,
+        query=instruction,
+        session_id=session_id,
+        max_columns=max_columns,
+        redact=redact,
+        understanding=understanding,
     )
 
     revision_block = ""

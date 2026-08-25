@@ -197,6 +197,32 @@ async def test_inspect_costs_no_model_call(loaded_session: Session, stub_llm) ->
     assert len(stub.prompts) == 6
 
 
+async def test_inspect_surfaces_a_dirty_join_key_across_loaded_tables(session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 4's acceptance criterion for the join-key detector, exercised through the loop
+    rather than the module directly: `orders.customer_id` is an int, `customers.customer_id`
+    is the same values zero-padded as strings -- a merge on it would silently drop every row.
+    """
+    session.add_dataset("orders.csv", pd.DataFrame({"customer_id": [1, 2, 3], "amount": [5, 7, 9]}))
+    session.add_dataset("customers.csv", pd.DataFrame({"customer_id": ["01", "02", "03"], "name": ["a", "b", "c"]}))
+    stub_llm(
+        [
+            "1. Look first",
+            "```python\nprint('start')\n```",
+            "ACTION: inspect\nGOAL: describe the columns",
+            "ACTION: answer\nGOAL: report",
+            "```python\npass\n```",
+            "Done.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=session, instruction="join them", mode="auto", emitter=collector)
+
+    observation = collector.of_type(EventType.OBSERVATION)[1]
+    assert "Dirty join key" in observation.data["summary"]
+    assert result.analysis["understanding"]["join_keys"][0]["dirty"] is True
+
+
 async def test_reflect_revises_the_plan_and_says_so(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """The plan is a living document. A revision is not a retry, and the UI has
     to be able to tell them apart."""
