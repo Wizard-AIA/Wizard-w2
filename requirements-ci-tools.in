@@ -3,7 +3,7 @@
 # compile command below) so pytest-cov cannot drag pytest to a version the
 # rest of the suite was never run against.
 #   uv pip compile requirements-ci-tools.in --constraints requirements.lock.txt \
-#     --universal --generate-hashes --emit-index-url --python-version 3.11 \
+#     --universal --generate-hashes --emit-index-url --python-version 3.12 \
 #     --output-file requirements-ci-tools.lock.txt
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 

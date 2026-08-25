@@ -5,7 +5,7 @@
 # versions would only produce a spurious conflict -- safety and the app disagree
 # on typer's version range, and they never share a Python environment to disagree in.
 #   uv pip compile requirements-audit-tools.in --universal --generate-hashes \
-#     --emit-index-url --python-version 3.11 --output-file requirements-audit-tools.lock.txt
+#     --emit-index-url --python-version 3.12 --output-file requirements-audit-tools.lock.txt
 -i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 
 # Safety's own vulnerability database is fetched at scan time, not baked into

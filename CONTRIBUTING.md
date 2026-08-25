@@ -26,7 +26,7 @@ Two rules that are easy to violate by accident:
 
 ## Setup
 
-**Prerequisites:** Python 3.11+, Node.js 20+, Ollama. Docker is optional and opt-in — the default `EXECUTION_BACKEND=host` runs generated code in a subprocess of the backend.
+**Prerequisites:** Python 3.12+, Node.js 20+, Ollama. Docker is optional and opt-in — the default `EXECUTION_BACKEND=host` runs generated code in a subprocess of the backend.
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/Wizard-w2.git

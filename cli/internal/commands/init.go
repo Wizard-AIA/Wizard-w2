@@ -11,7 +11,7 @@ import (
 
 const (
 	minPythonMajor = 3
-	minPythonMinor = 11
+	minPythonMinor = 12
 	minNodeMajor   = 20
 )
 

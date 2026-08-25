@@ -1,13 +1,13 @@
 # Backend API image.
 #
-# Python 3.11 to match `target-version` in pyproject.toml and the version CI
+# Python 3.12 to match `target-version` in pyproject.toml and the version CI
 # tests against; the previous 3.10 base meant the deployed runtime was never the
 # runtime the test suite exercised.
 #
 # Two things are deliberately *not* installed here:
 #
 #   build-essential   ~250 MB of compiler toolchain for a dependency set that is
-#                     entirely manylinux wheels on cp311. It was only ever
+#                     entirely manylinux wheels on cp312. It was only ever
 #                     needed by a package that no longer appears below.
 #   curl              the healthcheck runs on the interpreter that is already
 #                     here, so the image needs no apt layer at all.
@@ -16,7 +16,7 @@
 # a local subprocess -- so the analysis toolkit is not installed here either.
 FROM ghcr.io/astral-sh/uv:0.12.0@sha256:606e70c71c852d03f611b1e56a195d08648507018a7057fab82c4974c4eae105 AS uv
 
-FROM python:3.11-slim@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
+FROM python:3.12-slim@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17
 
 WORKDIR /app
 

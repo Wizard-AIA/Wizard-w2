@@ -3,7 +3,7 @@
 # CI and the Docker builds install `requirements.lock.txt`, not this file
 # directly -- this is the source `uv` compiles from:
 #   uv pip compile requirements.txt --universal --generate-hashes \
-#     --emit-index-url --python-version 3.11 --output-file requirements.lock.txt
+#     --emit-index-url --python-version 3.12 --output-file requirements.lock.txt
 # Regenerate the lock whenever a version here changes; `uv pip install
 # --require-hashes` fails loudly if the two drift apart.
 #
@@ -36,7 +36,10 @@ httpx==0.28.1
 # Data stack. Ingestion, profiling and Feather transport into the runtime --
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
-pandas==3.0.5
+# Held under 3.0 deliberately: pandas 3's new default StringDtype (replacing
+# object dtype for string columns) breaks dtype-based heuristics in
+# understanding.py/loader.py/redaction.py that assume `dtype == object`.
+pandas==2.3.3
 numpy==2.5.2
 pyarrow==25.0.1
 scipy==1.18.0
