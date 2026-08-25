@@ -70,10 +70,13 @@ func parseEnvValue(raw string) string {
 }
 
 // setEnvValue rewrites the first `KEY=...` assignment in a .env-style file to
-// `KEY="value"`, or appends one if the key is not present. Used only right
-// after ensureEnvFile creates a fresh backend/.env from .env.example -- an
-// existing .env is never passed through here, matching ensureEnvFile's own
-// "leaving it as is" guarantee for a file the user may have already edited.
+// `KEY="value"`, or appends one if the key is not present. Two callers:
+// ensureEnvFile, right after it creates a fresh backend/.env from
+// .env.example, and applyProviderConfig (provider.go), which applies
+// --provider/--data-mode/key flags to backend/.env whether or not it already
+// existed -- an explicit flag is a deliberate instruction, unlike
+// ensureEnvFile's own passive "leave an existing file as is" guarantee for
+// the parts of it nothing asked to change.
 func setEnvValue(path, key, value string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {

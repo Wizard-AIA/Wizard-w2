@@ -25,12 +25,36 @@ func RunInit(env *Env, args []string) int {
 	pullModels := fs.Bool("pull-models", false, "Also `ollama pull` a small default manager/worker pair if Ollama is present and no model is pinned.")
 	managerModel := fs.String("manager-model", "qwen3:8b", "Model to pull for the manager role with --pull-models.")
 	workerModel := fs.String("worker-model", "qwen2.5-coder:7b", "Model to pull for the worker role with --pull-models.")
+	provider := fs.String("provider", "", "Pin API_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty leaves backend/.env's existing/default value.")
+	dataMode := fs.String("data-mode", "", "Pin DATA_MODE: local-only | hybrid | cloud-only. Empty leaves it to derive -- see backend/.env.example.")
+	baseURL := fs.String("base-url", "", "Point --provider at a proxy: writes ANTHROPIC_BASE_URL/OPENAI_BASE_URL/GEMINI_BASE_URL/LMSTUDIO_BASE_URL/OLLAMA_BASE_URL depending on --provider.")
+	anthropicKey := fs.String("anthropic-key", "", "Write ANTHROPIC_API_KEY into backend/.env.")
+	openaiKey := fs.String("openai-key", "", "Write OPENAI_API_KEY into backend/.env.")
+	geminiKey := fs.String("gemini-key", "", "Write GEMINI_API_KEY into backend/.env.")
+	gatewayURL := fs.String("gateway-url", "", "Write GATEWAY_API_URL into backend/.env (custom_gateway provider).")
+	gatewayKey := fs.String("gateway-key", "", "Write GATEWAY_API_KEY into backend/.env (custom_gateway provider).")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	explicit := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	modelsExplicit := explicit["manager-model"] || explicit["worker-model"]
+
+	if *provider != "" && !validProviders[*provider] {
+		fmt.Fprintf(env.Err, "invalid --provider %q; must be one of: ollama, lmstudio, anthropic, openai, gemini, custom_gateway\n", *provider)
+		return 2
+	}
+	if *dataMode != "" && !validDataModes[*dataMode] {
+		fmt.Fprintf(env.Err, "invalid --data-mode %q; must be one of: local-only, hybrid, cloud-only\n", *dataMode)
+		return 2
+	}
+	// A pure-cloud setup (a cloud provider and not also hybrid) has no local
+	// weights to size -- RAM-based manager/worker fitting below is Ollama-tag
+	// arithmetic (modelfit.go) that means nothing for a model named on
+	// Anthropic/OpenAI/a gateway, so it and the default Ollama model pull are
+	// skipped in favor of MODEL_NAME/WORKER_MODEL_NAME staying empty
+	// (auto-select on that provider), same as .env.example's own default.
+	pureCloud := *provider != "" && cloudProviders[*provider] && *dataMode != "hybrid"
 
 	fmt.Fprintln(env.Out, "Checking prerequisites...")
 	python := CheckPython(minPythonMajor, minPythonMinor)
@@ -56,18 +80,23 @@ func RunInit(env *Env, args []string) int {
 	// their choice is respected either way, just accompanied by a fit note
 	// rather than silently swapped, matching how a Docker-unreachable
 	// fallback is announced elsewhere in this codebase rather than silent.
-	ramBytes, ramErr := hostinfo.TotalRAMBytes()
-	recManager, recWorker, overridden, reason := recommendModels(ramBytes, ramErr == nil, *managerModel, *workerModel)
 	resolvedManager, resolvedWorker := *managerModel, *workerModel
-	applied := overridden && !modelsExplicit
-	switch {
-	case overridden && modelsExplicit:
-		fmt.Fprintf(env.Out, "\n[HOST] %s (kept: --manager-model/--worker-model given explicitly)\n", reason)
-	case applied:
-		resolvedManager, resolvedWorker = recManager, recWorker
-		fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
-	default:
-		fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
+	applied := false
+	if pureCloud {
+		fmt.Fprintf(env.Out, "\n[CLOUD] provider=%s -- skipping local Ollama model sizing; MODEL_NAME/WORKER_MODEL_NAME stay empty (auto-select on %s) unless you pin one yourself.\n", *provider, *provider)
+	} else {
+		ramBytes, ramErr := hostinfo.TotalRAMBytes()
+		recManager, recWorker, overridden, reason := recommendModels(ramBytes, ramErr == nil, *managerModel, *workerModel)
+		applied = overridden && !modelsExplicit
+		switch {
+		case overridden && modelsExplicit:
+			fmt.Fprintf(env.Out, "\n[HOST] %s (kept: --manager-model/--worker-model given explicitly)\n", reason)
+		case applied:
+			resolvedManager, resolvedWorker = recManager, recWorker
+			fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
+		default:
+			fmt.Fprintf(env.Out, "\n[HOST] %s\n", reason)
+		}
 	}
 
 	if err := ensureEnvFile(env, applied, resolvedManager, resolvedWorker); err != nil {
@@ -75,12 +104,27 @@ func RunInit(env *Env, args []string) int {
 		return 1
 	}
 
+	cfg := providerConfig{
+		provider: *provider, dataMode: *dataMode, baseURL: *baseURL,
+		anthropicKey: *anthropicKey, openaiKey: *openaiKey, geminiKey: *geminiKey,
+		gatewayURL: *gatewayURL, gatewayKey: *gatewayKey,
+	}
+	if err := applyProviderConfig(env, cfg); err != nil {
+		fmt.Fprintf(env.Err, "Could not write provider settings to backend/.env: %v\n", err)
+		return 1
+	}
+	finalProvider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
+	warnMissingCloudConfig(env, finalProvider)
+
 	if err := installDependencies(env, python); err != nil {
 		fmt.Fprintf(env.Err, "%v\n", err)
 		return 1
 	}
 
-	if *pullModels {
+	switch {
+	case pureCloud && *pullModels:
+		fmt.Fprintln(env.Out, "\n--pull-models ignored: provider is a pure-cloud setup, so no local Ollama models are used by default. Pass --data-mode hybrid if you also want a local fallback model.")
+	case *pullModels:
 		if !ollama.Found {
 			fmt.Fprintln(env.Err, "\n--pull-models given but Ollama was not found on PATH; nothing was pulled.")
 			return 1
@@ -89,7 +133,7 @@ func RunInit(env *Env, args []string) int {
 		if !pullDefaultModels(env, resolvedManager, resolvedWorker) {
 			return 1
 		}
-	} else if ollama.Found {
+	case ollama.Found && !pureCloud:
 		fmt.Fprintln(env.Out, "\nOllama detected. Run `wizard init --pull-models` to also fetch a default manager/worker model pair.")
 	}
 

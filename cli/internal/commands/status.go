@@ -45,6 +45,23 @@ func RunStatus(env *Env, args []string) int {
 	printLogSize(env, "  frontend.log", env.FrontendLogPath())
 	printLogSize(env, "  daemon.log  ", env.DaemonLogPath())
 
+	provider, providerFound, providerErr := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
+	switch {
+	case providerErr != nil:
+		provider = fmt.Sprintf("(could not read backend/.env: %v)", providerErr)
+	case !providerFound || provider == "":
+		provider = "ollama (default)"
+	}
+	dataMode, dataModeFound, dataModeErr := readEnvValue(env.BackendEnvPath(), "DATA_MODE")
+	switch {
+	case dataModeErr != nil:
+		dataMode = fmt.Sprintf("(could not read backend/.env: %v)", dataModeErr)
+	case !dataModeFound || dataMode == "":
+		dataMode = "(empty -- derives to local-only, or cloud-only if API_PROVIDER is already a cloud backend)"
+	}
+	fmt.Fprintf(env.Out, "\nAPI_PROVIDER: %s\n", provider)
+	fmt.Fprintf(env.Out, "DATA_MODE:    %s\n", dataMode)
+
 	execBackend, found, err := readEnvValue(env.BackendEnvPath(), "EXECUTION_BACKEND")
 	switch {
 	case err != nil:
@@ -52,7 +69,7 @@ func RunStatus(env *Env, args []string) int {
 	case !found:
 		execBackend = "host (default; no backend/.env override)"
 	}
-	fmt.Fprintf(env.Out, "\nEXECUTION_BACKEND: %s\n", execBackend)
+	fmt.Fprintf(env.Out, "EXECUTION_BACKEND: %s\n", execBackend)
 	if execBackend == "docker" {
 		printDockerReachability(env)
 	}

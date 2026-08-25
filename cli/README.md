@@ -74,15 +74,82 @@ locates the checkout root by walking up looking for `backend/main.py` +
 
 | Command | What it does |
 |---|---|
-| `wizard init` | Checks Python 3.12+/Node 20+/uv/pnpm (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama/uv/pnpm themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. |
+| `wizard init` | Checks Python 3.12+/Node 20+/uv/pnpm (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama/uv/pnpm themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. `--provider`/`--data-mode`/key flags configure a local, hybrid or fully cloud setup in the same run — see [Local, hybrid and cloud setups](#local-hybrid-and-cloud-setups) below. |
 | `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits here in the foreground until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` override the 8000/3000 defaults; `--no-browser` skips opening one. |
 | `wizard stop` | Idempotent. Asks the supervisor to stop and waits for it to clean up; falls back to a forced kill of the recorded pids if it doesn't. |
-| `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
+| `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `API_PROVIDER`/`DATA_MODE`, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
 | `wizard update` | `git pull --ff-only`, reinstalls dependencies (the same steps as `init`), re-checks the compat marker. Restarts the daemon afterward if it was running before. Scoped to the checkout only this milestone — see below. |
 | `wizard skills add/list/update/discard/remove/token` | Fronts `backend/main.py skills` — the same install machinery (fetch, pin to a commit, show every skill's full contents, ask before writing) the REST routes and web UI's install-from-GitHub flow use, now also reachable from the compiled binary. Runs in the wizard-managed venv from `wizard init`; `add`/`update` prompt on a real terminal unless `--yes` is given. |
 | `wizard version` | Prints this binary's compiled-in compat version. |
+
+### Local, hybrid and cloud setups
+
+Wizard is local-first, not local-only: `wizard init` sets up a plain Ollama
+install by default, but the same command also configures a hybrid or fully
+cloud install in one run, rather than leaving that to a hand-edit of
+`backend/.env` afterward.
+
+```bash
+# Local (default) -- nothing to add.
+wizard init
+
+# Fully cloud: Anthropic for both roles, no local weights needed.
+wizard init --provider anthropic --anthropic-key sk-ant-...
+# --data-mode is left empty here on purpose: it derives to cloud-only once
+# API_PROVIDER is a cloud backend (see backend/.env.example) -- nothing to
+# pass unless you want to say so explicitly.
+
+# OpenAI instead:
+wizard init --provider openai --openai-key sk-...
+
+# Gemini, via its OpenAI-compatible endpoint:
+wizard init --provider gemini --gemini-key AI...
+
+# Any other OpenAI-compatible endpoint -- Groq, OpenRouter, Together, vLLM:
+wizard init --provider custom_gateway --gateway-url https://api.groq.com/openai/v1 --gateway-key gsk_...
+
+# Hybrid: keep the local Ollama pair init would otherwise pick, and also
+# make a cloud key available for whichever role you assign to it from the
+# Models page later.
+wizard init --data-mode hybrid --anthropic-key sk-ant-...
+
+# Point a provider at a proxy instead of its official endpoint.
+wizard init --provider openai --openai-key sk-... --base-url https://my-proxy.example/v1
+```
+
+A few things this does for you beyond writing the flag values into
+`backend/.env`:
+
+- A **pure-cloud** setup (`--provider` is `anthropic`/`openai`/`gemini`/
+  `custom_gateway` and `--data-mode` is not `hybrid`) skips the RAM-based
+  Ollama manager/worker sizing entirely — there is no local model to size —
+  and leaves `MODEL_NAME`/`WORKER_MODEL_NAME` empty (auto-select on that
+  provider) unless you pin one yourself.
+- Any provider other than plain `ollama` — including `lmstudio` — needs
+  `langchain-openai` (Anthropic needs `langchain-anthropic` too), which is
+  not in the base `requirements.txt`/`requirements-local.txt` install.
+  `wizard init`/`wizard update` read `API_PROVIDER`/`DATA_MODE` back out of
+  `backend/.env` and add `requirements-optional.txt` to the install
+  automatically when one of them needs it, so a cloud/hybrid setup ends up
+  with a working client, not an `ImportError` on the first turn.
+- A cloud provider missing its key (e.g. `--provider anthropic` with no
+  `--anthropic-key`) does not fail the run — it prints where to add the key
+  (`wizard init --anthropic-key ...` again, a hand-edit of `backend/.env`,
+  or the Models page once the app is running), the same detect-and-instruct
+  approach `wizard init` already takes for a missing Python/Node/Ollama.
+- Every flag here is also safe to run again against an **already
+  configured** `backend/.env` — unlike the passive RAM-based model pick
+  (which only ever applies to a freshly created file), an explicit
+  `--provider`/`--data-mode`/key flag is a deliberate instruction and always
+  takes effect, so `wizard init --data-mode cloud-only` is how you flip an
+  existing local install over later. It only ever writes the fields you
+  named; an existing key is never blanked by omitting its flag.
+- Nothing here changes where generated code actually runs — that is
+  `EXECUTION_BACKEND`/`SANDBOX_*`, an orthogonal axis `wizard init` never
+  touches with these flags. A cloud provider only changes where the
+  reasoning/code-writing model calls go.
 
 ## What's deliberately out of scope this milestone
 
@@ -122,6 +189,17 @@ locates the checkout root by walking up looking for `backend/main.py` +
   call on a given host, without a real Ollama registry lookup to size
   against — `wizard init` runs before one is reachable. It only overrides a
   model the user didn't already name; see the `wizard init` row above.
+- **Provider/data-mode config** (`internal/commands/provider.go`): mirrors
+  `backend/src/providers.py`'s provider table (kept in lockstep by hand, the
+  same as `internal/appdir`) closely enough to validate `--provider`/
+  `--data-mode` and know which `backend/.env` key each flag targets, without
+  asking the not-yet-running backend. `applyProviderConfig` writes only the
+  fields a flag actually named, against a fresh or pre-existing
+  `backend/.env` alike — a deliberate contrast with `ensureEnvFile`'s
+  passive, fresh-file-only RAM-based model pick just above it.
+  `needsOptionalRequirements` (`deps.go`) reads `API_PROVIDER`/`DATA_MODE`
+  back out of `backend/.env` rather than being told, so `wizard update`
+  reinstalls correctly with no state of its own to keep in sync with `init`.
 - **Process supervision** (`internal/daemon`): `wizard start` re-execs
   itself into a detached, hidden `__supervise` subcommand so the
   supervision loop survives the `start` command returning. The supervisor
