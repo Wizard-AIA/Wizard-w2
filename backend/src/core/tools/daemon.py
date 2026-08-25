@@ -43,6 +43,7 @@ PROBE_MODULES: tuple[str, ...] = (
     "numpy",
     "pyarrow",
     "duckdb",
+    "polars",
     "scipy",
     "statsmodels",
     "sklearn",
@@ -269,11 +270,16 @@ def run_server(port=%(port)d):
     import pandas as pd
 
     try:
+        import polars as pl
+    except Exception:
+        pl = None
+
+    try:
         import seaborn as sns
     except Exception:
         sns = None
 
-    exec_globals = {"pd": pd, "np": np, "plt": plt, "sns": sns, "__builtins__": __builtins__}
+    exec_globals = {"pd": pd, "np": np, "pl": pl, "plt": plt, "sns": sns, "__builtins__": __builtins__}
     load_dataset(exec_globals, pd)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -332,7 +338,7 @@ def run_server(port=%(port)d):
             if action == "reset":
                 exec_globals.clear()
                 exec_globals.update(
-                    {"pd": pd, "np": np, "plt": plt, "sns": sns, "__builtins__": __builtins__}
+                    {"pd": pd, "np": np, "pl": pl, "plt": plt, "sns": sns, "__builtins__": __builtins__}
                 )
                 load_dataset(exec_globals, pd)
                 send_message(conn, {"status": "success"})

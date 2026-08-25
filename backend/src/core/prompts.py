@@ -291,6 +291,7 @@ A pandas DataFrame named `df` is already loaded with columns: {columns}
 #: rather than listed together.
 TOOLKIT: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Dataframes & numerics", "pandas (`pd`), numpy (`np`)", ("pandas", "numpy")),
+    ("Large dataframe execution", "polars (`pl`) — lazy, multithreaded group-bys, joins and aggregations", ("polars",)),
     ("Columnar I/O", "pyarrow — read and write parquet and feather", ("pyarrow",)),
     (
         "SQL over dataframes",
@@ -444,7 +445,7 @@ Translate the request into flawless, executable Python.
 2. The active dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
 3. Every other table in this session is loaded too, in the dict `tables` keyed by name. Join
    across them directly -- `tables['orders'].merge(tables['customers'], on='customer_id')`.
-4. `pd`, `np`, `plt` and `sns` are already imported. Everything else must be imported.
+4. `pd`, `np`, `pl`, `plt` and `sns` are already imported when the runtime provides them. Everything else must be imported.
 5. Print anything the user should see. Results that are not printed are invisible.
 6. Never print a whole DataFrame -- use `.head()`, `.describe()` or an aggregation.
 {_visualization_rules(session_id)}
@@ -456,7 +457,9 @@ Translate the request into flawless, executable Python.
 {_toolkit_block(session_id)}
 
 Use the right tool for the job. Write vectorised pandas or a duckdb query rather than a Python
-loop over rows, and use the library that already implements a method rather than reimplementing it.
+loop over rows. For datasets above 100,000 rows, or expensive multi-column group-bys and joins,
+prefer Polars lazy execution (`pl.scan_*` or `pl.from_pandas(df).lazy()`) when it is listed above.
+Use the library that already implements a method rather than reimplementing it.
 </available_libraries>
 
 {context}

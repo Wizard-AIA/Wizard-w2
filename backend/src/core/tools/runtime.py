@@ -310,7 +310,7 @@ def missing_modules(names: frozenset[str], session_id: str | None = None) -> fro
 #: and is only a fallback for "the container is not up yet" -- once a runtime
 #: exists, its own report wins.
 TIER_MODULES: dict[str, frozenset[str]] = {
-    "core": frozenset({"pandas", "numpy", "pyarrow", "matplotlib", "duckdb", "openpyxl"}),
+    "core": frozenset({"pandas", "numpy", "pyarrow", "matplotlib", "duckdb", "polars", "openpyxl"}),
     "standard": frozenset(
         {
             "pandas",
@@ -318,6 +318,7 @@ TIER_MODULES: dict[str, frozenset[str]] = {
             "pyarrow",
             "matplotlib",
             "duckdb",
+            "polars",
             "openpyxl",
             "scipy",
             "statsmodels",

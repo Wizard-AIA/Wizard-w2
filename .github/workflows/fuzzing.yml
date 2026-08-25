@@ -1,0 +1,45 @@
+name: Property-based fuzzing
+
+on:
+  pull_request:
+    paths:
+      - "backend/src/core/security/**"
+      - "backend/src/core/ingest/**"
+      - "backend/tests/security/**"
+      - ".github/workflows/fuzzing.yml"
+  push:
+    branches: ["master", "main"]
+  schedule:
+    - cron: "45 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - name: Install backend and fuzzing dependencies
+        run: |
+          uv pip install --system --require-hashes -r requirements.lock.txt
+          uv pip install --system "hypothesis==6.138.4"
+      - name: Run fuzzing properties
+        env:
+          ENV: test
+          SANDBOX_ENABLED: "false"
+          EXECUTION_BACKEND: inprocess
+          HOST_SANDBOX: off
+          DATA_MODE: hybrid
+          EMBEDDINGS_FORCE_FALLBACK: "true"
+        run: pytest backend/tests/security/test_fuzzing.py -q

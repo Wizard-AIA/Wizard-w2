@@ -3,7 +3,7 @@
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Loader2, Table2 } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
-import { api } from "@/lib/api"
+import { loadArrowPreview } from "@/lib/arrow"
 import { cn } from "@/lib/utils"
 
 interface DataGridProps {
@@ -36,11 +36,11 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
     setLoading(true)
     setError(null)
     try {
-      const response = await api.preview({ page, perPage, sortBy, sortOrder, dataset })
+      const response = await loadArrowPreview({ page, perPage, sortBy, sortOrder, dataset })
       setRows(response.data)
       setColumns(response.columns)
-      setTotalRows(response.total_rows)
-      setTotalPages(response.total_pages)
+      setTotalRows(response.totalRows)
+      setTotalPages(Math.max(1, Math.ceil(response.totalRows / perPage)))
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : "Could not load the preview.")
       setRows([])

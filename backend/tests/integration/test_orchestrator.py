@@ -156,6 +156,28 @@ async def test_fast_mode_runs_end_to_end(loaded_session: Session, stub_llm) -> N
     assert EventType.FINAL in types
 
 
+async def test_worker_can_execute_a_polars_group_by(loaded_session: Session, stub_llm) -> None:
+    # The production CI suite installs the API lock only; local analysis
+    # libraries are intentionally optional there. The Docker/local-analysis
+    # environments install Polars and exercise this path when it is available.
+    pytest.importorskip("polars")
+    stub_llm(
+        [
+            "1. Group the data with Polars\n2. Report the totals",
+            "```python\nprint(pl.from_pandas(df).group_by('C').agg(pl.col('A').sum()))\n```",
+            "The grouped totals are available.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="group A by C", mode="fast", emitter=EventCollector()
+    )
+
+    assert result.status == "completed"
+    assert result.code
+    assert "group_by" in result.code
+
+
 async def test_run_carries_and_persists_analytical_state(loaded_session: Session, stub_llm) -> None:
     """Phase 1: `analysis` rides alongside the existing result fields, and its
     findings/assumptions agree with the Investigation-derived ones -- the loop's
