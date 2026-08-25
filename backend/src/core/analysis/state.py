@@ -40,6 +40,8 @@ class AnalyticalState:
     validations: list[dict[str, Any]] = field(default_factory=list)
     #: Populated by Phase 7's adversarial critic.
     critic_findings: list[dict[str, Any]] = field(default_factory=list)
+    #: Populated by Phase 8's competing-methods comparison, one entry per `parallel` fan-out.
+    route_comparisons: list[dict[str, Any]] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     #: Populated by Phase 9's confidence rubric.
     confidence: dict[str, Any] | None = None
@@ -68,6 +70,7 @@ class AnalyticalState:
             "evidence_refs": self.evidence_refs,
             "validations": self.validations,
             "critic_findings": self.critic_findings,
+            "route_comparisons": self.route_comparisons,
             "open_questions": self.open_questions,
             "confidence": self.confidence,
         }
@@ -85,6 +88,7 @@ class AnalyticalState:
             evidence_refs=list(data.get("evidence_refs") or []),
             validations=list(data.get("validations") or []),
             critic_findings=list(data.get("critic_findings") or []),
+            route_comparisons=list(data.get("route_comparisons") or []),
             open_questions=list(data.get("open_questions") or []),
             confidence=data.get("confidence"),
             _findings_snapshot=list(data.get("findings") or []),

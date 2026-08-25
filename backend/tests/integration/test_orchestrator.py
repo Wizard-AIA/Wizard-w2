@@ -177,7 +177,17 @@ async def test_run_carries_and_persists_analytical_state(loaded_session: Session
     assert isinstance(result.analysis, dict)
     assert result.analysis["findings"] == result.findings
     assert result.analysis["assumptions"] == result.assumptions
-    assert result.analysis["objective"] is None  # not populated until a later phase
+    assert result.analysis["objective"] == {  # populated deterministically since Phase 8
+        "question": "how big is this data",
+        "analytical_type": None,  # no keyword in `_TYPE_KEYWORDS` matches this phrasing
+        "unit_of_analysis": None,
+        "population": None,
+        "time_dimension": None,
+        "likely_variables": {},
+        "constraints": [],
+        "expected_output": None,
+        "ambiguity": [],
+    }
 
     final = collector.of_type(EventType.FINAL)[0]
     assert final.data["analysis"] == result.analysis

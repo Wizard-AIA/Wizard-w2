@@ -63,7 +63,8 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
-from src.core.analysis import critic, understanding
+from src.core.analysis import competing, critic, understanding
+from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
 from src.core.analysis.validation.registry import run_validators
@@ -200,6 +201,8 @@ class RunState:
 
     def __post_init__(self) -> None:
         self.analysis.investigation = self.investigation
+        # Deferred by Phase 1; filled in now since Phase 8's route comparison needs it.
+        self.analysis.objective = AnalyticalObjective.infer(self.instruction)
 
     @property
     def elapsed_ms(self) -> int:
@@ -1391,6 +1394,7 @@ class AnalysisOrchestrator:
                 ]
 
         summary_lines: list[str] = []
+        route_results: list[competing.RouteResult] = []
         for (branch, subgoal, child_id), result in zip(branches, results, strict=True):
             # Registered -- and its usage read -- whether or not the branch
             # finished: a timeout or an exception can still land after it has
@@ -1401,6 +1405,7 @@ class AnalysisOrchestrator:
             if isinstance(result, BaseException) or result is None:
                 reason = str(result) if isinstance(result, BaseException) else "did not finish in time"
                 summary_lines.append(f"[{branch}] did not complete: {reason}")
+                route_results.append(competing.RouteResult(branch, competing.detect_method(subgoal), "", False))
                 await emit(
                     emitter,
                     EventType.SUBAGENT_END,
@@ -1413,6 +1418,15 @@ class AnalysisOrchestrator:
                 )
             else:
                 observation = result.investigation.executed_output or "No output was produced."
+                route_results.append(
+                    competing.RouteResult(
+                        branch,
+                        competing.detect_method(subgoal),
+                        observation,
+                        result.ok,
+                        code=result.investigation.last_successful_code or "",
+                    )
+                )
                 state.investigation.record(
                     Step(
                         index=state.iterations_used,
@@ -1460,6 +1474,36 @@ class AnalysisOrchestrator:
             # before dispatch), so this is the only frame that can carry it --
             # a client associates the trail entry with its branches from here.
             group=group,
+        )
+
+        if budget.tier == "full" and competing.is_high_impact_or_ambiguous(state.analysis.objective):
+            await self._compare_routes(state, session, emitter, route_results, group)
+
+    @staticmethod
+    async def _compare_routes(
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        route_results: list[competing.RouteResult],
+        group: str,
+    ) -> None:
+        """Phase 8: when a `parallel` fan-out ran competing routes on a high-impact or
+        ambiguous objective, compares what came back deterministically -- see
+        `analysis.competing.compare_routes`. Never picks a winner silently."""
+        if len(route_results) < 2:
+            return
+        comparison = competing.compare_routes(route_results, df=session.df)
+        state.analysis.route_comparisons.append(comparison.to_dict())
+        await emit(
+            emitter,
+            EventType.ROUTE_COMPARISON,
+            group=group,
+            verdict=comparison.verdict,
+            routes=comparison.routes,
+            agreement_detail=comparison.agreement_detail,
+            more_appropriate=comparison.more_appropriate,
+            why=comparison.why,
+            residual_uncertainty=comparison.residual_uncertainty,
         )
 
     async def _run_subagent(

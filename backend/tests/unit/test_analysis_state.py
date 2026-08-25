@@ -71,6 +71,7 @@ def test_state_defaults_are_all_empty_or_none() -> None:
     assert state.evidence_refs == []
     assert state.validations == []
     assert state.critic_findings == []
+    assert state.route_comparisons == []
     assert state.open_questions == []
     assert state.confidence is None
     assert state.findings == []
@@ -115,6 +116,7 @@ def test_state_round_trips_through_dict_including_objective() -> None:
         evidence_refs=[execution_id],
         validations=[{"kind": "computational", "status": "verified"}],
         critic_findings=[{"category": "leakage", "severity": "error", "message": "x", "detail": ""}],
+        route_comparisons=[{"verdict": "agree", "routes": ["sub1", "sub2"]}],
         open_questions=["was the promo region-specific or timing coincidence?"],
         confidence={"overall": "medium"},
         investigation=investigation,
@@ -130,6 +132,7 @@ def test_state_round_trips_through_dict_including_objective() -> None:
     assert restored.evidence_refs == [execution_id]
     assert restored.validations == [{"kind": "computational", "status": "verified"}]
     assert restored.critic_findings == [{"category": "leakage", "severity": "error", "message": "x", "detail": ""}]
+    assert restored.route_comparisons == [{"verdict": "agree", "routes": ["sub1", "sub2"]}]
     assert restored.open_questions == ["was the promo region-specific or timing coincidence?"]
     assert restored.confidence == {"overall": "medium"}
     # The snapshot, not a live Investigation -- from_dict never reconstructs one.

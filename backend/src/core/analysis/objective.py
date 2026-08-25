@@ -33,6 +33,27 @@ AnalyticalType = Literal[
 #: Used to validate a deserialised type without guessing at an unknown one.
 ANALYTICAL_TYPES: frozenset[str] = frozenset(get_args(AnalyticalType))
 
+#: `AnalyticalObjective.infer`'s keyword table -- more specific readings first, since an
+#: instruction like "compare the correlation" should read as comparative before inferential.
+_TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("causal_looking", ("causes", "caused by", "because of", "leads to", "effect of", "impact of")),
+    ("hypothesis_test", ("significant", "hypothesis", "statistically", "is there a difference")),
+    ("comparative", ("compare", "versus", " vs ", "difference between", "which is higher", "which is better")),
+    ("forecasting", ("forecast", "next quarter", "next year", "next month")),
+    ("predictive", ("predict", "will ", "expected to", "likely to")),
+    ("anomaly", ("anomaly", "outlier", "unusual", "unexpected")),
+    ("cohort", ("cohort", "retention")),
+    ("segmentation", ("segment", "cluster", "group by")),
+    ("longitudinal", ("over time", "trend", "year over year", "month over month")),
+    ("multi_table", ("join", "merge", "across tables")),
+    ("model_based", ("model", "regression", "classify", "classification")),
+    ("inferential", ("correlate", "correlation", "relationship", "associated", "association")),
+    ("diagnostic", ("why did", "why is", "root cause")),
+    ("exploratory", ("explore", "understand the", "overview", "summarize the data")),
+    ("evidence_synthesis", ("synthesize", "across all sources")),
+    ("descriptive", ("how many", "what is the", "total ", "average ", "count ", "sum of")),
+)
+
 
 @dataclass
 class AnalyticalObjective:
@@ -62,6 +83,19 @@ class AnalyticalObjective:
             "expected_output": self.expected_output,
             "ambiguity": self.ambiguity,
         }
+
+    @classmethod
+    def infer(cls, instruction: str) -> AnalyticalObjective:
+        """A cheap, deterministic first reading of the question -- keyword-matched against
+        this module's own `AnalyticalType` vocabulary, never a guess past what the wording
+        actually says. `analytical_type` stays `None`, not a default, when nothing matches."""
+        lowered = (instruction or "").lower()
+        analytical_type = None
+        for candidate, keywords in _TYPE_KEYWORDS:
+            if any(keyword in lowered for keyword in keywords):
+                analytical_type = candidate
+                break
+        return cls(question=instruction or "", analytical_type=analytical_type)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AnalyticalObjective:
