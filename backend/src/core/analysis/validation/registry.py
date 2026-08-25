@@ -50,3 +50,12 @@ def run_validators(ctx: ValidationContext, tier: str) -> list[Finding]:
         if validator.applicable(ctx):
             findings.extend(validator.validate(ctx))
     return findings
+
+
+def cache_key(*, tier: str, code: str, content_hash: str, method: str, recomputation_status: str) -> str:
+    """A stable key for one `run_validators` call -- Phase 14: every validator here is a pure
+    function of `ValidationContext`, so the exact same (tier, code, dataset, method, verification
+    outcome) combination is guaranteed to produce the exact same findings, and a cache hit can
+    skip re-running all eight without approximating anything.
+    """
+    return f"{tier}::{content_hash}::{method}::{recomputation_status}::{code}"

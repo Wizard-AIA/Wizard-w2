@@ -45,6 +45,7 @@ Fixes carried in from the earlier audit, still load-bearing
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import posixpath
 import re
 import time
@@ -68,7 +69,7 @@ from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.runs import ExecutedStep, capture, dataset_manifest_from_session
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
-from src.core.analysis.validation.registry import run_validators
+from src.core.analysis.validation.registry import cache_key as validation_cache_key, run_validators
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
@@ -1585,6 +1586,11 @@ class AnalysisOrchestrator:
         classify <column>" phrase in the instruction) and a time column (the one column already
         profiled as temporal) so leakage and temporal checks actually fire in the live loop --
         both stay `None`, and both checks stay silent, rather than guess.
+
+        Phase 14: also cached across turns, keyed by every loaded table's content hash plus the
+        resolved target/time_column/analytical_type -- `understand()` is a pure function of these,
+        so a repeated turn against unchanged data reuses the result instead of rescanning a
+        dataframe that has not moved (`understanding.cache_key`, `session.*_understanding` cache).
         """
         if state.analysis.understanding is not None:
             return state.analysis.understanding
@@ -1594,14 +1600,25 @@ class AnalysisOrchestrator:
             objective = state.analysis.objective
             objective.resolve_variables(session.df.columns)
             target = (objective.likely_variables.get("dependent") or [None])[0]
-            state.analysis.understanding = understanding.understand(
+            time_column = understanding.resolve_time_column(session.catalog)
+            table_hashes = tuple((handle.table_key, handle.content_hash) for handle in session.datasets.values())
+            key = understanding.cache_key(
+                table_hashes, target=target, time_column=time_column, analytical_type=objective.analytical_type
+            )
+            cached = session.get_cached_understanding(key)
+            if cached is not None:
+                state.analysis.understanding = cached
+                return cached
+            result = understanding.understand(
                 session.df,
                 tables=session.tables,
                 catalog=session.catalog,
                 target=target,
-                time_column=understanding.resolve_time_column(session.catalog),
+                time_column=time_column,
                 analytical_type=objective.analytical_type,
             )
+            session.cache_understanding(key, result)
+            state.analysis.understanding = result
         except Exception as exc:
             logger.error("Could not compute data understanding", error=str(exc))
             state.analysis.understanding = {}
@@ -1913,15 +1930,27 @@ class AnalysisOrchestrator:
         denominator all produce confident, plausible, wrong numbers that no
         self-review catches -- because the model reviewing is the model that made
         the mistake. An independent recomputation does catch them.
+
+        Phase 14: skips the LLM call and the second execution entirely when this exact code
+        already ran against this exact dataset earlier this session (`session.*_verification`
+        cache, keyed on the code and the active dataset's content hash) -- re-deriving a result
+        that is guaranteed identical is a model call that would buy nothing.
         """
         if not settings.AGENT_VERIFY or not budget.allow_verification:
             return
         if state.blocked or state.error or not state.code or state.from_cache:
             return
-        if self._out_of_time(state):
+
+        handle = session.active_handle
+        verification_key = hashlib.blake2b(
+            f"{state.code}::{handle.content_hash if handle else ''}".encode(), digest_size=12
+        ).hexdigest()
+        cached = session.get_cached_verification(verification_key)
+
+        if cached is None and self._out_of_time(state):
             # A second code generation *and* a second execution. It is the most
             # expensive thing left in the turn, so it is the first thing a
-            # deadline gives up.
+            # deadline gives up -- unless a cache hit already made it free.
             logger.info("Skipping verification, turn deadline reached", elapsed_ms=state.elapsed_ms)
             return
 
@@ -1929,50 +1958,56 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STEP_START, id="verify", label="Verifying the result", kind="verify")
         await emit(emitter, EventType.STATUS, content="Verifying the result", phase=Phase.VERIFYING.value)
 
-        try:
-            raw = await llm_provider.acomplete(
-                create_verification_prompt(state.instruction, state.code, state.output),
-                role=LLMRole.WORKER,
-                model=session.models.worker,
-                temperature=session.models.temperature,
-                provider=session.models.worker_provider,
-                max_tokens=settings.output_budget("code"),
-                data_mode=session.data_mode,
-                session_id=session.id,
-            )
-        except LLMUnavailableError:
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        code = self._extract_code(raw)
-        if not code:
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        # Verification is independently generated code, so it can want a library
-        # the analysis itself did not. Gating it here is what stops the check
-        # being a way round the gate on the thing it is checking.
-        if not await self._permit_install(state, session, emitter, code):
-            await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
-            return
-
-        result = await asyncio.to_thread(
-            session.executor.execute, code, session.df, None, session.tables, session.permissions.extra_roots
-        )
-        output = (result.output or "").strip()
-
-        if not result.ok:
-            # A verification that cannot run says nothing about the analysis.
-            status, detail = "inconclusive", "The verification step could not be executed."
-        elif MISMATCH_MARKER in output:
-            status, detail = "mismatch", output
-            state.warnings.append(
-                "Independent verification disagreed with the analysis. The result below is not trustworthy."
-            )
-        elif VERIFIED_MARKER in output:
-            status, detail = "verified", output
+        if cached is not None:
+            status, detail = cached
         else:
-            status, detail = "inconclusive", output
+            try:
+                raw = await llm_provider.acomplete(
+                    create_verification_prompt(state.instruction, state.code, state.output),
+                    role=LLMRole.WORKER,
+                    model=session.models.worker,
+                    temperature=session.models.temperature,
+                    provider=session.models.worker_provider,
+                    max_tokens=settings.output_budget("code"),
+                    data_mode=session.data_mode,
+                    session_id=session.id,
+                )
+            except LLMUnavailableError:
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            code = self._extract_code(raw)
+            if not code:
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            # Verification is independently generated code, so it can want a library
+            # the analysis itself did not. Gating it here is what stops the check
+            # being a way round the gate on the thing it is checking.
+            if not await self._permit_install(state, session, emitter, code):
+                await emit(emitter, EventType.STEP_END, id="verify", ok=False, duration_ms=state.elapsed_ms)
+                return
+
+            result = await asyncio.to_thread(
+                session.executor.execute, code, session.df, None, session.tables, session.permissions.extra_roots
+            )
+            output = (result.output or "").strip()
+
+            if not result.ok:
+                # A verification that cannot run says nothing about the analysis, and might
+                # succeed on a retry -- never cached, unlike a definitive marker below.
+                status, detail = "inconclusive", "The verification step could not be executed."
+            elif MISMATCH_MARKER in output:
+                status, detail = "mismatch", output
+                state.warnings.append(
+                    "Independent verification disagreed with the analysis. The result below is not trustworthy."
+                )
+                session.cache_verification(verification_key, (status, detail))
+            elif VERIFIED_MARKER in output:
+                status, detail = "verified", output
+                session.cache_verification(verification_key, (status, detail))
+            else:
+                status, detail = "inconclusive", output
 
         state.verification = detail
         self._record_validation_evidence(state, status, detail)
@@ -1988,7 +2023,7 @@ class AnalysisOrchestrator:
             recomputation_status=status,
             recomputation_detail=detail,
         )
-        self._run_validators(state, ctx)
+        self._run_validators(state, ctx, session)
         await self._run_critic(state, ctx, emitter)
         await self._compute_confidence(state, session, status, budget, emitter)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
@@ -2036,16 +2071,31 @@ class AnalysisOrchestrator:
         )
 
     @staticmethod
-    def _run_validators(state: RunState, ctx: ValidationContext) -> None:
+    def _run_validators(state: RunState, ctx: ValidationContext, session: Session) -> None:
         """Runs the tier's affordable validators and folds their findings into the turn.
 
         Reached only when `_verify` itself ran, so this never fires below balanced tier -- the
         same gate that already turns off the recomputation these findings are partly built from.
+
+        Phase 14: cached across turns by (tier, code, dataset, method, verification outcome) --
+        every validator here is a pure function of `ctx`, so an exact-match cache hit skips
+        re-running all eight without approximating anything (`session.*_validations` cache).
         """
         try:
-            findings = run_validators(ctx, state.tier)
-            state.analysis.validations.extend(finding.to_dict() for finding in findings)
-            state.warnings.extend(finding.message for finding in findings if finding.severity != "info")
+            handle = session.active_handle
+            key = validation_cache_key(
+                tier=state.tier,
+                code=state.code,
+                content_hash=handle.content_hash if handle else "",
+                method=ctx.method or "",
+                recomputation_status=ctx.recomputation_status or "",
+            )
+            cached = session.get_cached_validations(key)
+            if cached is None:
+                cached = [finding.to_dict() for finding in run_validators(ctx, state.tier)]
+                session.cache_validations(key, cached)
+            state.analysis.validations.extend(cached)
+            state.warnings.extend(finding["message"] for finding in cached if finding["severity"] != "info")
         except Exception as exc:
             logger.error("Could not run validators", error=str(exc))
 

@@ -1016,3 +1016,69 @@ async def test_usage_is_recorded_even_when_the_turn_fails(
     )
 
     assert db_mgr.skill_usage_summary().get("cohort-method", {}).get("uses") == 1
+
+
+async def test_repeating_the_same_analysis_reuses_every_phase_14_cache(
+    loaded_session: Session,
+    stub_llm,
+    monkeypatch,  # noqa: F811
+) -> None:
+    """Phase 14: a second turn against the exact same code and the exact same dataset skips the
+    verification model call, the data-understanding recomputation, and the validator re-run --
+    all three are pure functions of inputs that have not changed, so reusing the first turn's
+    results is exact, never an approximation. This is the benchmark harness's own `score_cost`
+    metric (model calls per turn) proved directly: the second turn needs one fewer LLM call for
+    the identical shape of turn.
+    """
+    import src.core.agent.orchestrator as orchestrator_module
+    from src.core.analysis import understanding as understanding_module
+
+    understand_calls = 0
+    real_understand = understanding_module.understand
+
+    def counting_understand(*args, **kwargs):
+        nonlocal understand_calls
+        understand_calls += 1
+        return real_understand(*args, **kwargs)
+
+    monkeypatch.setattr(understanding_module, "understand", counting_understand)
+
+    validator_calls = 0
+    real_run_validators = orchestrator_module.run_validators
+
+    def counting_run_validators(*args, **kwargs):
+        nonlocal validator_calls
+        validator_calls += 1
+        return real_run_validators(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator_module, "run_validators", counting_run_validators)
+
+    full_turn = [
+        "1. Compute",
+        "```python\nprint(df['A'].sum())\n```",
+        "ACTION: answer\nGOAL: report",
+        "```python\nprint('VERIFIED: ok')\n```",
+        "The total is 15.",
+    ]
+    stub_llm(list(full_turn))
+    result1 = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    # A differently-worded instruction, so the (unrelated) semantic cache's exact-match lookup
+    # does not itself short-circuit this turn before Phase 14's caches are ever reached -- the
+    # code produced is still byte-identical, which is what every cache here actually keys on.
+    # No verify-code response this time -- a cache hit must mean it is never asked for.
+    second_turn_stub = stub_llm(
+        ["1. Compute", "```python\nprint(df['A'].sum())\n```", "ACTION: answer\nGOAL: report", "The total is 15."]
+    )
+    result2 = await orchestrator.run(
+        session=loaded_session, instruction="recompute the total of A", mode="auto", emitter=EventCollector()
+    )
+
+    assert result1.status == "completed"
+    assert result2.status == "completed"
+    assert len(second_turn_stub.prompts) == 4, "the verification model call should have been skipped"
+    assert result2.verification == result1.verification
+    assert understand_calls == 1, "the second turn should reuse the cached understanding"
+    assert validator_calls == 1, "the second turn should reuse the cached validator findings"

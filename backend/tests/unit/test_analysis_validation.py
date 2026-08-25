@@ -15,7 +15,7 @@ from src.core.analysis.validation.base import Finding, ValidationContext
 from src.core.analysis.validation.computational import ComputationalValidator
 from src.core.analysis.validation.consistency import ConsistencyValidator
 from src.core.analysis.validation.data import DataValidator
-from src.core.analysis.validation.registry import ALL_VALIDATORS, TIER_VALIDATORS, run_validators
+from src.core.analysis.validation.registry import ALL_VALIDATORS, TIER_VALIDATORS, cache_key, run_validators
 from src.core.analysis.validation.reproducibility import ReproducibilityValidator
 from src.core.analysis.validation.semantic import SemanticValidator
 from src.core.analysis.validation.sensitivity import SensitivityValidator
@@ -267,6 +267,40 @@ def test_run_validators_only_returns_findings_from_applicable_validators() -> No
     assert "reproducibility" in validators_that_fired  # unseeded .sample(
     assert "sensitivity" not in validators_that_fired  # balanced tier excludes it
     assert "semantic" not in validators_that_fired  # no plotting code
+
+
+# --------------------------------------------------------------------------- #
+# cache_key (Phase 14) -- every validator is a pure function of ValidationContext, so an
+# identical key must mean an identical result is guaranteed, never approximated.
+# --------------------------------------------------------------------------- #
+def test_cache_key_is_identical_for_identical_inputs() -> None:
+    kwargs = {
+        "tier": "balanced",
+        "code": "df.sum()",
+        "content_hash": "abc",
+        "method": "",
+        "recomputation_status": "verified",
+    }
+
+    assert cache_key(**kwargs) == cache_key(**kwargs)
+
+
+def test_cache_key_changes_when_the_dataset_changes() -> None:
+    kwargs = {"tier": "balanced", "code": "df.sum()", "method": "", "recomputation_status": "verified"}
+
+    assert cache_key(**kwargs, content_hash="abc") != cache_key(**kwargs, content_hash="xyz")
+
+
+def test_cache_key_changes_when_the_code_changes() -> None:
+    kwargs = {"tier": "balanced", "content_hash": "abc", "method": "", "recomputation_status": "verified"}
+
+    assert cache_key(**kwargs, code="df.sum()") != cache_key(**kwargs, code="df.mean()")
+
+
+def test_cache_key_changes_when_the_verification_outcome_changes() -> None:
+    kwargs = {"tier": "balanced", "code": "df.sum()", "content_hash": "abc", "method": ""}
+
+    assert cache_key(**kwargs, recomputation_status="verified") != cache_key(**kwargs, recomputation_status="mismatch")
 
 
 def test_run_validators_on_full_tier_reaches_sensitivity() -> None:

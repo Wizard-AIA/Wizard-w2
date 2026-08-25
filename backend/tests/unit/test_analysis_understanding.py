@@ -9,6 +9,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.core.analysis.understanding import (
+    cache_key,
     candidate_identifiers,
     candidate_join_keys,
     cardinality_profile,
@@ -216,6 +217,39 @@ def test_resolve_time_column_is_none_when_there_are_several_candidates() -> None
 def test_resolve_time_column_is_none_with_no_temporal_column_or_no_catalog() -> None:
     assert resolve_time_column({"columns": {"amount": {"semantic_type": "numeric"}}}) is None
     assert resolve_time_column(None) is None
+
+
+# --------------------------------------------------------------------------- #
+# cache_key (Phase 14) -- understand() is a pure function of these inputs, so an identical key
+# must guarantee an identical result.
+# --------------------------------------------------------------------------- #
+def test_cache_key_is_identical_for_identical_inputs() -> None:
+    tables = (("orders", "hash1"), ("customers", "hash2"))
+
+    assert cache_key(tables, target="y", time_column=None, analytical_type="inferential") == cache_key(
+        tables, target="y", time_column=None, analytical_type="inferential"
+    )
+
+
+def test_cache_key_does_not_depend_on_table_order() -> None:
+    assert cache_key((("a", "h1"), ("b", "h2")), target=None, time_column=None, analytical_type=None) == cache_key(
+        (("b", "h2"), ("a", "h1")), target=None, time_column=None, analytical_type=None
+    )
+
+
+def test_cache_key_changes_when_a_table_s_content_hash_changes() -> None:
+    before = cache_key((("orders", "h1"),), target=None, time_column=None, analytical_type=None)
+    after = cache_key((("orders", "h2"),), target=None, time_column=None, analytical_type=None)
+
+    assert before != after
+
+
+def test_cache_key_changes_when_the_target_changes() -> None:
+    tables = (("orders", "h1"),)
+
+    assert cache_key(tables, target="a", time_column=None, analytical_type=None) != cache_key(
+        tables, target="b", time_column=None, analytical_type=None
+    )
 
 
 # --------------------------------------------------------------------------- #

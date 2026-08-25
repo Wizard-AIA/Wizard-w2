@@ -214,6 +214,22 @@ def resolve_time_column(catalog: dict[str, Any] | None) -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
+def cache_key(
+    table_hashes: tuple[tuple[str, str], ...],
+    *,
+    target: str | None,
+    time_column: str | None,
+    analytical_type: str | None,
+) -> str:
+    """A stable key for one `understand()` call -- Phase 14: caching this across turns is safe
+    exactly because `understand()` is a pure function of these inputs. Every loaded table's
+    content hash is part of the key, so any dataset change invalidates it for free; the objective
+    inputs are included too, so a different target or time column on the same data never collides.
+    """
+    tables_part = "|".join(f"{name}:{content_hash}" for name, content_hash in sorted(table_hashes))
+    return f"{tables_part}::{target or ''}::{time_column or ''}::{analytical_type or ''}"
+
+
 def understand(
     df: pd.DataFrame,
     *,

@@ -46,6 +46,32 @@ from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
 
+class _BoundedCache:
+    """A tiny per-session memoisation cache with FIFO eviction once ``limit`` is exceeded.
+
+    Session-scoped rather than global or module-level, so one session's cached results never leak
+    into another's and nothing needs an explicit invalidation hook -- the cache dies with the
+    session. Bounded because a long-lived session can cycle through more distinct dataset states
+    than are worth remembering forever.
+    """
+
+    def __init__(self, limit: int = 16):
+        self._limit = limit
+        self._data: dict[str, Any] = {}
+        self._order: list[str] = []
+
+    def get(self, key: str) -> Any | None:
+        return self._data.get(key)
+
+    def set(self, key: str, value: Any) -> None:
+        if key not in self._data and len(self._order) >= self._limit:
+            oldest = self._order.pop(0)
+            self._data.pop(oldest, None)
+        if key not in self._data:
+            self._order.append(key)
+        self._data[key] = value
+
+
 @dataclass
 class DatasetHandle:
     """One loaded table belonging to a session."""
@@ -155,10 +181,35 @@ class Session:
         # never appears in `SessionManager._sessions` -- so nothing else walks
         # this to reap or evict it, and `dispose()` is the only thing that must.
         self._subagent_ids: set[str] = set()
+        # Phase 14: cross-turn caches for the analytical control plane's own expensive, pure
+        # computations (`understanding.understand`, `validation.registry.run_validators`) --
+        # keyed by dataset content hash and whatever else is a pure input, so a repeated turn
+        # against unchanged data skips recomputing rather than approximating a skip.
+        self._understanding_cache = _BoundedCache()
+        self._validation_cache = _BoundedCache()
+        self._verification_cache = _BoundedCache()
 
     # ------------------------------------------------------------------ #
     def touch(self):
         self.last_seen = time.time()
+
+    def get_cached_understanding(self, key: str) -> dict[str, Any] | None:
+        return self._understanding_cache.get(key)
+
+    def cache_understanding(self, key: str, value: dict[str, Any]) -> None:
+        self._understanding_cache.set(key, value)
+
+    def get_cached_validations(self, key: str) -> list[dict[str, Any]] | None:
+        return self._validation_cache.get(key)
+
+    def cache_validations(self, key: str, value: list[dict[str, Any]]) -> None:
+        self._validation_cache.set(key, value)
+
+    def get_cached_verification(self, key: str) -> tuple[str, str] | None:
+        return self._verification_cache.get(key)
+
+    def cache_verification(self, key: str, value: tuple[str, str]) -> None:
+        self._verification_cache.set(key, value)
 
     @property
     def workspace(self) -> Path:
