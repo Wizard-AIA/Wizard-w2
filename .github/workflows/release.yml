@@ -25,10 +25,13 @@ jobs:
       - name: Build consumer release zips
         run: bash scripts/build_release.sh "${{ github.ref_name }}"
 
+      # Notes start blank rather than auto-generated: a raw commit/PR list reads as noise
+      # to a consumer downloading a zip, not a changelog. Write the real paragraph by hand
+      # with `gh release edit <tag> --notes-file ...` right after this job creates the release.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
           prerelease: false
           files: dist/*.zip
