@@ -385,8 +385,8 @@ Three complex, multi-step enterprise-grade analytical scenarios were executed in
 
 ```python
 # Generated Code (1-shot, 0 retries)
-top_5_english_students = df.sort_values(by='englishgrade', ascending=False).head(5)
-mean_age_top_5 = top_5_english_students['age'].mean()
+top_5_english_students = df.sort_values(by="englishgrade", ascending=False).head(5)
+mean_age_top_5 = top_5_english_students["age"].mean()
 print(f"The mean age of the top 5 highest scoring students in English grade is: {mean_age_top_5:.2f}")
 ```
 
@@ -404,10 +404,7 @@ print(f"The mean age of the top 5 highest scoring students in English grade is: 
 
 ```python
 # Generated Code (1-shot, 0 retries)
-grouped_data = df.groupby('gender').agg(
-    average_mathgrade=('mathgrade', 'mean'),
-    student_count=('id', 'count')
-)
+grouped_data = df.groupby("gender").agg(average_mathgrade=("mathgrade", "mean"), student_count=("id", "count"))
 print(grouped_data)
 ```
 
