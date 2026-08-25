@@ -69,6 +69,13 @@ coverage.xml
 # Mutation testing (cosmic-ray) session databases -- local scratch, never committed
 *.sqlite
 mutants/
+cosmic-ray.shard.toml
+mutation-report.html
+survived-mutants.txt
+/shards.json
+/summary.md
+cli/gremlins-report.json
+cli/gremlins-report.txt
 
 # General Logs & Results
 logs/

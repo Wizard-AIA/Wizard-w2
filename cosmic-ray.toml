@@ -1,13 +1,13 @@
 [cosmic-ray]
-# Scoped to the new analytical control plane's deterministic modules, not the whole backend --
-# see docs/analysis/mutation-testing.md for why, and for how this list grows per phase.
-module-path = [
-    "backend/src/core/agent/grounding.py",
-    "backend/src/core/agent/actions.py",
-]
+# The whole backend -- see docs/analysis/mutation-testing.md for scope history (this used to be
+# two files) and for why CI never runs this config directly: a single sequential pass over ~23k
+# mutants is on the order of a day, so .github/workflows/mutation-testing.yml renders its own
+# per-shard config (scripts/mutation_testing/render_shard_config.py) instead and runs many in
+# parallel. This file is the config for a manual/local run over everything at once.
+module-path = ["backend/src"]
 test-command = "python -m pytest -x -q backend/tests"
 timeout = 60.0
-excluded-modules = []
+excluded-modules = ["backend/src/**/__init__.py"]
 
 [cosmic-ray.distributor]
 name = "local"

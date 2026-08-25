@@ -65,3 +65,94 @@ jobs:
 
       - name: Test
         run: go test ./... -v
+
+  mutation-testing:
+    name: Mutation testing (report only)
+    runs-on: ubuntu-latest
+    # One OS is enough: gremlins' mutants and Go's test semantics don't vary
+    # by platform the way process-supervision behavior itself does, so this
+    # doesn't need build-test's 3-OS matrix -- tripling the cost here would
+    # buy no extra signal.
+    defaults:
+      run:
+        working-directory: cli
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Unleash gremlins
+        # No --threshold-* flags: this is a report, not a gate. gremlins only
+        # mutates lines the test suite actually covers, so this stays a few
+        # seconds even though whole-module coverage is low -- process-
+        # supervision code paths (start/stop/supervise) need a real child
+        # process to exercise and are intentionally not unit-tested (see
+        # cli/CLAUDE.md). A threshold gate now would fail on that gap, not on
+        # a regression, which is exactly the premature-gate mistake
+        # docs/analysis/mutation-testing.md calls out for the backend's own
+        # cosmic-ray setup.
+        run: |
+          go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0 unleash . -o gremlins-report.json | tee gremlins-report.txt
+
+      - name: Write step summary
+        if: always()
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from collections import Counter
+
+          with open("gremlins-report.json") as f:
+              r = json.load(f)
+
+          # The top-level mutants_total/mutants_killed/etc fields silently
+          # exclude TIMED OUT mutants (verified against a real run: 118 timed
+          # out, present per-mutation but absent from every top-level count,
+          # inflating test_efficacy to 100% on a run that mostly timed out).
+          # Recomputed from the per-mutation statuses instead of trusted.
+          counts = Counter(
+              m["status"] for f in r["files"] for m in f["mutations"]
+          )
+          total = sum(counts.values())
+          killed = counts.get("KILLED", 0)
+          lived = counts.get("LIVED", 0)
+          scored = killed + lived
+          efficacy = (killed / scored * 100) if scored else 0.0
+
+          print("## Mutation testing report (CLI)")
+          print()
+          print(f"**{total}** mutants found across `cli/`.")
+          for status in ("KILLED", "LIVED", "NOT COVERED", "TIMED OUT", "NOT VIABLE"):
+              if status in counts:
+                  print(f"- {status.title()}: **{counts[status]}**")
+          print(f"- Test efficacy of scored mutants: **{efficacy:.1f}%** ({scored} killed+lived)")
+
+          survivors = [
+              (f["file_name"], m["line"], m["column"], m["type"])
+              for f in r["files"]
+              for m in f["mutations"]
+              if m["status"] == "LIVED"
+          ]
+          if survivors:
+              print()
+              print("### Surviving mutants")
+              print()
+              print("| File | Line:Col | Mutator |")
+              print("|---|---|---|")
+              for name, line, col, mtype in survivors:
+                  print(f"| `{name}` | {line}:{col} | {mtype} |")
+          EOF
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: gremlins-report
+          path: |
+            cli/gremlins-report.json
+            cli/gremlins-report.txt
+          retention-days: 90

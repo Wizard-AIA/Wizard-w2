@@ -13,9 +13,10 @@
 ruff==0.16.3
 pytest-cov==7.1.0
 
-# Mutation testing for backend/src/core/analysis/ -- see docs/analysis/mutation-testing.md.
-# Not installed by the CI lint+test job in this PR (manual/local target only); listed here
-# so its version is pinned the same way the rest of this file's tools are. mutmut was tried
+# Mutation testing for the whole backend -- see docs/analysis/mutation-testing.md. Not
+# installed by ci.yml's lint+test job (that runs on every push/PR; a mutation pass over the
+# whole backend is scheduled/on-demand instead -- see mutation-testing.yml); listed here so
+# its version is pinned the same way the rest of this file's tools are. mutmut was tried
 # first and rejected: it hard-asserts a mutated module's dotted name never starts with
 # `src.` (verified against 3.3.1 and 3.7.0), which this backend's own `pythonpath=["backend"]`
 # + `import src.*` convention trips on every mutant run.
