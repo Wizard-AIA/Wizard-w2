@@ -4,11 +4,24 @@
 
 ![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v4.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/codeql.yml/badge.svg?branch=master) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Wizard-AIA/Wizard-w2/badge)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![License](https://img.shields.io/github/license/Wizard-AIA/Wizard-w2)](LICENSE) [![Docs](https://img.shields.io/badge/docs-wizard--aia.github.io-blue)](https://wizard-aia.github.io/docs/)
 
-Upgrading from w1? See [the migration notes](docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
+Upgrading from w1? See [the migration notes](https://github.com/Wizard-AIA/Wizard-w2/blob/master/docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
 Full documentation, including task guides (EDA, model training) and an
 [edge-cases & gotchas reference](https://wizard-aia.github.io/docs/troubleshooting/edge-cases/),
 lives at **[wizard-aia.github.io/docs](https://wizard-aia.github.io/docs/)**.
+
+## Download
+
+**[Latest release](https://github.com/Wizard-AIA/Wizard-w2/releases/latest)** — pick the zip for your OS (macOS Apple Silicon/Intel, Linux x86_64/ARM64, Windows), extract it, and run:
+
+```bash
+./cli/wizard init       # checks prerequisites, installs dependencies
+./cli/wizard start      # launches everything, opens a browser
+```
+
+That's it — no `git clone`, no Go toolchain, no build step. See [Quick start](#quick-start) below for what `init`/`start` actually do, and [Docker alternative](#docker-alternative) if you'd rather containerize it.
+
+Building from source instead? `git clone https://github.com/Wizard-AIA/Wizard-w2.git` gets you the same repo this release was cut from — see the [Contributing & Development](#contributing--development) section at the bottom.
 
 ## What it is
 
@@ -35,12 +48,32 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 
 ## Quick start
 
-**Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Running without Docker](#running-without-docker).
+**Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Docker alternative](#docker-alternative) below for the container path, or keep reading for the no-Docker one.
+
+Downloaded a [release zip](#download)? You already have a prebuilt `wizard` binary — skip straight to:
 
 ```bash
-git clone https://github.com/Wizard-AIA/Wizard-w2.git
-cd Wizard-w2
-docker compose up --build -d
+./cli/wizard init                  # checks Python 3.12+/Node 20+, installs dependencies
+./cli/wizard start                 # launches both in the background, opens a browser
+./cli/wizard status                # what's running, host sizing, sandbox capability
+./cli/wizard stop
+```
+
+Building from source instead, the `wizard` CLI ([cli/](cli/)) is a single static binary that automates the same steps — check prerequisites, install dependencies, and manage the backend/frontend as a background service, the same on Linux, macOS and Windows:
+
+```bash
+git clone https://github.com/Wizard-AIA/Wizard-w2.git && cd Wizard-w2
+cd cli && go build -o wizard ./cmd/wizard && cd ..
+./cli/wizard init
+./cli/wizard start
+```
+
+See [cli/README.md](https://github.com/Wizard-AIA/Wizard-w2/blob/master/cli/README.md) for the full subcommand reference. Or do it by hand:
+
+```bash
+uv pip install --system -r requirements.txt -r requirements-local.txt
+cd backend && uvicorn src.api.api:app --port 8000
+cd frontend && pnpm install && pnpm dev
 ```
 
 Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**.
@@ -55,35 +88,6 @@ ollama pull qwen2.5-coder:7b     # code
 ```
 
 Optionally `ollama pull embeddinggemma` (or `nomic-embed-text`). Wizard embeds through whichever model server you already run, so this is all that semantic retrieval needs — no extra install, and no GPU libraries. Without one, matching falls back to word overlap.
-
-### Disk space
-
-The sandbox image ships in tiers. `standard` is the default; pick a smaller one if you are tight on space, and the agent is simply told about a smaller toolkit rather than writing code that then fails to import.
-
-```bash
-SANDBOX_TIER=core docker compose up --build -d   # pandas, numpy, pyarrow, duckdb, matplotlib, openpyxl
-SANDBOX_TIER=full docker compose up --build -d   # adds survival analysis and geospatial
-```
-
-### Running without Docker
-
-The `wizard` CLI ([cli/](cli/)) is a single static binary that automates the steps below — check prerequisites, install dependencies, and manage the backend/frontend as a background service, the same on Linux, macOS and Windows:
-
-```bash
-cd cli && go build -o wizard ./cmd/wizard   # or download a prebuilt binary once one exists
-cd .. && ./cli/wizard init                  # checks Python 3.11+/Node 20+, installs dependencies
-./cli/wizard start                          # launches both in the background, opens a browser
-./cli/wizard status                         # what's running, host sizing, sandbox capability
-./cli/wizard stop
-```
-
-See [cli/README.md](cli/README.md) for the full subcommand reference. Or do it by hand:
-
-```bash
-uv pip install --system -r requirements.txt -r requirements-local.txt
-cd backend && uvicorn src.api.api:app --port 8000
-cd frontend && pnpm install && pnpm dev
-```
 
 `EXECUTION_BACKEND` defaults to `host`: generated code runs in a **subprocess** of the backend — a separate process with a memory ceiling, a per-step timeout, an interrupt that works, and a namespace that survives between steps. Docker is opt-in; set `EXECUTION_BACKEND=docker` to use a container per session instead.
 
@@ -107,79 +111,24 @@ The provider is stored **per role**, so you can leave the reasoning model on Oll
 
 Any other OpenAI-compatible server (vLLM, llama.cpp, a hosted gateway) works through `API_PROVIDER=custom_gateway` with `GATEWAY_API_URL`.
 
-## How it works
+## Docker alternative
 
-```mermaid
-graph TD
-    classDef client fill:#0ea5e9,stroke:#0369a1,stroke-width:2px,color:#fff;
-    classDef api fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
-    classDef brain fill:#db2777,stroke:#9d174d,stroke-width:2px,color:#fff;
-    classDef sandbox fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#000;
-    classDef store fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
-
-    UI["Next.js client<br/>(streams every move)"]:::client
-    WS["FastAPI · WS /ws/chat"]:::api
-    Session["Session<br/>tables · documents · sandbox"]:::api
-    Loop["Analysis loop<br/>bounded by the tier budget"]:::api
-
-    Manager["Manager model<br/>decide · revise · answer"]:::brain
-    Worker["Worker model<br/>Python"]:::brain
-
-    Guard["Code guard<br/>AST policy check"]:::sandbox
-    Box["Per-session container<br/>cap_drop · mem/pid limits"]:::sandbox
-
-    Trust["Trust layer<br/>verify · ground · assumptions"]:::store
-    Store["SQLite<br/>cache · trajectories · memory"]:::store
-    Retr["Retriever<br/>columns · memory · documents"]:::store
-
-    UI <-->|typed event frames| WS
-    WS --> Session --> Loop
-    Loop <--> Retr <--> Store
-
-    Loop -->|"1 what next?"| Manager
-    Manager -->|"2 inspect / consult"| Retr
-    Manager -->|"3 write code for this sub-task"| Worker
-    Worker --> Guard -->|allowed| Box
-    Box -->|"4 real output"| Loop
-    Loop -.->|"repeat until answerable"| Manager
-    Loop -->|5| Trust
-    Trust -->|"6 synthesise from real output"| Manager
+```bash
+git clone https://github.com/Wizard-AIA/Wizard-w2.git
+cd Wizard-w2
+docker compose up --build -d
 ```
 
-The dotted line is the part that matters. Step 4 feeds back into step 1: the manager sees what the code actually produced and picks the next move from it, so a plan that turns out to be wrong gets rewritten instead of carried out. How many times round that loop is allowed depends on the model — see `AGENT_TIER` below.
+Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**. Already extracted a release zip instead of cloning? The same `docker-compose.yml` is in it — just run the command from inside the extracted folder.
 
-Underneath it, the retry loop still applies: when the sandbox raises, the traceback is added to the worker's prompt and the sub-task is retried, up to `MAX_CORRECTION_RETRIES`. A failure that is successfully repaired is stored so the same mistake is shown as a counter-example next time a similar question is asked. A sub-task that fails outright is not fatal — it is an observation, and the agent can route around it.
+### Disk space
 
-## Features
+The sandbox image ships in tiers. `standard` is the default; pick a smaller one if you are tight on space, and the agent is simply told about a smaller toolkit rather than writing code that then fails to import.
 
-**Analysis**
-- Chooses each next move from real execution output, and revises its plan when the data contradicts it
-- Three depths: **Auto** (it decides), **Fast** (one pass), **Deep** (investigate thoroughly)
-- Self-corrects on execution failure using the real traceback
-- The full analytical stack, not just pandas: duckdb for SQL over dataframes, statsmodels and scipy for inference, scikit-learn/xgboost/lightgbm for modelling, lifelines for survival, networkx for graphs, geopandas for spatial — and the model is told what is *actually* installed, so a smaller image narrows the toolkit rather than producing code that fails
-- Interactive Plotly charts (or static matplotlib, via `PLOT_FORMAT`)
-- Optional plan approval before anything runs, and explicit consent before any web search
-
-**Trust**
-- The headline result is recomputed by a different route, and a disagreement is reported prominently
-- Every figure in the answer is traced back to real output; anything that was not computed is flagged
-- Silent decisions in the code — dropped nulls, inner joins, top-N cuts, coerced dates — are listed alongside the answer
-- Each analysis is written out as a runnable script you can re-run next month against fresh data
-
-**Data**
-- CSV, TSV, Excel, JSON, NDJSON, Parquet and Feather
-- **Reference documents** — data dictionaries, metric definitions, business rules as Markdown, text, PDF or .docx — which the agent consults mid-analysis when a question turns on what a column means
-- Large files are sampled for analysis while the full file stays available in the workspace
-- Column names are normalised for safe code generation **and de-duplicated**
-- Every loaded table is available to generated code at once as `tables['name']`, so cross-table joins need no extra step
-
-**Operational**
-- Per-session isolation: separate dataset, execution namespace, workspace and history
-- **Two execution backends**: a container per session, or a subprocess per session with no Docker at all
-- Sizes itself to the host — inference threads from physical cores, runtime memory and the session cap from installed RAM
-- Runs without Docker, without an embedding model, and without Redis
-- Optional Redis for a shared cache and job state
-- Optional `API_KEY` for deployments beyond localhost
+```bash
+SANDBOX_TIER=core docker compose up --build -d   # pandas, numpy, pyarrow, duckdb, matplotlib, openpyxl
+SANDBOX_TIER=full docker compose up --build -d   # adds survival analysis and geospatial
+```
 
 ## Configuration
 
@@ -224,7 +173,132 @@ The manager and worker alternate several times per question, so what matters is 
 
 Two 7B models want roughly 14 GB; a 16 GB laptop running a browser and a sandbox does not have that. `/settings` shows the estimate, the budget and which way it went. Using the **same model for both roles** removes the reload entirely — one resident copy, nothing to evict.
 
-## API
+## Security
+
+Generated code is untrusted. Three layers apply:
+
+1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
+2. **OS-level containment** — with the default `EXECUTION_BACKEND=host`, each session's subprocess is restricted by the operating system: Landlock plus a seccomp filter on Linux, a deny-by-default `sandbox-exec` profile on macOS, a job object and a Low integrity level on Windows. Writes are confined to the session workspace, outbound network is denied (loopback aside), and memory and process counts are capped. What your machine can actually enforce is listed on `/settings`, with a reason for anything it cannot — outbound network is **not** enforced on Windows, and it says so.
+3. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor.
+4. **Scoped filesystem** — each session reads and writes only its own workspace directory.
+
+**Verify it rather than trust it.** `/settings` has a Verify button — it spawns a probe that tries to write outside the workspace, open an outbound connection and allocate past the ceiling, and reports what stopped each one. `GET /api/sandbox/selftest` is the same thing from the command line.
+
+> [!IMPORTANT]
+> The backend mounts the host Docker socket so it can create sandbox containers. That is host-root-equivalent access. Run Wizard on a trusted machine, and set `API_KEY` and a narrow `CORS_ALLOW_ORIGINS` before exposing it beyond localhost.
+
+Report vulnerabilities privately — see [SECURITY.md](https://github.com/Wizard-AIA/Wizard-w2/blob/master/SECURITY.md).
+
+## Troubleshooting
+
+**A question takes many minutes, or never finishes.** Four things to check, in order of how much they usually cost:
+
+1. **Is `MODEL_NAME` a reasoning model?** See the note above — this is by far the most common cause. `deepseek-r1:1.5b` as the manager can spend minutes per call thinking.
+2. **Is `LLM_NUM_THREAD` set in `backend/.env`?** Delete it. Local inference is memory-bandwidth bound, so more threads than *physical* cores is contention, not throughput — 8 threads on a 4-core laptop is slower than 4. Unset, it is measured. Same for `LLM_NUM_CTX`: unset it and the context is sized to the machine, which also stops the provider evicting one model to make room for the other on every step.
+3. **Are both models staying loaded?** `ollama ps` during a run. The manager and worker alternate, so if only one is resident each step is paying a reload from disk. Smaller models, or a smaller `LLM_NUM_CTX`, fix it.
+4. `AGENT_TURN_TIMEOUT` (default 300s) bounds a turn regardless: on reaching it the agent stops exploring and answers from what it has, and says so. Raise it if you would rather wait.
+
+**The backend cannot reach Ollama.** If the backend runs outside Docker, leave `OLLAMA_BASE_URL` unset — the shipped default is rewritten to `127.0.0.1` when the backend is not itself containerised, because `host.docker.internal` only resolves on machines that have Docker Desktop. Inside compose the file passes the right value itself. On Linux the compose file adds a `host-gateway` alias; if you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
+
+**Settings shows "Local subprocess" instead of "Docker container".** Docker is unreachable, so code is running in a subprocess of the backend. That is a supported mode — bounded, interruptible, and it keeps variables between steps — but it is not isolated from your filesystem. Start Docker Desktop and reload to get a container back.
+
+**Settings shows "In-process (no isolation)".** Spawning was forbidden. Set `EXECUTION_BACKEND=host` in `backend/.env`. Only this mode has no isolation and no persistent namespace.
+
+**Retrieval says "Word overlap".** No embedding model is installed on your provider. `ollama pull embeddinggemma` and reload. Nothing breaks without one; matching is just less good at paraphrases.
+
+**The model picker is empty.** Nothing is installed yet, or the model server is not running. Open **/models** and use *Install a model* — there are starter picks per provider, and you do not need a terminal or the LM Studio window. `ollama pull qwen3:8b` still works if you prefer.
+
+**The LM Studio tab is empty but LM Studio is running.** Almost always **Serve on Local Network** being off — with it off LM Studio accepts loopback connections only, and the backend runs in a container. The error under the tab names the exact URL that was tried. Note that `LMSTUDIO_BASE_URL` wants the root (`http://host.docker.internal:1234`), not the `/v1` endpoint the LM Studio UI displays; a trailing `/v1` is stripped for you.
+
+**LM Studio answers the first question very slowly.** It loads the model on first request. The picker marks models that are not loaded; loading one in LM Studio beforehand avoids the stall.
+
+**Analysis keeps failing on the same step.** The agent stops after `MAX_CORRECTION_RETRIES`. The generated code and the traceback are in the "Ran N steps" disclosure — that usually shows a column that does not exist or a type that needs converting first.
+
+**A large upload is slow.** Files over `MAX_INMEMORY_ROWS` are sampled for analysis; the full file stays in the workspace and can be read directly in generated code.
+
+## License
+
+[BSD 3-Clause](./LICENSE).
+
+<details>
+<summary><h2>Contributing & Development</h2></summary>
+
+The full developer repository — tests, benchmarks, CI pipelines, and architecture docs — is this same repo:
+**[Wizard-AIA/Wizard-w2](https://github.com/Wizard-AIA/Wizard-w2)**. See [CONTRIBUTING.md](https://github.com/Wizard-AIA/Wizard-w2/blob/master/CONTRIBUTING.md) for the full workflow and [CLAUDE.md](https://github.com/Wizard-AIA/Wizard-w2/blob/master/CLAUDE.md) for an architecture tour.
+
+### How it works
+
+```mermaid
+graph TD
+    classDef client fill:#0ea5e9,stroke:#0369a1,stroke-width:2px,color:#fff;
+    classDef api fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
+    classDef brain fill:#db2777,stroke:#9d174d,stroke-width:2px,color:#fff;
+    classDef sandbox fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#000;
+    classDef store fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff;
+
+    UI["Next.js client<br/>(streams every move)"]:::client
+    WS["FastAPI · WS /ws/chat"]:::api
+    Session["Session<br/>tables · documents · sandbox"]:::api
+    Loop["Analysis loop<br/>bounded by the tier budget"]:::api
+
+    Manager["Manager model<br/>decide · revise · answer"]:::brain
+    Worker["Worker model<br/>Python"]:::brain
+
+    Guard["Code guard<br/>AST policy check"]:::sandbox
+    Box["Per-session container<br/>cap_drop · mem/pid limits"]:::sandbox
+
+    Trust["Trust layer<br/>verify · ground · assumptions"]:::store
+    Store["SQLite<br/>cache · trajectories · memory"]:::store
+    Retr["Retriever<br/>columns · memory · documents"]:::store
+
+    UI <-->|typed event frames| WS
+    WS --> Session --> Loop
+    Loop <--> Retr <--> Store
+
+    Loop -->|"1 what next?"| Manager
+    Manager -->|"2 inspect / consult"| Retr
+    Manager -->|"3 write code for this sub-task"| Worker
+    Worker --> Guard -->|allowed| Box
+    Box -->|"4 real output"| Loop
+    Loop -.->|"repeat until answerable"| Manager
+    Loop -->|5| Trust
+    Trust -->|"6 synthesise from real output"| Manager
+```
+
+The dotted line is the part that matters. Step 4 feeds back into step 1: the manager sees what the code actually produced and picks the next move from it, so a plan that turns out to be wrong gets rewritten instead of carried out. How many times round that loop is allowed depends on the model — see `AGENT_TIER` above.
+
+### Features
+
+**Analysis**
+- Chooses each next move from real execution output, and revises its plan when the data contradicts it
+- Three depths: **Auto** (it decides), **Fast** (one pass), **Deep** (investigate thoroughly)
+- Self-corrects on execution failure using the real traceback
+- The full analytical stack, not just pandas: duckdb for SQL over dataframes, statsmodels and scipy for inference, scikit-learn/xgboost/lightgbm for modelling, lifelines for survival, networkx for graphs, geopandas for spatial — and the model is told what is *actually* installed, so a smaller image narrows the toolkit rather than producing code that fails
+- Interactive Plotly charts (or static matplotlib, via `PLOT_FORMAT`)
+- Optional plan approval before anything runs, and explicit consent before any web search
+
+**Trust**
+- The headline result is recomputed by a different route, and a disagreement is reported prominently
+- Every figure in the answer is traced back to real output; anything that was not computed is flagged
+- Silent decisions in the code — dropped nulls, inner joins, top-N cuts, coerced dates — are listed alongside the answer
+- Each analysis is written out as a runnable script you can re-run next month against fresh data
+
+**Data**
+- CSV, TSV, Excel, JSON, NDJSON, Parquet and Feather
+- **Reference documents** — data dictionaries, metric definitions, business rules as Markdown, text, PDF or .docx — which the agent consults mid-analysis when a question turns on what a column means
+- Large files are sampled for analysis while the full file stays available in the workspace
+- Column names are normalised for safe code generation **and de-duplicated**
+- Every loaded table is available to generated code at once as `tables['name']`, so cross-table joins need no extra step
+
+**Operational**
+- Per-session isolation: separate dataset, execution namespace, workspace and history
+- **Two execution backends**: a container per session, or a subprocess per session with no Docker at all
+- Sizes itself to the host — inference threads from physical cores, runtime memory and the session cap from installed RAM
+- Runs without Docker, without an embedding model, and without Redis
+- Optional Redis for a shared cache and job state
+- Optional `API_KEY` for deployments beyond localhost
+
+### API
 
 Interactive docs: `http://localhost:8000/docs`.
 
@@ -263,23 +337,7 @@ The session id is returned in the `X-Session-Id` header and should be sent back 
 Reasoning and the final answer arrive as separate delta streams, so the client can render a live "thinking" panel independently of the answer.
 </details>
 
-## Security
-
-Generated code is untrusted. Three layers apply:
-
-1. **Static analysis** — an AST policy check rejects restricted imports, dynamic execution, interpreter-internals traversal, reflection with computed attribute names, and file access outside the workspace. Malformed code is treated as retryable rather than hostile, so the model gets to fix its own typo.
-2. **OS-level containment** — with the default `EXECUTION_BACKEND=host`, each session's subprocess is restricted by the operating system: Landlock plus a seccomp filter on Linux, a deny-by-default `sandbox-exec` profile on macOS, a job object and a Low integrity level on Windows. Writes are confined to the session workspace, outbound network is denied (loopback aside), and memory and process counts are capped. What your machine can actually enforce is listed on `/settings`, with a reason for anything it cannot — outbound network is **not** enforced on Windows, and it says so.
-3. **Process isolation** — with `EXECUTION_BACKEND=docker`, one container per session with `cap_drop=ALL`, `no-new-privileges`, memory and PID limits, and a per-execution timeout; set `SANDBOX_DOCKER_RUNTIME=runsc` for gVisor.
-4. **Scoped filesystem** — each session reads and writes only its own workspace directory.
-
-**Verify it rather than trust it.** `/settings` has a Verify button — it spawns a probe that tries to write outside the workspace, open an outbound connection and allocate past the ceiling, and reports what stopped each one. `GET /api/sandbox/selftest` is the same thing from the command line.
-
-> [!IMPORTANT]
-> The backend mounts the host Docker socket so it can create sandbox containers. That is host-root-equivalent access. Run Wizard on a trusted machine, and set `API_KEY` and a narrow `CORS_ALLOW_ORIGINS` before exposing it beyond localhost.
-
-Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).
-
-## Development
+### Development
 
 ```bash
 uv pip install --system -r requirements.txt       # API server
@@ -294,35 +352,4 @@ cd frontend && pnpm lint && npx tsc --noEmit && pnpm build
 
 Tests are organised as `unit/`, `integration/`, `regression/` and `negative/` under `backend/tests/`. The regression suite pins previously-fixed defects and each test explains what broke — worth reading before changing sessions, the database layer or the code guard.
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow and [CLAUDE.md](./CLAUDE.md) for an architecture tour.
-
-## Troubleshooting
-
-**A question takes many minutes, or never finishes.** Four things to check, in order of how much they usually cost:
-
-1. **Is `MODEL_NAME` a reasoning model?** See the note above — this is by far the most common cause. `deepseek-r1:1.5b` as the manager can spend minutes per call thinking.
-2. **Is `LLM_NUM_THREAD` set in `backend/.env`?** Delete it. Local inference is memory-bandwidth bound, so more threads than *physical* cores is contention, not throughput — 8 threads on a 4-core laptop is slower than 4. Unset, it is measured. Same for `LLM_NUM_CTX`: unset it and the context is sized to the machine, which also stops the provider evicting one model to make room for the other on every step.
-3. **Are both models staying loaded?** `ollama ps` during a run. The manager and worker alternate, so if only one is resident each step is paying a reload from disk. Smaller models, or a smaller `LLM_NUM_CTX`, fix it.
-4. `AGENT_TURN_TIMEOUT` (default 300s) bounds a turn regardless: on reaching it the agent stops exploring and answers from what it has, and says so. Raise it if you would rather wait.
-
-**The backend cannot reach Ollama.** If the backend runs outside Docker, leave `OLLAMA_BASE_URL` unset — the shipped default is rewritten to `127.0.0.1` when the backend is not itself containerised, because `host.docker.internal` only resolves on machines that have Docker Desktop. Inside compose the file passes the right value itself. On Linux the compose file adds a `host-gateway` alias; if you still cannot connect, set `OLLAMA_BASE_URL=http://172.17.0.1:11434`.
-
-**Settings shows "Local subprocess" instead of "Docker container".** Docker is unreachable, so code is running in a subprocess of the backend. That is a supported mode — bounded, interruptible, and it keeps variables between steps — but it is not isolated from your filesystem. Start Docker Desktop and reload to get a container back.
-
-**Settings shows "In-process (no isolation)".** Spawning was forbidden. Set `EXECUTION_BACKEND=host` in `backend/.env`. Only this mode has no isolation and no persistent namespace.
-
-**Retrieval says "Word overlap".** No embedding model is installed on your provider. `ollama pull embeddinggemma` and reload. Nothing breaks without one; matching is just less good at paraphrases.
-
-**The model picker is empty.** Nothing is installed yet, or the model server is not running. Open **/models** and use *Install a model* — there are starter picks per provider, and you do not need a terminal or the LM Studio window. `ollama pull qwen3:8b` still works if you prefer.
-
-**The LM Studio tab is empty but LM Studio is running.** Almost always **Serve on Local Network** being off — with it off LM Studio accepts loopback connections only, and the backend runs in a container. The error under the tab names the exact URL that was tried. Note that `LMSTUDIO_BASE_URL` wants the root (`http://host.docker.internal:1234`), not the `/v1` endpoint the LM Studio UI displays; a trailing `/v1` is stripped for you.
-
-**LM Studio answers the first question very slowly.** It loads the model on first request. The picker marks models that are not loaded; loading one in LM Studio beforehand avoids the stall.
-
-**Analysis keeps failing on the same step.** The agent stops after `MAX_CORRECTION_RETRIES`. The generated code and the traceback are in the "Ran N steps" disclosure — that usually shows a column that does not exist or a type that needs converting first.
-
-**A large upload is slow.** Files over `MAX_INMEMORY_ROWS` are sampled for analysis; the full file stays in the workspace and can be read directly in generated code.
-
-## License
-
-[BSD 3-Clause](./LICENSE).
+</details>
