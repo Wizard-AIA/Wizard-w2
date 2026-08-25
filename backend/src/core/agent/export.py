@@ -24,9 +24,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from src.config import settings
+from src.core.analysis.runs import DatasetManifestEntry
 from src.core.security.code_guard import CodeGuard
 from src.core.session import Session
-from src.core.analysis.runs import DatasetManifestEntry
 
 
 HEADER_IMPORTS = [
