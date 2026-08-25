@@ -27,7 +27,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -99,10 +98,12 @@ class DatasetHandle:
         cleaned = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
         return cleaned or "table"
 
-    @cached_property
+    @property
     def content_hash(self) -> str:
-        """A fingerprint of this table's actual values, for evidence-graph dataset lineage."""
+        """A fingerprint of this table's current schema and values."""
         digest = hashlib.blake2b(digest_size=16)
+        digest.update(repr(tuple((str(column), str(dtype)) for column, dtype in self.df.dtypes.items())).encode())
+        digest.update(repr(tuple(map(str, self.df.columns))).encode())
         digest.update(pd.util.hash_pandas_object(self.df, index=True).values.tobytes())
         return digest.hexdigest()
 

@@ -95,6 +95,13 @@ def test_revise_re_derives_intended_analyses_from_the_latest_text() -> None:
     assert plan.intended_analyses == ["Step C"]
 
 
+def test_revise_extracts_explicit_hypotheses_without_guessing() -> None:
+    plan = AnalyticalPlan()
+    plan.revise("Hypothesis: Revenue grew due to seasonality\n1. Compare monthly totals")
+
+    assert plan.hypotheses == ["Revenue grew due to seasonality"]
+
+
 def test_plan_round_trips_through_dict_including_all_revisions() -> None:
     plan = AnalyticalPlan(
         hypotheses=["revenue grew due to seasonality"],

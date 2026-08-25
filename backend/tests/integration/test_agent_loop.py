@@ -696,6 +696,10 @@ async def test_finalize_captures_an_immutable_run_snapshot(loaded_session: Sessi
     assert run["dataset_manifest"]
     assert run["dataset_manifest"][0]["content_hash"]
     assert run["steps"]
+    assert run["dataset_files"]
+    assert run["telemetry"]["actions"]
+    assert run["telemetry"]["tool_calls"]
+    assert run["telemetry"]["execution_durations_ms"]
 
 
 async def test_a_captured_run_renders_in_all_three_report_modes(loaded_session: Session, stub_llm) -> None:  # noqa: F811

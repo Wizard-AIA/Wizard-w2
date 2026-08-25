@@ -186,7 +186,7 @@ async def test_run_carries_and_persists_analytical_state(loaded_session: Session
         "likely_variables": {},
         "constraints": [],
         "expected_output": None,
-        "ambiguity": [],
+        "ambiguity": ["The question does not specify a recognised analytical type."],
     }
 
     final = collector.of_type(EventType.FINAL)[0]

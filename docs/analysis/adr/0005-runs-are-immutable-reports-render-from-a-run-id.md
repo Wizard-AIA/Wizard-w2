@@ -12,10 +12,10 @@ later analysis."
 ## Decision
 `analysis/runs.py` defines `AnalysisRun`, built once at `_finalize` time from everything the turn
 actually produced (plan + revisions, executions, evidence, validations, warnings, environment
-versions, dataset content hashes) and persisted to a new `analysis_runs` table, keyed by an
-immutable id. `export.py`'s existing script/notebook builders and the Phase 12 report renderers
-both take a run id (or an in-memory `AnalysisRun`) as their input, never `session` + "whatever is
-currently in the workspace."
+versions, dataset manifests, and file-backed CSV snapshots) and persisted to a new
+`analysis_runs` table, keyed by an immutable id. `export.py`'s existing script/notebook builders
+and the Phase 12 report renderers both take a run id (or an in-memory `AnalysisRun`) as their
+input, never `session` + "whatever is currently in the workspace."
 
 ## Consequences
 - A report generated after turn N+1 for turn N's run is unaffected by turn N+1.

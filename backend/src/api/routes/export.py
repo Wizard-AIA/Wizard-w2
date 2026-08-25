@@ -67,6 +67,9 @@ async def export_message(
 
     instruction = str(meta.get("instruction") or "")
     bundle = export.bundle_files(session)
+    run = None
+    run_manifest = None
+    active_table_key = ""
 
     # Phase 10 (ADR 0005): prefer the immutable run snapshot over live tables wherever one was
     # captured -- a report or export must be unaffected by any turn that ran after this one, and
@@ -77,6 +80,10 @@ async def export_message(
     if run_data is not None:
         run = AnalysisRun.from_dict(run_data)
         run_json = json.dumps(run_data, indent=2).encode("utf-8")
+        run_manifest = run.dataset_manifest
+        active_table_key = run.active_table_key
+        if run.dataset_files:
+            bundle = {path: content.encode("utf-8") for path, content in run.dataset_files.items()}
         evidence = run.analysis.get("evidence") or {}
         changed = run.changed_since(dataset_manifest_from_session(session))
         if changed:
@@ -90,13 +97,27 @@ async def export_message(
     provenance = json.dumps(evidence, indent=2).encode("utf-8") if evidence.get("nodes") else None
 
     if format == "notebook":
-        content = export.build_notebook(instruction, steps, session, bundle=bool(bundle))
+        content = export.build_notebook(
+            instruction,
+            steps,
+            session,
+            bundle=bool(bundle),
+            manifest=run_manifest,
+            active_table_key=active_table_key,
+        )
         if not content:
             raise HTTPException(status_code=404, detail="Nothing to export for this message.")
         payload = json.dumps(content, indent=1).encode("utf-8")
         filename = "analysis.ipynb"
     else:
-        text = export.build_script(instruction, steps, session, bundle=bool(bundle))
+        text = export.build_script(
+            instruction,
+            steps,
+            session,
+            bundle=bool(bundle),
+            manifest=run_manifest,
+            active_table_key=active_table_key,
+        )
         if not text:
             raise HTTPException(status_code=404, detail="Nothing to export for this message.")
         payload = text.encode("utf-8")

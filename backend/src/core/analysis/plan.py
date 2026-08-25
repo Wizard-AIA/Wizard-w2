@@ -18,6 +18,7 @@ from typing import Any
 #: ask for (see prompts.create_planning_prompt), so this is a mechanical extraction, not a
 #: semantic one. Prose that doesn't match this shape simply yields no steps, never a guess.
 _STEP_LINE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+(.+)$")
+_HYPOTHESIS_LINE = re.compile(r"^\s*(?:hypothesis|primary hypothesis|null hypothesis|alternative hypothesis)\s*:\s*(.+)$", re.I)
 
 
 def parse_intended_analyses(text: str) -> list[str]:
@@ -30,6 +31,16 @@ def parse_intended_analyses(text: str) -> list[str]:
             if step:
                 steps.append(step)
     return steps
+
+
+def parse_hypotheses(text: str) -> list[str]:
+    """Extract explicitly labelled hypotheses without inventing one from prose."""
+    hypotheses: list[str] = []
+    for line in (text or "").splitlines():
+        match = _HYPOTHESIS_LINE.match(line)
+        if match and match.group(1).strip():
+            hypotheses.append(match.group(1).strip())
+    return hypotheses
 
 
 @dataclass
@@ -85,6 +96,7 @@ class AnalyticalPlan:
         revision = PlanRevision(index=len(self.revisions), text=text, why=why)
         self.revisions.append(revision)
         self.intended_analyses = parse_intended_analyses(text)
+        self.hypotheses = parse_hypotheses(text)
         return revision
 
     def to_dict(self) -> dict[str, Any]:

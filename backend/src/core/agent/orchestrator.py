@@ -66,7 +66,7 @@ from src.core.agent.grounding import (
 )
 from src.core.analysis import competing, confidence, critic, stopping, understanding
 from src.core.analysis.objective import AnalyticalObjective
-from src.core.analysis.runs import ExecutedStep, capture, dataset_manifest_from_session
+from src.core.analysis.runs import ExecutedStep, capture, dataset_files_from_session, dataset_manifest_from_session
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
 from src.core.analysis.validation.registry import cache_key as validation_cache_key, run_validators
@@ -197,6 +197,12 @@ class RunState:
     #: Whether any decision this turn was a fallback rather than a reasoned model choice --
     #: Phase 9's `confidence.py` model_uncertainty component input. See `Decision.inferred`.
     any_decision_inferred: bool = False
+    action_log: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    approval_gates: list[dict[str, Any]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    execution_durations_ms: list[int] = field(default_factory=list)
+    retries_total: int = 0
     started_at: float = field(default_factory=time.time)
     #: The persisted `chat_messages` row id for this turn's answer, set by
     #: `_finalize`. What a later "export this turn" request keys on -- see
@@ -206,8 +212,13 @@ class RunState:
 
     def __post_init__(self) -> None:
         self.analysis.investigation = self.investigation
-        # Deferred by Phase 1; filled in now since Phase 8's route comparison needs it.
         self.analysis.objective = AnalyticalObjective.infer(self.instruction)
+        question_id = self.analysis.evidence.add_node("question", self.instruction)
+        objective_id = self.analysis.evidence.add_node(
+            "objective", self.analysis.objective.analytical_type or "Unclassified objective",
+            objective=self.analysis.objective.to_dict(),
+        )
+        self.analysis.evidence.add_edge(question_id, objective_id, "informs")
 
     @property
     def elapsed_ms(self) -> int:
@@ -420,18 +431,26 @@ class AnalysisOrchestrator:
         treats a sub-task that failed.
         """
         permissions = session.permissions
+
+        def record(decision: str) -> None:
+            state.approval_gates.append({"category": category, "subject": subject, "decision": decision})
+
         if permissions.granted(category, subject):
+            record("previously_granted")
             return True
 
         ruling = permissions.ruling_for(category)
         if ruling == "allow":
+            record("allowed")
             return True
 
         if ruling == "deny":
+            record("denied")
             await self._refuse(state, emitter, denial_reason(category, subject, asked=False))
             return False
 
         if not state.can_prompt:
+            record("unattended_denial")
             await self._refuse(state, emitter, unattended_reason(category, subject))
             return False
 
@@ -448,6 +467,7 @@ class AnalysisOrchestrator:
         state.phase = resume_phase
 
         if not decision.approved:
+            record("denied")
             reason = decision.reason or denial_reason(category, subject, asked=True)
             await self._refuse(state, emitter, reason)
             return False
@@ -455,6 +475,7 @@ class AnalysisOrchestrator:
         # Remembered for the rest of the session, so an investigation that needs
         # the same library at iterations 4, 5 and 6 asks once rather than thrice.
         permissions.grant(category, subject)
+        record("approved")
         return True
 
     async def _refuse(self, state: RunState, emitter: Emitter | None, reason: str) -> None:
@@ -618,6 +639,27 @@ class AnalysisOrchestrator:
                 return self._result(state, "completed")
 
             await self._verify(state, session, emitter, budget)
+            while self._confidence_requires_more_work(state, budget):
+                state.tool_calls.append(
+                    {
+                        "tool": "stopping_policy",
+                        "decision": "continue",
+                        "reason": state.analysis.confidence.get("stop", {}).get("reason", "continue"),
+                    }
+                )
+                await self._investigate(
+                    state,
+                    session,
+                    emitter,
+                    previous_code,
+                    budget,
+                    start_iteration=state.iterations_used + 1,
+                    force_code=True,
+                )
+                if state.blocked:
+                    await self._finalize(state, session, emitter)
+                    return self._result(state, "completed")
+                await self._verify(state, session, emitter, budget)
             await self._review(state, session, emitter)
             if settings.VISION_ENABLED and state.image:
                 # `_review` awaits vision and council together and returns
@@ -885,11 +927,14 @@ class AnalysisOrchestrator:
         emitter: Emitter | None,
         previous_code: str | None,
         budget: TierBudget,
+        *,
+        start_iteration: int = 1,
+        force_code: bool = False,
     ):
         """Runs the observe -> decide -> act loop until the agent answers."""
         allowed = self._allowed_actions(session, budget)
 
-        for iteration in range(1, budget.iterations + 1):
+        for iteration in range(start_iteration, budget.iterations + 1):
             # Checked before the iteration is claimed, never during it: a call
             # in flight is already paid for, and cancelling it would leave the
             # provider mid-generation with nothing to show for the tokens. It
@@ -916,8 +961,24 @@ class AnalysisOrchestrator:
                 mode=state.mode,
             )
 
-            decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
+            if force_code and iteration == start_iteration:
+                decision = Decision(
+                    kind=ActionKind.CODE,
+                    goal=(state.analysis.open_questions[-1] if state.analysis.open_questions else state.instruction),
+                    rationale="The stopping policy found unresolved evidence; investigate it before answering.",
+                )
+            else:
+                decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
             state.any_decision_inferred = state.any_decision_inferred or decision.inferred
+            state.action_log.append(
+                {
+                    "iteration": iteration,
+                    "kind": decision.kind.value,
+                    "goal": decision.goal,
+                    "rationale": decision.rationale,
+                    "inferred": decision.inferred,
+                }
+            )
 
             await emit(
                 emitter,
@@ -949,6 +1010,27 @@ class AnalysisOrchestrator:
         # Whatever the loop produced is what the answer is built from.
         state.output = state.investigation.executed_output or state.output
         state.code = state.investigation.last_successful_code or state.code
+
+    @staticmethod
+    def _confidence_requires_more_work(state: RunState, budget: TierBudget) -> bool:
+        """Return whether the policy authorizes another bounded iteration for a named gap.
+
+        Unknown confidence components alone are not a useful task for another model call. A
+        continuation requires structured unresolved evidence (an open question, plan uncertainty,
+        or unresolved hypothesis), which is the evidence the next action can actually address.
+        """
+        stop = (state.analysis.confidence or {}).get("stop") or {}
+        unresolved_hypotheses = any(
+            hypothesis.status == "unresolved" for hypothesis in state.analysis.hypotheses.items.values()
+        )
+        has_named_gap = bool(
+            state.analysis.open_questions or state.analysis.plan.open_uncertainties or unresolved_hypotheses
+        )
+        return bool(
+            stop.get("should_stop") is False
+            and has_named_gap
+            and state.iterations_used < budget.iterations
+        )
 
     def _allowed_actions(self, session: Session, budget: TierBudget) -> tuple[ActionKind, ...]:
         """The menu offered this turn.
@@ -1635,12 +1717,19 @@ class AnalysisOrchestrator:
             graph = state.analysis.evidence
             handle = session.active_handle
             dataset_id = graph.ensure_dataset(handle.content_hash, handle.name) if handle is not None else None
+            step_id = graph.add_node("step", goal)
             code_id = graph.add_node("code", goal, code=state.code)
             execution_id = graph.add_node("execution", goal, output=state.output[:2000])
+            result_id = graph.add_node("result", goal, output=state.output[:2000])
+            objective_id = graph.last("objective")
+            if objective_id:
+                graph.add_edge(objective_id, step_id, "informs")
+            graph.add_edge(step_id, code_id, "informs")
             graph.add_edge(code_id, execution_id, "produced")
+            graph.add_edge(execution_id, result_id, "produced")
             if dataset_id:
                 graph.add_edge(dataset_id, execution_id, "derived_from")
-            state.analysis.evidence_refs.append(execution_id)
+            state.analysis.evidence_refs.extend((execution_id, result_id))
         except Exception as exc:
             logger.error("Could not record execution evidence", error=str(exc))
 
@@ -1719,6 +1808,8 @@ class AnalysisOrchestrator:
                         observation=result.output,
                         ok=True,
                         code=state.code,
+                        duration_ms=state.execution_durations_ms[-1] if state.execution_durations_ms else 0,
+                        retries=state.retry_count,
                     )
                 )
                 self._record_execution_evidence(state, session, goal)
@@ -1736,6 +1827,7 @@ class AnalysisOrchestrator:
             state.failed_error = result.output
             state.error = result.output
             state.retry_count += 1
+            state.retries_total += 1
             state.from_cache = False
 
             if state.retry_count > settings.MAX_CORRECTION_RETRIES:
@@ -1869,6 +1961,7 @@ class AnalysisOrchestrator:
         return stripped
 
     async def _execute(self, state: RunState, session: Session, emitter: Emitter | None) -> ExecutionResult:
+        started = time.perf_counter()
         state.phase = Phase.EXECUTING
         step_id = f"run-{state.iterations_used}-{state.retry_count}"
         await emit(emitter, EventType.STEP_START, id=step_id, label="Running code", kind="execute")
@@ -1916,6 +2009,12 @@ class AnalysisOrchestrator:
 
         for warning in result.warnings:
             await emit(emitter, EventType.WARNING, content=warning)
+
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        state.execution_durations_ms.append(duration_ms)
+        state.tool_calls.append({"tool": "code_executor", "ok": result.ok, "duration_ms": duration_ms})
+        if not result.ok:
+            state.failures.append(result.output[:500])
 
         await emit(emitter, EventType.STEP_END, id=step_id, ok=result.ok, duration_ms=state.elapsed_ms)
         return result
@@ -2024,6 +2123,7 @@ class AnalysisOrchestrator:
             recomputation_detail=detail,
         )
         self._run_validators(state, ctx, session)
+        state.tool_calls.append({"tool": "validation_registry", "count": len(state.analysis.validations)})
         await self._run_critic(state, ctx, emitter)
         await self._compute_confidence(state, session, status, budget, emitter)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
@@ -2035,7 +2135,8 @@ class AnalysisOrchestrator:
     ) -> None:
         """Phase 9: rolls this turn's already-computed evidence into an explainable confidence
         verdict -- see `analysis.confidence.compute`. Reported alongside a stop-policy check
-        (`analysis.stopping.decide`); neither rewrites the answer (Rule 5, mirroring Rule 4)."""
+        (`analysis.stopping.decide`), which controls whether the bounded investigation loop gets
+        another evidence-gathering iteration."""
         handle = session.active_handle
         completeness = handle.profile.get("global_quality", {}).get("completeness_score") if handle else None
         row_count = len(session.df) if session.df is not None else None
@@ -2057,9 +2158,15 @@ class AnalysisOrchestrator:
         )
         result = confidence.compute(ctx)
         stop = stopping.decide(
-            result, iterations_used=state.iterations_used, iterations_budget=budget.iterations, validated=True
+            result,
+            iterations_used=state.iterations_used,
+            iterations_budget=budget.iterations,
+            validated=status == "verified",
         )
         state.analysis.confidence = {**result.to_dict(), "stop": stop.to_dict()}
+        state.tool_calls.append(
+            {"tool": "confidence", "verdict": result.verdict, "stop": stop.should_stop, "reason": stop.reason}
+        )
         await emit(
             emitter,
             EventType.CONFIDENCE,
@@ -2111,6 +2218,12 @@ class AnalysisOrchestrator:
             findings = critic.critique(ctx)
             for finding in findings:
                 state.analysis.critic_findings.append(finding.to_dict())
+                if finding.severity == "error":
+                    question = f"{finding.category}: {finding.message}"
+                    if question not in state.analysis.open_questions:
+                        state.analysis.open_questions.append(question)
+                    if question not in state.analysis.plan.open_uncertainties:
+                        state.analysis.plan.open_uncertainties.append(question)
                 await emit(
                     emitter,
                     EventType.CRITIC_FINDING,
@@ -2119,6 +2232,7 @@ class AnalysisOrchestrator:
                     message=finding.message,
                     suggested_reaction=finding.suggested_reaction,
                 )
+            state.tool_calls.append({"tool": "critic", "count": len(findings)})
         except Exception as exc:
             logger.error("Could not run critic", error=str(exc))
 
@@ -2173,6 +2287,7 @@ class AnalysisOrchestrator:
             ]
             if notes:
                 state.warnings.extend(notes)
+        state.tool_calls.append({"tool": "council_review", "ok": isinstance(review, dict)})
 
         if len(outcomes) > 1 and isinstance(outcomes[1], str) and outcomes[1]:
             state.artifacts.append({"kind": "plot_description", "text": outcomes[1]})
@@ -2207,6 +2322,15 @@ class AnalysisOrchestrator:
         await emit(emitter, EventType.STATUS, content="Writing the answer", phase=Phase.ANSWERING.value)
 
         handle = session.active_handle
+        self._sync_plan_hypotheses(state)
+        confidence_state = state.analysis.confidence or {}
+        if confidence_state.get("verdict") in {"cannot_answer", "insufficient_evidence"}:
+            reasons = confidence_state.get("reasons") or ["The available evidence did not meet the answer threshold."]
+            state.answer = "I cannot responsibly answer this from the available evidence.\n\n" + "\n".join(
+                f"- {reason}" for reason in reasons
+            )
+            await emit(emitter, EventType.CONTENT_DELTA, content=state.answer)
+            return
         if handle is not None:
             for note in assumptions_from_profile(handle.profile):
                 state.investigation.note_assumption(note)
@@ -2271,6 +2395,13 @@ class AnalysisOrchestrator:
 
         await self._check_grounding(state, emitter)
 
+    @staticmethod
+    def _sync_plan_hypotheses(state: RunState) -> None:
+        """Materialise explicitly labelled plan hypotheses into analytical state."""
+        for statement in state.analysis.plan.hypotheses:
+            if not any(item.statement == statement for item in state.analysis.hypotheses.items.values()):
+                state.analysis.hypotheses.add("primary", statement)
+
     async def _check_grounding(self, state: RunState, emitter: Emitter | None):
         """Flags figures in the answer that were never actually computed.
 
@@ -2306,12 +2437,12 @@ class AnalysisOrchestrator:
         """
         try:
             graph = state.analysis.evidence
-            execution_id = graph.last("execution")
-            if execution_id is None or not state.grounding.grounded_values:
+            result_id = graph.last("result") or graph.last("execution")
+            if result_id is None or not state.grounding.grounded_values:
                 return
             for value in state.grounding.grounded_values:
                 claim_id = graph.add_node("claim", value)
-                graph.add_edge(execution_id, claim_id, "supports")
+                graph.add_edge(result_id, claim_id, "supports")
                 state.analysis.evidence_refs.append(claim_id)
         except Exception as exc:
             logger.error("Could not record claim evidence", error=str(exc))
@@ -2421,7 +2552,14 @@ class AnalysisOrchestrator:
         # in the same session and overwritten the workspace's `analysis.py`.
         # Mirrors the `blocks` filter `export.build_script` applies.
         exported_steps = [
-            {"goal": step.goal, "code": step.code}
+            {
+                "goal": step.goal,
+                "code": step.code,
+                "observation": step.observation,
+                "ok": step.ok,
+                "duration_ms": step.duration_ms,
+                "retries": step.retries,
+            }
             for step in state.investigation.steps
             if step.kind is ActionKind.CODE and step.ok and step.code
         ]
@@ -2434,6 +2572,7 @@ class AnalysisOrchestrator:
         try:
             from src.core.database import db_mgr
 
+            state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
             analysis_snapshot = state.analysis.to_dict()
             db_mgr.save_analysis_state(session.id, state.message_id, analysis_snapshot)
             db_mgr.save_plan_revisions(
@@ -2441,15 +2580,42 @@ class AnalysisOrchestrator:
             )
             db_mgr.save_evidence_graph(session.id, state.message_id, state.analysis.evidence.to_dict())
             if state.message_id is not None:
+                telemetry = {
+                    "actions": state.action_log,
+                    "tool_calls": state.tool_calls,
+                    "approval_gates": state.approval_gates,
+                    "failures": state.failures,
+                    "retries": state.retries_total,
+                    "execution_durations_ms": state.execution_durations_ms,
+                    "verification": state.verification,
+                    "critic_findings": len(state.analysis.critic_findings),
+                    "evidence_nodes": len(state.analysis.evidence.nodes),
+                    "evidence_edges": len(state.analysis.evidence.edges),
+                    "usage": state.usage,
+                }
                 run = capture(
                     session_id=session.id,
                     message_id=state.message_id,
                     instruction=state.instruction,
                     answer=state.answer,
                     dataset_manifest=dataset_manifest_from_session(session),
-                    steps=[ExecutedStep(goal=step["goal"], code=step["code"]) for step in exported_steps],
+                    steps=[
+                        ExecutedStep(
+                            goal=step["goal"],
+                            code=step["code"],
+                            ok=step.get("ok", True),
+                            observation=step.get("observation", ""),
+                            duration_ms=step.get("duration_ms", 0),
+                            retries=step.get("retries", 0),
+                        )
+                        for step in exported_steps
+                    ],
                     analysis=analysis_snapshot,
                     warnings=state.warnings,
+                    dataset_files=dataset_files_from_session(session),
+                    telemetry=telemetry,
+                    active_table_key=session.active_handle.table_key if session.active_handle else "",
+                    artifacts=state.artifacts,
                 )
                 db_mgr.save_analysis_run(session.id, state.message_id, run.to_dict())
         except Exception as exc:

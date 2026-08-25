@@ -103,3 +103,39 @@ def test_changed_since_ignores_a_table_the_run_never_saw() -> None:
     current = [DatasetManifestEntry(name="new.csv", table_key="new", content_hash="abc", rows=1)]
 
     assert run.changed_since(current) == []
+
+
+def test_changed_since_detects_missing_or_schema_changed_inputs() -> None:
+    run = AnalysisRun(
+        session_id="s",
+        message_id=1,
+        instruction="q",
+        answer="a",
+        dataset_manifest=(
+            DatasetManifestEntry(
+                name="a.csv",
+                table_key="a",
+                content_hash="hash",
+                rows=2,
+                columns=("value",),
+            ),
+        ),
+    )
+    assert run.changed_since([]) == ["a.csv"]
+    assert run.changed_since(
+        [DatasetManifestEntry(name="a.csv", table_key="a", content_hash="hash", rows=2, columns=("renamed",))]
+    ) == ["a.csv"]
+
+
+def test_dataset_fingerprint_changes_for_values_and_columns(session) -> None:
+    session.add_dataset("a.csv", pd.DataFrame({"value": [1, 2]}))
+    handle = session.active_handle
+    assert handle is not None
+    original = handle.content_hash
+    handle.df.loc[0, "value"] = 99
+    changed_value = handle.content_hash
+    handle.df.rename(columns={"value": "renamed"}, inplace=True)
+    changed_schema = handle.content_hash
+
+    assert changed_value != original
+    assert changed_schema != changed_value

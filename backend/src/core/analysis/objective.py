@@ -115,7 +115,10 @@ class AnalyticalObjective:
             if any(keyword in lowered for keyword in keywords):
                 analytical_type = candidate
                 break
-        return cls(question=instruction or "", analytical_type=analytical_type)
+        ambiguity = []
+        if analytical_type is None and instruction:
+            ambiguity.append("The question does not specify a recognised analytical type.")
+        return cls(question=instruction or "", analytical_type=analytical_type, ambiguity=ambiguity)
 
     def resolve_variables(self, columns: Sequence[str]) -> None:
         """Fills `likely_variables['dependent']` only from an explicit "predict/target/classify

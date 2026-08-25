@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.api import app
-from src.core.analysis.runs import capture, dataset_manifest_from_session
+from src.core.analysis.runs import capture, dataset_files_from_session, dataset_manifest_from_session
 from src.core.database import db_mgr
 from src.core.session import session_manager
 
@@ -126,6 +126,8 @@ def _capture_run(session_id: str, message_id: int, session, *, instruction: str 
         steps=[],
         analysis={"evidence": {"nodes": [], "edges": []}},
         warnings=[],
+        dataset_files=dataset_files_from_session(session),
+        active_table_key=session.active_handle.table_key if session.active_handle else "",
     )
     db_mgr.save_analysis_run(session_id, message_id, run.to_dict())
 
@@ -150,9 +152,7 @@ def test_a_captured_run_is_bundled_as_run_json(client: TestClient, simple_df: pd
 def test_a_dataset_changed_since_capture_is_flagged_not_silently_reproduced(
     client: TestClient, simple_df: pd.DataFrame
 ) -> None:
-    """The acceptance boundary this phase draws: dataset *bytes* are not versioned, only their
-    content hash at capture time, so a later turn replacing the table must say so, not export
-    silently as if nothing had changed underneath it."""
+    """A later replacement is flagged even though the captured CSV remains available to export."""
     session_id = upload(client, simple_df)["session_id"]
     session = session_manager.get(session_id)
     assert session is not None
@@ -167,6 +167,24 @@ def test_a_dataset_changed_since_capture_is_flagged_not_silently_reproduced(
     archive = zipfile.ZipFile(io.BytesIO(response.content))
     warning = archive.read("DATASET_CHANGED.txt").decode("utf-8")
     assert "data.csv" in warning
+
+
+def test_a_captured_run_exports_captured_input_bytes_after_dataset_replacement(
+    client: TestClient, simple_df: pd.DataFrame
+) -> None:
+    session_id = upload(client, simple_df)["session_id"]
+    session = session_manager.get(session_id)
+    assert session is not None
+    message_id = seed_message(session_id)
+    _capture_run(session_id, message_id, session)
+
+    session.add_dataset("data.csv", pd.DataFrame({"A": [999], "B": ["new"], "C": [9.9]}))
+    response = client.get(f"/api/export/{message_id}", headers={SESSION_HEADER: session_id})
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert b"999" not in archive.read("data/data.csv")
+    assert csv_bytes(simple_df) == archive.read("data/data.csv")
 
 
 def test_a_fully_connector_backed_session_exports_a_bare_file(client: TestClient, simple_df: pd.DataFrame) -> None:
