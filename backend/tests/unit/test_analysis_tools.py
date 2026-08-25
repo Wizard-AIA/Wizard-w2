@@ -256,6 +256,29 @@ def test_answer_prompt_omits_the_critic_block_when_there_are_no_findings() -> No
     assert "<critic_findings>" not in prompt
 
 
+def test_answer_prompt_surfaces_a_cannot_answer_confidence_verdict() -> None:
+    prompt = create_answer_prompt(
+        "how many rows",
+        "print(len(df))",
+        "10",
+        confidence_verdict="cannot_answer",
+        confidence_reasons=["Only 5 rows -- too few to generalise confidently."],
+    )
+
+    assert "<confidence_verdict>" in prompt
+    assert "cannot_answer" in prompt
+    assert "Only 5 rows" in prompt
+    assert "say so plainly" in prompt
+
+
+def test_answer_prompt_omits_the_confidence_block_for_a_plain_answerable_verdict() -> None:
+    prompt = create_answer_prompt(
+        "how many rows", "print(len(df))", "10", confidence_verdict="answerable", confidence_reasons=["fine"]
+    )
+
+    assert "<confidence_verdict>" not in prompt
+
+
 # --------------------------------------------------------------------------- #
 # Schema registry
 # --------------------------------------------------------------------------- #

@@ -759,6 +759,8 @@ def create_answer_prompt(
     assumptions: list[str] | None = None,
     verification: str = "",
     critic_findings: list[str] | None = None,
+    confidence_verdict: str | None = None,
+    confidence_reasons: list[str] | None = None,
 ) -> str:
     """Turns a completed investigation into a written answer.
 
@@ -802,6 +804,17 @@ def create_answer_prompt(
         else ""
     )
 
+    confidence_block = ""
+    confidence_instruction = ""
+    if confidence_verdict in ("insufficient_evidence", "cannot_answer"):
+        joined = "\n".join(f"- {item}" for item in confidence_reasons or [])
+        confidence_block = f"\n<confidence_verdict>\n{confidence_verdict}\n{joined}\n</confidence_verdict>\n"
+        confidence_instruction = (
+            "10. The confidence verdict above is "
+            f"'{confidence_verdict}' -- say so plainly, name the reasons listed, and do not present the "
+            "result as a settled answer.\n"
+        )
+
     return f"""<role>
 You are a data analyst explaining a finished result to the person who asked for it.
 </role>
@@ -819,7 +832,7 @@ You are a data analyst explaining a finished result to the person who asked for 
 <execution_output>
 {trimmed}
 </execution_output>
-{verification_block}{assumptions_block}{critic_block}
+{verification_block}{assumptions_block}{critic_block}{confidence_block}
 <instructions>
 1. Answer the question directly in the first sentence, using the actual numbers from the output.
 2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
@@ -836,7 +849,7 @@ You are a data analyst explaining a finished result to the person who asked for 
    not call a near-zero value "strong". Do not say a dataset or column is fully/100% complete unless
    every relevant row in the output actually shows 100% -- if any row is lower, name which one and by
    how much instead of stating a blanket claim.
-{critic_instruction}</instructions>"""
+{critic_instruction}{confidence_instruction}</instructions>"""
 
 
 def _middle_out(text: str, limit: int) -> str:

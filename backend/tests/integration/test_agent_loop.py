@@ -21,6 +21,7 @@ from src.core.database import db_mgr
 from src.core.ingest.documents import ContextDocument, DocumentChunk
 from src.core.session import Session
 from src.core.skills.registry import skill_registry
+from src.core.tools.catalog import CatalogEngine
 
 
 def kinds(collector: EventCollector) -> list[str]:
@@ -620,6 +621,55 @@ async def test_a_simpsons_paradox_is_caught_and_reaches_the_answer_prompt(sessio
     answer_prompt = stub.prompts[-1]
     assert "<critic_findings>" in answer_prompt
     assert "reverses once segmented" in answer_prompt
+
+
+async def test_confidence_verdict_is_reported_after_verification(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 9: confidence is computed and reported alongside verification, never left implicit."""
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is correct.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="total of A", mode="auto", emitter=collector)
+
+    confidence_events = collector.of_type(EventType.CONFIDENCE)
+    assert confidence_events
+    assert result.analysis["confidence"]["verdict"] == confidence_events[-1].data["verdict"]
+    assert "stop" in result.analysis["confidence"]
+
+
+async def test_a_dataset_lacking_the_evidence_produces_cannot_answer_with_named_reasons(
+    session: Session,
+    stub_llm,  # noqa: F811
+) -> None:
+    """Phase 9's acceptance criterion: a dataset too sparse to support the claim, combined with a
+    disagreeing recomputation, produces `cannot_answer` -- a success state naming the gap, never a
+    confident guess presented as settled."""
+    sparse = pd.DataFrame({"value": [1.0, None, None, None, None]})
+    session.add_dataset("sparse.csv", sparse, profile=CatalogEngine.analyze(sparse))
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['value'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('MISMATCH: got 1 expected 99')\n```",
+            "The total is 1.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=session, instruction="total of value", mode="auto", emitter=collector)
+
+    confidence_events = collector.of_type(EventType.CONFIDENCE)
+    assert confidence_events[-1].data["verdict"] == "cannot_answer"
+    assert result.analysis["confidence"]["verdict"] == "cannot_answer"
+    assert len(result.analysis["confidence"]["reasons"]) >= 3
 
 
 async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811

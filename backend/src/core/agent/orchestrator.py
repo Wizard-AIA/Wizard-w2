@@ -63,7 +63,7 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
-from src.core.analysis import competing, critic, understanding
+from src.core.analysis import competing, confidence, critic, stopping, understanding
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
@@ -192,6 +192,9 @@ class RunState:
     #: `_finalize` merges their usage-ledger totals into the turn's own, since
     #: each books under its own id rather than this session's.
     subagent_ids: list[str] = field(default_factory=list)
+    #: Whether any decision this turn was a fallback rather than a reasoned model choice --
+    #: Phase 9's `confidence.py` model_uncertainty component input. See `Decision.inferred`.
+    any_decision_inferred: bool = False
     started_at: float = field(default_factory=time.time)
     #: The persisted `chat_messages` row id for this turn's answer, set by
     #: `_finalize`. What a later "export this turn" request keys on -- see
@@ -912,6 +915,7 @@ class AnalysisOrchestrator:
             )
 
             decision = await self._decide(state, session, emitter, iteration, remaining, allowed, budget)
+            state.any_decision_inferred = state.any_decision_inferred or decision.inferred
 
             await emit(
                 emitter,
@@ -1973,8 +1977,50 @@ class AnalysisOrchestrator:
         )
         self._run_validators(state, ctx)
         await self._run_critic(state, ctx, emitter)
+        await self._compute_confidence(state, session, status, budget, emitter)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
         await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
+
+    @staticmethod
+    async def _compute_confidence(
+        state: RunState, session: Session, status: str, budget: TierBudget, emitter: Emitter | None
+    ) -> None:
+        """Phase 9: rolls this turn's already-computed evidence into an explainable confidence
+        verdict -- see `analysis.confidence.compute`. Reported alongside a stop-policy check
+        (`analysis.stopping.decide`); neither rewrites the answer (Rule 5, mirroring Rule 4)."""
+        handle = session.active_handle
+        completeness = handle.profile.get("global_quality", {}).get("completeness_score") if handle else None
+        row_count = len(session.df) if session.df is not None else None
+        route_verdict = state.analysis.route_comparisons[-1]["verdict"] if state.analysis.route_comparisons else None
+        unresolved = (
+            len(state.analysis.open_questions)
+            + sum(1 for entry in state.analysis.critic_findings if entry["severity"] == "error")
+            + sum(1 for hyp in state.analysis.hypotheses.items.values() if hyp.status == "unresolved")
+        )
+        ctx = confidence.ConfidenceContext(
+            completeness_score=completeness,
+            row_count=row_count,
+            verification_status=status,
+            route_comparison_verdict=route_verdict,
+            has_sensitivity_finding=any(entry["validator"] == "sensitivity" for entry in state.analysis.validations),
+            has_wrong_test_finding=any(entry["category"] == "wrong_test" for entry in state.analysis.critic_findings),
+            unresolved_count=unresolved,
+            decision_inferred=state.any_decision_inferred,
+        )
+        result = confidence.compute(ctx)
+        stop = stopping.decide(
+            result, iterations_used=state.iterations_used, iterations_budget=budget.iterations, validated=True
+        )
+        state.analysis.confidence = {**result.to_dict(), "stop": stop.to_dict()}
+        await emit(
+            emitter,
+            EventType.CONFIDENCE,
+            verdict=result.verdict,
+            components=[component.to_dict() for component in result.components],
+            reasons=result.reasons,
+            stop_reason=stop.reason,
+            stop_detail=stop.detail,
+        )
 
     @staticmethod
     def _run_validators(state: RunState, ctx: ValidationContext) -> None:
@@ -2114,6 +2160,8 @@ class AnalysisOrchestrator:
             critic_findings=[
                 entry["message"] for entry in state.analysis.critic_findings if entry["severity"] != "info"
             ],
+            confidence_verdict=(state.analysis.confidence or {}).get("verdict"),
+            confidence_reasons=(state.analysis.confidence or {}).get("reasons"),
         )
 
         chunks: list[str] = []
