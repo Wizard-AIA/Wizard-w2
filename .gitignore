@@ -76,8 +76,13 @@ results/
 data/
 *.log
 
-# Workspace cache & temporary datasets
-workspace/
+# Workspace session data (per-session state) -- sample datasets in workspace/
+# (dataset.csv, housing.csv) are tracked so the release build has something
+# for a consumer to try immediately.
+workspace/sessions/
+
+# Local release build output (scripts/build_release.sh)
+dist/
 
 # TypeScript incremental build cache
 frontend/tsconfig.tsbuildinfo

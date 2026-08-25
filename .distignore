@@ -1,0 +1,88 @@
+# Paths excluded from consumer release zips assembled by scripts/build_release.sh.
+# Unlike .gitignore, this controls distribution packaging, not version control --
+# most of what is listed here is tracked in git and needed by contributors.
+
+# === This file itself ===
+.distignore
+
+# === Tests ===
+backend/tests/
+
+# === Benchmarks & scripts ===
+scripts/
+workspace/sessions/
+
+# === Documentation ===
+docs/
+PLAN.md
+claude_plan.md
+CHANGELOG.md
+CONSUMER_RELEASE_PLAN.md
+
+# === Contributor guides ===
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+GOVERNANCE.md
+MAINTAINERS.md
+SUPPORT.md
+SECURITY.md
+
+# === AI assistant configs ===
+CLAUDE.md
+backend/CLAUDE.md
+frontend/CLAUDE.md
+cli/CLAUDE.md
+cli/README.md
+frontend/README.md
+.claude/
+
+# === CI/CD ===
+.github/
+
+# === Linting & formatting ===
+pyproject.toml
+pyrightconfig.json
+.editorconfig
+.pre-commit-config.yaml
+commitlint.config.mjs
+.ruff_cache/
+.lycheeignore
+
+# === Audit & compliance ===
+check-license-compliance.config.yml
+.safety-project.ini
+requirements-audit-tools.in
+requirements-audit-tools.lock.txt
+requirements-ci-tools.in
+requirements-ci-tools.lock.txt
+
+# === Mutation testing ===
+cosmic-ray.toml
+.cosmic-ray-scratch/
+
+# === Dev caches ===
+.pytest_cache/
+frontend/.next/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+
+# === Dev scripts ===
+backend/scripts/
+
+# === Optional/experimental deps ===
+requirements-optional.txt
+
+# === Git internals ===
+.git/
+.gitattributes
+.gitignore
+
+# === Root .env (benchmark key) ===
+.env
+
+# === CLI source (binary is shipped) ===
+cli/cmd/
+cli/internal/
+cli/go.mod
+cli/go.sum
+cli/.gitignore
