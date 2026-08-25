@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.api import app
+from src.core.analysis.runs import capture, dataset_manifest_from_session
 from src.core.database import db_mgr
 from src.core.session import session_manager
 
@@ -113,6 +114,59 @@ def test_a_recorded_evidence_graph_is_bundled_as_provenance_json(client: TestCli
     archive = zipfile.ZipFile(io.BytesIO(response.content))
     provenance = json.loads(archive.read("provenance.json"))
     assert provenance["nodes"][0]["id"] == "execution-0"
+
+
+def _capture_run(session_id: str, message_id: int, session, *, instruction: str = "how many rows?") -> None:
+    run = capture(
+        session_id=session_id,
+        message_id=message_id,
+        instruction=instruction,
+        answer="There are 5 rows.",
+        dataset_manifest=dataset_manifest_from_session(session),
+        steps=[],
+        analysis={"evidence": {"nodes": [], "edges": []}},
+        warnings=[],
+    )
+    db_mgr.save_analysis_run(session_id, message_id, run.to_dict())
+
+
+def test_a_captured_run_is_bundled_as_run_json(client: TestClient, simple_df: pd.DataFrame) -> None:
+    """Phase 10 (ADR 0005): an immutable snapshot, once captured, travels with the export."""
+    session_id = upload(client, simple_df)["session_id"]
+    session = session_manager.get(session_id)
+    assert session is not None
+    message_id = seed_message(session_id)
+    _capture_run(session_id, message_id, session)
+
+    response = client.get(f"/api/export/{message_id}", headers={SESSION_HEADER: session_id})
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    captured = json.loads(archive.read("run.json"))
+    assert captured["instruction"] == "how many rows?"
+    assert "DATASET_CHANGED.txt" not in archive.namelist()
+
+
+def test_a_dataset_changed_since_capture_is_flagged_not_silently_reproduced(
+    client: TestClient, simple_df: pd.DataFrame
+) -> None:
+    """The acceptance boundary this phase draws: dataset *bytes* are not versioned, only their
+    content hash at capture time, so a later turn replacing the table must say so, not export
+    silently as if nothing had changed underneath it."""
+    session_id = upload(client, simple_df)["session_id"]
+    session = session_manager.get(session_id)
+    assert session is not None
+    message_id = seed_message(session_id)
+    _capture_run(session_id, message_id, session)
+
+    session.add_dataset("data.csv", pd.DataFrame({"A": [999], "B": ["z"], "C": [9.9]}))
+
+    response = client.get(f"/api/export/{message_id}", headers={SESSION_HEADER: session_id})
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    warning = archive.read("DATASET_CHANGED.txt").decode("utf-8")
+    assert "data.csv" in warning
 
 
 def test_a_fully_connector_backed_session_exports_a_bare_file(client: TestClient, simple_df: pd.DataFrame) -> None:

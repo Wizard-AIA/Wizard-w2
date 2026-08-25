@@ -25,6 +25,7 @@ from fastapi.responses import Response
 
 from src.api.deps import get_session_for_link, require_api_key
 from src.core.agent import export
+from src.core.analysis.runs import AnalysisRun, dataset_manifest_from_session
 from src.core.database import db_mgr
 from src.core.session import Session
 
@@ -46,8 +47,11 @@ async def export_message(
     """Rebuilds one turn's analysis as a downloadable script, notebook, or zip.
 
     A zip is returned instead of the bare file whenever a file-based table needs to travel with
-    it (a connector-sourced table never does, since it is re-fetched by name instead), or the
-    turn recorded a provenance graph (`provenance.json` -- see core/analysis/provenance.py).
+    it (a connector-sourced table never does, since it is re-fetched by name instead), the turn
+    recorded a provenance graph (`provenance.json`), or an immutable run snapshot exists
+    (`run.json` -- see core/analysis/runs.py, ADR 0005). A `DATASET_CHANGED.txt` is added when a
+    table's content hash no longer matches what the run recorded, so a stale export says so
+    rather than silently reproducing the wrong thing.
     """
     message = db_mgr.get_chat_message(session.id, message_id)
     if message is None:
@@ -63,7 +67,26 @@ async def export_message(
 
     instruction = str(meta.get("instruction") or "")
     bundle = export.bundle_files(session)
-    evidence = db_mgr.get_evidence_graph(message_id)
+
+    # Phase 10 (ADR 0005): prefer the immutable run snapshot over live tables wherever one was
+    # captured -- a report or export must be unaffected by any turn that ran after this one, and
+    # the run's own `analysis.evidence` is that turn's evidence graph frozen at `_finalize` time.
+    run_data = db_mgr.get_analysis_run(message_id)
+    run_json: bytes | None = None
+    drift_warning: bytes | None = None
+    if run_data is not None:
+        run = AnalysisRun.from_dict(run_data)
+        run_json = json.dumps(run_data, indent=2).encode("utf-8")
+        evidence = run.analysis.get("evidence") or {}
+        changed = run.changed_since(dataset_manifest_from_session(session))
+        if changed:
+            drift_warning = (
+                "The following table(s) have changed since this analysis ran: "
+                f"{', '.join(changed)}. Re-running the exported code may not reproduce the "
+                "original result.\n"
+            ).encode()
+    else:
+        evidence = db_mgr.get_evidence_graph(message_id)
     provenance = json.dumps(evidence, indent=2).encode("utf-8") if evidence.get("nodes") else None
 
     if format == "notebook":
@@ -79,7 +102,7 @@ async def export_message(
         payload = text.encode("utf-8")
         filename = "analysis.py"
 
-    if not bundle and not provenance:
+    if not bundle and not provenance and not run_json:
         return Response(
             content=payload,
             media_type=MEDIA_TYPES[format],
@@ -93,6 +116,10 @@ async def export_message(
             archive.writestr(path, data)
         if provenance:
             archive.writestr("provenance.json", provenance)
+        if run_json:
+            archive.writestr("run.json", run_json)
+        if drift_warning:
+            archive.writestr("DATASET_CHANGED.txt", drift_warning)
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",

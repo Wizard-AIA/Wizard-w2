@@ -672,6 +672,32 @@ async def test_a_dataset_lacking_the_evidence_produces_cannot_answer_with_named_
     assert len(result.analysis["confidence"]["reasons"]) >= 3
 
 
+async def test_finalize_captures_an_immutable_run_snapshot(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 10: `_finalize` captures an `AnalysisRun` alongside the mutable analysis-state
+    snapshot -- what a later export or report renders from (ADR 0005)."""
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is correct.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    run = db_mgr.get_analysis_run(result.message_id)
+    assert run is not None
+    assert run["instruction"] == "total of A"
+    assert run["answer"] == result.answer
+    assert run["dataset_manifest"]
+    assert run["dataset_manifest"][0]["content_hash"]
+    assert run["steps"]
+
+
 async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """Phase 3's acceptance criterion: every grounded figure traces to an execution and a
     dataset version -- not asserted from logs, but from the graph itself.

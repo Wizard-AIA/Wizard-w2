@@ -65,6 +65,7 @@ from src.core.agent.grounding import (
 )
 from src.core.analysis import competing, confidence, critic, stopping, understanding
 from src.core.analysis.objective import AnalyticalObjective
+from src.core.analysis.runs import ExecutedStep, capture, dataset_manifest_from_session
 from src.core.analysis.state import AnalyticalState
 from src.core.analysis.validation.base import ValidationContext
 from src.core.analysis.validation.registry import run_validators
@@ -2371,11 +2372,24 @@ class AnalysisOrchestrator:
         try:
             from src.core.database import db_mgr
 
-            db_mgr.save_analysis_state(session.id, state.message_id, state.analysis.to_dict())
+            analysis_snapshot = state.analysis.to_dict()
+            db_mgr.save_analysis_state(session.id, state.message_id, analysis_snapshot)
             db_mgr.save_plan_revisions(
                 session.id, state.message_id, [revision.to_dict() for revision in state.analysis.plan.revisions]
             )
             db_mgr.save_evidence_graph(session.id, state.message_id, state.analysis.evidence.to_dict())
+            if state.message_id is not None:
+                run = capture(
+                    session_id=session.id,
+                    message_id=state.message_id,
+                    instruction=state.instruction,
+                    answer=state.answer,
+                    dataset_manifest=dataset_manifest_from_session(session),
+                    steps=[ExecutedStep(goal=step["goal"], code=step["code"]) for step in exported_steps],
+                    analysis=analysis_snapshot,
+                    warnings=state.warnings,
+                )
+                db_mgr.save_analysis_run(session.id, state.message_id, run.to_dict())
         except Exception as exc:
             logger.error("Could not persist analysis state", error=str(exc))
 

@@ -359,6 +359,52 @@ def test_save_evidence_graph_tolerates_no_nodes_or_edges(tmp_path) -> None:
     manager.close()
 
 
+def test_analysis_run_round_trips_and_stays_scoped_to_its_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs.db"))
+    run = {"session_id": "s1", "message_id": 7, "instruction": "q", "answer": "a"}
+    manager.save_analysis_run("s1", 7, run)
+    manager.save_analysis_run("s1", 8, {"session_id": "s1", "message_id": 8, "instruction": "other", "answer": "b"})
+
+    assert manager.get_analysis_run(7) == run
+    assert manager.get_analysis_run(8)["instruction"] == "other"
+    assert manager.get_analysis_run(999) is None
+    manager.close()
+
+
+def test_analysis_run_is_captured_once_and_never_overwritten(tmp_path) -> None:
+    """A run is immutable once captured -- a second attempt at the same message id is a no-op,
+    never a silent overwrite of what the first turn actually produced."""
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_immutable.db"))
+    manager.save_analysis_run("s1", 7, {"instruction": "original"})
+    manager.save_analysis_run("s1", 7, {"instruction": "tampered"})
+
+    assert manager.get_analysis_run(7) == {"instruction": "original"}
+    manager.close()
+
+
+def test_session_deletion_removes_the_analysis_run(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_scoped.db"))
+    manager.save_analysis_run("s1", 7, {"instruction": "q"})
+
+    manager.delete_session_data("s1")
+
+    assert manager.get_analysis_run(7) is None
+    manager.close()
+
+
+def test_analysis_run_pruning_keeps_the_most_recent(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_prune.db"))
+    for index in range(20):
+        manager.save_analysis_run("s1", index, {"instruction": f"q{index}"})
+
+    manager.prune_analysis_runs(keep_last=5)
+
+    remaining = [index for index in range(20) if manager.get_analysis_run(index) is not None]
+    assert len(remaining) == 5
+    assert remaining == sorted(range(15, 20))
+    manager.close()
+
+
 def test_memory_pruning_keeps_the_most_recent(tmp_path) -> None:
     manager = DatabaseManager(db_path=str(tmp_path / "prune.db"))
     for index in range(20):

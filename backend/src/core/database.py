@@ -161,6 +161,18 @@ SCHEMA_STATEMENTS = (
         relation TEXT NOT NULL
     )
     """,
+    # One immutable snapshot per turn (see core/analysis/runs.py) -- ADR 0005. `message_id` is
+    # unique: a run is captured exactly once, at `_finalize`, never updated afterwards, so a
+    # report or export rendered from this row is unaffected by any later turn in the session.
+    """
+    CREATE TABLE IF NOT EXISTS analysis_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL UNIQUE,
+        created_at REAL NOT NULL,
+        run TEXT NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -180,6 +192,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_evidence_nodes_session ON evidence_nodes(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_evidence_edges_message ON evidence_edges(message_id)",
     "CREATE INDEX IF NOT EXISTS idx_evidence_edges_session ON evidence_edges(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_message ON analysis_runs(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_session ON analysis_runs(session_id, created_at)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -857,6 +871,7 @@ class DatabaseManager:
                 conn.execute("DELETE FROM plan_revisions WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM evidence_nodes WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM evidence_edges WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM analysis_runs WHERE session_id = ?", (session_id,))
         except Exception as e:
             logger.error("Failed to delete session data", error=str(e))
 
@@ -993,6 +1008,44 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to fetch evidence graph", error=str(e))
             return {"nodes": [], "edges": []}
+
+    # ------------------------------------------------------------------ #
+    # Analysis runs (core/analysis/runs.py) -- ADR 0005
+    # ------------------------------------------------------------------ #
+    def save_analysis_run(self, session_id: str, message_id: int, run: dict[str, Any]) -> None:
+        """Persists one turn's immutable `AnalysisRun` snapshot. Captured once, at `_finalize`,
+        and never updated afterwards -- `message_id` is unique so a later turn cannot overwrite it."""
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "INSERT INTO analysis_runs (session_id, message_id, created_at, run) VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(message_id) DO NOTHING",
+                    (session_id, message_id, time.time(), json.dumps(run)),
+                )
+        except Exception as e:
+            logger.error("Failed to save analysis run", error=str(e))
+
+    def get_analysis_run(self, message_id: int) -> dict[str, Any] | None:
+        """The immutable run snapshot for one turn, or `None` if it was never captured."""
+        try:
+            with self._read() as conn:
+                row = conn.execute("SELECT run FROM analysis_runs WHERE message_id = ?", (message_id,)).fetchone()
+                return json.loads(row["run"]) if row is not None else None
+        except Exception as e:
+            logger.error("Failed to fetch analysis run", error=str(e))
+            return None
+
+    def prune_analysis_runs(self, keep_last: int = 500) -> None:
+        """Bounds unbounded growth of the runs table, the same pattern `prune_memories` uses."""
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "DELETE FROM analysis_runs WHERE id NOT IN"
+                    " (SELECT id FROM analysis_runs ORDER BY created_at DESC, id DESC LIMIT ?)",
+                    (keep_last,),
+                )
+        except Exception as e:
+            logger.error("Failed to prune analysis runs", error=str(e))
 
     # ------------------------------------------------------------------ #
     # Schema Registry
