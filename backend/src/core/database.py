@@ -1035,6 +1035,24 @@ class DatabaseManager:
             logger.error("Failed to fetch analysis run", error=str(e))
             return None
 
+    def get_recent_analysis_runs(self, session_id: str | None, timespan_seconds: int) -> list[dict[str, Any]]:
+        """Runs captured within `timespan_seconds`, oldest first -- the same reporting window
+        `get_recent_memories` uses, over immutable run snapshots instead of working memory."""
+        cutoff = time.time() - timespan_seconds
+        try:
+            with self._read() as conn:
+                sql = "SELECT run FROM analysis_runs WHERE created_at >= ?"
+                params: list[Any] = [cutoff]
+                if session_id:
+                    sql += " AND session_id = ?"
+                    params.append(session_id)
+                sql += " ORDER BY created_at ASC"
+                rows = conn.execute(sql, params).fetchall()
+                return [json.loads(row["run"]) for row in rows]
+        except Exception as e:
+            logger.error("Failed to fetch recent analysis runs", error=str(e))
+            return []
+
     def prune_analysis_runs(self, keep_last: int = 500) -> None:
         """Bounds unbounded growth of the runs table, the same pattern `prune_memories` uses."""
         try:

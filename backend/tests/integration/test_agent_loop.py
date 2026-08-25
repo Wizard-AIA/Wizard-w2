@@ -698,6 +698,36 @@ async def test_finalize_captures_an_immutable_run_snapshot(loaded_session: Sessi
     assert run["steps"]
 
 
+async def test_a_captured_run_renders_in_all_three_report_modes(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 12: a real turn's captured run renders through every mode with no error, and its
+    claims -- the answer's own grounded figures -- carry a real provenance chain, not a guess."""
+    from src.core.analysis.reports import build, render
+    from src.core.analysis.runs import AnalysisRun
+
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "The total is 15.",
+        ]
+    )
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="total of A", mode="auto", emitter=EventCollector()
+    )
+
+    run = AnalysisRun.from_dict(db_mgr.get_analysis_run(result.message_id))
+    model = build(run)
+    assert model.claims, "the answer's grounded figure should have become a claim node"
+    assert model.every_claim_has_provenance
+
+    for mode in ("executive", "research", "technical"):
+        report = render(run, mode=mode)
+        assert "total of A" in report
+
+
 async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811
     """Phase 3's acceptance criterion: every grounded figure traces to an execution and a
     dataset version -- not asserted from logs, but from the graph itself.

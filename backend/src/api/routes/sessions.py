@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response
 
 from src.api.deps import SESSION_HEADER, get_session, require_api_key
 from src.api.schemas import ReportResponse, SessionResponse
+from src.core.analysis.reports import ReportMode
 from src.core.reporting import reporting_engine
 from src.core.session import Session, session_manager
 
@@ -43,10 +44,13 @@ async def reset_namespace(response: Response, session: Session = Depends(get_ses
 
 
 @router.get("/report", response_model=ReportResponse)
-async def generate_report(hours: int = 24, session: Session = Depends(get_session)) -> ReportResponse:
-    """Executive summary of this session's analyses."""
+async def generate_report(
+    hours: int = 24, mode: ReportMode = "executive", session: Session = Depends(get_session)
+) -> ReportResponse:
+    """Evidence-backed summary of this session's analyses, in one of three modes."""
     payload = reporting_engine.summary_payload(
         timespan_seconds=max(1, hours) * 3600,
         session_id=session.id,
+        mode=mode,
     )
     return ReportResponse(**payload)

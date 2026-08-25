@@ -354,6 +354,14 @@ def test_report_is_generated_even_with_no_history(client: TestClient) -> None:
     assert payload["interaction_count"] == 0
 
 
+def test_report_accepts_a_mode_and_rejects_an_unknown_one(client: TestClient) -> None:
+    ok = client.get("/api/report?mode=technical")
+    bad = client.get("/api/report?mode=whimsical")
+
+    assert ok.status_code == 200
+    assert bad.status_code == 422
+
+
 # --------------------------------------------------------------------------- #
 # Chat validation
 # --------------------------------------------------------------------------- #

@@ -405,6 +405,21 @@ def test_analysis_run_pruning_keeps_the_most_recent(tmp_path) -> None:
     manager.close()
 
 
+def test_get_recent_analysis_runs_scopes_by_session_and_timespan(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "runs_recent.db"))
+    manager.save_analysis_run("s1", 1, {"instruction": "s1 turn"})
+    manager.save_analysis_run("s2", 2, {"instruction": "s2 turn"})
+
+    scoped = manager.get_recent_analysis_runs(session_id="s1", timespan_seconds=3600)
+    unscoped = manager.get_recent_analysis_runs(session_id=None, timespan_seconds=3600)
+    outside_window = manager.get_recent_analysis_runs(session_id="s1", timespan_seconds=-1)
+
+    assert [run["instruction"] for run in scoped] == ["s1 turn"]
+    assert {run["instruction"] for run in unscoped} == {"s1 turn", "s2 turn"}
+    assert outside_window == []
+    manager.close()
+
+
 def test_memory_pruning_keeps_the_most_recent(tmp_path) -> None:
     manager = DatabaseManager(db_path=str(tmp_path / "prune.db"))
     for index in range(20):
