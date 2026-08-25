@@ -554,6 +554,29 @@ async def test_a_verification_mismatch_is_surfaced(loaded_session: Session, stub
     assert verifications
     assert verifications[0].data["status"] == "mismatch"
     assert any("not trustworthy" in warning for warning in result.warnings)
+    assert any(v["validator"] == "computational" and v["severity"] == "error" for v in result.analysis["validations"])
+
+
+async def test_unseeded_sampling_is_flagged_by_the_reproducibility_validator(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 6's validation framework runs alongside `_verify`, not only inside it -- a validator
+    with nothing to do with recomputation still fires from the same turn's evidence."""
+    stub_llm(
+        [
+            "1. Sample",
+            "```python\nprint(df.sample(2))\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Here is a sample.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="show a sample", mode="auto", emitter=collector)
+
+    assert any(
+        v["validator"] == "reproducibility" and "not be exactly reproducible" in v["message"]
+        for v in result.analysis["validations"]
+    )
 
 
 async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811

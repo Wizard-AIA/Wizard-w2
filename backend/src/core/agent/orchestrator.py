@@ -65,6 +65,8 @@ from src.core.agent.grounding import (
 )
 from src.core.analysis import understanding
 from src.core.analysis.state import AnalyticalState
+from src.core.analysis.validation.base import ValidationContext
+from src.core.analysis.validation.registry import run_validators
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
@@ -1914,8 +1916,34 @@ class AnalysisOrchestrator:
 
         state.verification = detail
         self._record_validation_evidence(state, status, detail)
+        self._run_validators(state, session, status, detail)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
         await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
+
+    @staticmethod
+    def _run_validators(state: RunState, session: Session, status: str, detail: str) -> None:
+        """Runs the tier's affordable validators and folds their findings into the turn.
+
+        Reached only when `_verify` itself ran, so this never fires below balanced tier -- the
+        same gate that already turns off the recomputation these findings are partly built from.
+        """
+        try:
+            ctx = ValidationContext(
+                instruction=state.instruction,
+                plan=state.plan,
+                code=state.code,
+                output=state.output,
+                df=session.df,
+                tables=session.tables,
+                understanding=state.analysis.understanding,
+                recomputation_status=status,
+                recomputation_detail=detail,
+            )
+            findings = run_validators(ctx, state.tier)
+            state.analysis.validations.extend(finding.to_dict() for finding in findings)
+            state.warnings.extend(finding.message for finding in findings if finding.severity != "info")
+        except Exception as exc:
+            logger.error("Could not run validators", error=str(exc))
 
     @staticmethod
     def _record_validation_evidence(state: RunState, status: str, detail: str) -> None:

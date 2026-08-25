@@ -17,6 +17,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from src.config import settings
+from src.core.analysis.validation.semantic import check_chart_legibility
+from src.core.analysis.validation.statistical import check_significance_claims
 from src.core.llm import LLMRole, llm_provider, strip_reasoning
 from src.utils.logging import logger, trace_agent
 
@@ -56,49 +58,35 @@ class SpecialistAgent:
 
 
 class VisualizerAgent(SpecialistAgent):
-    """Checks that charts are legible and labelled."""
+    """Checks that charts are legible and labelled.
+
+    The check itself now lives in `analysis.validation.semantic` so the validation framework and
+    the council share one implementation; this class only adapts it to the council's response shape.
+    """
 
     name = "Visualizer"
 
     async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
-        produces_plot = any(marker in code for marker in ("plt.", "sns.", "px.", "go."))
-        if not produces_plot:
-            return {"agent": self.name, "applicable": False, "feedback": []}
-
-        feedback: list[str] = []
-        uses_matplotlib = "plt." in code or "sns." in code
-        if uses_matplotlib:
-            if "title" not in code:
-                feedback.append("The chart has no title.")
-            if "xlabel" not in code or "ylabel" not in code:
-                feedback.append("The chart is missing one or both axis labels.")
-        elif "title" not in code and "labels" not in code:
-            feedback.append("The Plotly figure has no title or axis labels configured.")
-
-        return {"agent": self.name, "applicable": True, "feedback": feedback}
+        applicable = any(marker in code for marker in ("plt.", "sns.", "px.", "go."))
+        feedback = [finding.message for finding in check_chart_legibility(code)]
+        return {"agent": self.name, "applicable": applicable, "feedback": feedback}
 
 
 class StatisticianAgent(SpecialistAgent):
-    """Flags statistical claims made without the supporting evidence."""
+    """Flags statistical claims made without the supporting evidence.
+
+    The deterministic checks live in `analysis.validation.statistical`, shared with the validation
+    framework; this class adds the one thing that is council-specific -- an LLM-generated caveat,
+    asked for only once a deterministic check has already found something worth escalating.
+    """
 
     name = "Statistician"
 
     RELEVANT = ("test", "hypothesis", "significan", "correlat", "regress", "model", "predict", "distribution")
 
     async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
-        haystack = f"{plan} {code}".lower()
-        if not any(marker in haystack for marker in self.RELEVANT):
-            return {"agent": self.name, "applicable": False, "feedback": []}
-
-        feedback: list[str] = []
-        lowered = result.lower()
-        claims_significance = "significan" in lowered or "reject" in lowered
-        reports_p_value = "p-value" in lowered or "p_value" in lowered or "pvalue" in lowered
-        if claims_significance and not reports_p_value:
-            feedback.append("Significance is claimed but no p-value is reported.")
-
-        if "corr" in haystack and "causal" in lowered:
-            feedback.append("Correlation is being described in causal terms.")
+        applicable = any(marker in f"{plan} {code}".lower() for marker in self.RELEVANT)
+        feedback = [finding.message for finding in check_significance_claims(plan, code, result)]
 
         if feedback:
             tip = await self._ask(
@@ -111,7 +99,7 @@ class StatisticianAgent(SpecialistAgent):
             if tip and "sound" not in tip.lower():
                 feedback.append(tip)
 
-        return {"agent": self.name, "applicable": True, "feedback": feedback}
+        return {"agent": self.name, "applicable": applicable, "feedback": feedback}
 
 
 class ArchitectAgent(SpecialistAgent):
