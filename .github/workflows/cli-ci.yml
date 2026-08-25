@@ -96,6 +96,14 @@ jobs:
         # a regression, which is exactly the premature-gate mistake
         # docs/analysis/mutation-testing.md calls out for the backend's own
         # cosmic-ray setup.
+        #
+        # GOTOOLCHAIN=auto: gremlins v0.6.0 requires Go >=1.25, newer than
+        # this module's own go.mod (1.23, the actual build/compat target for
+        # the shipped binary -- not touched just to satisfy a dev-tool run
+        # against it). `go run` fetches the newer toolchain on demand for
+        # this one command only; the build-test job above is unaffected.
+        env:
+          GOTOOLCHAIN: auto
         run: |
           go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0 unleash . -o gremlins-report.json | tee gremlins-report.txt
 
