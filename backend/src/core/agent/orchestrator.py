@@ -1516,6 +1516,26 @@ class AnalysisOrchestrator:
             artifacts=child_state.artifacts,
         )
 
+    @staticmethod
+    def _record_execution_evidence(state: RunState, session: Session, goal: str) -> None:
+        """Wires one successful step into the provenance graph: dataset -> code -> execution.
+
+        Never allowed to cost a turn that already produced a result -- a hashing failure on an
+        exotic dtype is bookkeeping's problem, not the analysis's.
+        """
+        try:
+            graph = state.analysis.evidence
+            handle = session.active_handle
+            dataset_id = graph.ensure_dataset(handle.content_hash, handle.name) if handle is not None else None
+            code_id = graph.add_node("code", goal, code=state.code)
+            execution_id = graph.add_node("execution", goal, output=state.output[:2000])
+            graph.add_edge(code_id, execution_id, "produced")
+            if dataset_id:
+                graph.add_edge(dataset_id, execution_id, "derived_from")
+            state.analysis.evidence_refs.append(execution_id)
+        except Exception as exc:
+            logger.error("Could not record execution evidence", error=str(exc))
+
     async def _act_code(
         self,
         state: RunState,
@@ -1593,6 +1613,7 @@ class AnalysisOrchestrator:
                         code=state.code,
                     )
                 )
+                self._record_execution_evidence(state, session, goal)
                 await emit(
                     emitter,
                     EventType.OBSERVATION,
@@ -1862,8 +1883,25 @@ class AnalysisOrchestrator:
             status, detail = "inconclusive", output
 
         state.verification = detail
+        self._record_validation_evidence(state, status, detail)
         await emit(emitter, EventType.VERIFICATION, status=status, detail=detail[:2000])
         await emit(emitter, EventType.STEP_END, id="verify", ok=status != "mismatch", duration_ms=state.elapsed_ms)
+
+    @staticmethod
+    def _record_validation_evidence(state: RunState, status: str, detail: str) -> None:
+        """Links the independent recomputation to the execution it checked, if one was recorded."""
+        try:
+            graph = state.analysis.evidence
+            execution_id = graph.last("execution")
+            if execution_id is None:
+                return
+            validation_id = graph.add_node(
+                "validation", "independent recomputation", status=status, detail=detail[:500]
+            )
+            graph.add_edge(validation_id, execution_id, "validates")
+            state.analysis.evidence_refs.append(validation_id)
+        except Exception as exc:
+            logger.error("Could not record validation evidence", error=str(exc))
 
     # ------------------------------------------------------------------ #
     # Review
@@ -2008,6 +2046,7 @@ class AnalysisOrchestrator:
             state.investigation.executed_output or state.output,
             state.instruction,
         )
+        self._record_claim_evidence(state)
         warning = state.grounding.warning()
         if warning:
             state.warnings.append(warning)
@@ -2017,6 +2056,25 @@ class AnalysisOrchestrator:
                 checked=state.grounding.checked,
                 ungrounded=len(state.grounding.ungrounded),
             )
+
+    @staticmethod
+    def _record_claim_evidence(state: RunState) -> None:
+        """Turns each grounded figure into a claim node traceable to the execution behind it.
+
+        Reuses `check_grounding`'s own extraction (`grounded_values`) rather than parsing the
+        answer a second time -- there is exactly one place that decides what a number means.
+        """
+        try:
+            graph = state.analysis.evidence
+            execution_id = graph.last("execution")
+            if execution_id is None or not state.grounding.grounded_values:
+                return
+            for value in state.grounding.grounded_values:
+                claim_id = graph.add_node("claim", value)
+                graph.add_edge(execution_id, claim_id, "supports")
+                state.analysis.evidence_refs.append(claim_id)
+        except Exception as exc:
+            logger.error("Could not record claim evidence", error=str(exc))
 
     # ------------------------------------------------------------------ #
     async def _note_promotion(self, state: RunState, columns: list[str], emitter: Emitter | None):
@@ -2140,6 +2198,7 @@ class AnalysisOrchestrator:
             db_mgr.save_plan_revisions(
                 session.id, state.message_id, [revision.to_dict() for revision in state.analysis.plan.revisions]
             )
+            db_mgr.save_evidence_graph(session.id, state.message_id, state.analysis.evidence.to_dict())
         except Exception as exc:
             logger.error("Could not persist analysis state", error=str(exc))
 

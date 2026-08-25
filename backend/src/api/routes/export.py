@@ -45,9 +45,9 @@ async def export_message(
 ) -> Response:
     """Rebuilds one turn's analysis as a downloadable script, notebook, or zip.
 
-    A zip is returned instead of the bare file whenever a file-based table
-    needs to travel with it -- a connector-sourced table never does, since it
-    is re-fetched by name instead.
+    A zip is returned instead of the bare file whenever a file-based table needs to travel with
+    it (a connector-sourced table never does, since it is re-fetched by name instead), or the
+    turn recorded a provenance graph (`provenance.json` -- see core/analysis/provenance.py).
     """
     message = db_mgr.get_chat_message(session.id, message_id)
     if message is None:
@@ -63,6 +63,8 @@ async def export_message(
 
     instruction = str(meta.get("instruction") or "")
     bundle = export.bundle_files(session)
+    evidence = db_mgr.get_evidence_graph(message_id)
+    provenance = json.dumps(evidence, indent=2).encode("utf-8") if evidence.get("nodes") else None
 
     if format == "notebook":
         content = export.build_notebook(instruction, steps, session, bundle=bool(bundle))
@@ -77,7 +79,7 @@ async def export_message(
         payload = text.encode("utf-8")
         filename = "analysis.py"
 
-    if not bundle:
+    if not bundle and not provenance:
         return Response(
             content=payload,
             media_type=MEDIA_TYPES[format],
@@ -89,6 +91,8 @@ async def export_message(
         archive.writestr(filename, payload)
         for path, data in bundle.items():
             archive.writestr(path, data)
+        if provenance:
+            archive.writestr("provenance.json", provenance)
     return Response(
         content=buffer.getvalue(),
         media_type="application/zip",

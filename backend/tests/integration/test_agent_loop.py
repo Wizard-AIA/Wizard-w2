@@ -16,6 +16,7 @@ from stubs import ScriptedLLM
 from src.config import settings
 from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
+from src.core.analysis.provenance import EvidenceGraph
 from src.core.database import db_mgr
 from src.core.ingest.documents import ContextDocument, DocumentChunk
 from src.core.session import Session
@@ -527,6 +528,34 @@ async def test_a_verification_mismatch_is_surfaced(loaded_session: Session, stub
     assert verifications
     assert verifications[0].data["status"] == "mismatch"
     assert any("not trustworthy" in warning for warning in result.warnings)
+
+
+async def test_evidence_graph_traces_a_claim_to_its_execution_and_dataset(loaded_session: Session, stub_llm) -> None:  # noqa: F811
+    """Phase 3's acceptance criterion: every grounded figure traces to an execution and a
+    dataset version -- not asserted from logs, but from the graph itself.
+    """
+    stub_llm(
+        [
+            "1. Compute",
+            "```python\nprint('total', df['A'].sum())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: 15')\n```",
+            "The total is 15.",
+        ]
+    )
+    collector = EventCollector()
+
+    result = await orchestrator.run(session=loaded_session, instruction="total of A", mode="auto", emitter=collector)
+
+    evidence = result.analysis["evidence"]
+    assert {"dataset", "code", "execution", "validation", "claim"} <= {node["kind"] for node in evidence["nodes"]}
+
+    graph = EvidenceGraph.from_dict(evidence)
+    claim_id = next(node.id for node in graph.nodes.values() if node.kind == "claim" and node.label == "15")
+    traced_kinds = {node.kind for node in graph.trace(claim_id)}
+    assert {"dataset", "code", "execution", "claim"} <= traced_kinds
+
+    assert db_mgr.get_evidence_graph(result.message_id) == evidence
 
 
 async def test_fast_mode_skips_verification(loaded_session: Session, stub_llm) -> None:  # noqa: F811

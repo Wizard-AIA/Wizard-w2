@@ -74,6 +74,17 @@ def test_ratio_reports_partial_grounding() -> None:
     assert report.ratio == pytest.approx(2 / 3, rel=1e-3)
 
 
+def test_grounded_values_lists_only_the_figures_that_actually_grounded() -> None:
+    """Provenance builds claim nodes from this list -- it must never include an invented figure."""
+    report = check_grounding("Total 500 across 33 regions, up 9999%.", "total 500\nregions 33")
+    assert report.grounded_values == ["500", "33"]
+
+
+def test_fabricated_figures_never_appear_in_grounded_values() -> None:
+    report = check_grounding("Growth was 17% year on year.", "total 1234567.89")
+    assert report.grounded_values == []
+
+
 def test_a_repeated_figure_is_counted_once() -> None:
     report = check_grounding("It was 777. Again, 777.", "")
     assert report.checked == 1

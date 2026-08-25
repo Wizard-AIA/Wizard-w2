@@ -95,6 +95,26 @@ def test_notebook_format_bundles_the_notebook_and_its_data(client: TestClient, s
     assert "data/data.csv" in archive.namelist()
 
 
+def test_a_recorded_evidence_graph_is_bundled_as_provenance_json(client: TestClient, simple_df: pd.DataFrame) -> None:
+    session_id = upload(client, simple_df)["session_id"]
+    message_id = seed_message(session_id)
+    db_mgr.save_evidence_graph(
+        session_id,
+        message_id,
+        {
+            "nodes": [{"id": "execution-0", "kind": "execution", "label": "count rows", "data": {}, "at": 1.0}],
+            "edges": [],
+        },
+    )
+
+    response = client.get(f"/api/export/{message_id}", headers={SESSION_HEADER: session_id})
+
+    assert response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    provenance = json.loads(archive.read("provenance.json"))
+    assert provenance["nodes"][0]["id"] == "execution-0"
+
+
 def test_a_fully_connector_backed_session_exports_a_bare_file(client: TestClient, simple_df: pd.DataFrame) -> None:
     """Nothing to bundle when every table is connection-sourced -- the loader
     re-fetches by name instead, so the plain script is the whole export."""

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.plan import AnalyticalPlan
+from src.core.analysis.provenance import EvidenceGraph
 
 
 if TYPE_CHECKING:
@@ -30,7 +31,9 @@ class AnalyticalState:
     understanding: dict[str, Any] | None = None
     #: Populated by Phase 7's hypothesis management.
     hypotheses: list[dict[str, Any]] = field(default_factory=list)
-    #: Evidence-graph node ids, populated by Phase 3.
+    #: The provenance graph -- see core/analysis/provenance.py.
+    evidence: EvidenceGraph = field(default_factory=EvidenceGraph)
+    #: Node ids from `evidence` worth surfacing directly, in the order they became relevant.
     evidence_refs: list[str] = field(default_factory=list)
     #: Populated by Phase 6's validation framework.
     validations: list[dict[str, Any]] = field(default_factory=list)
@@ -58,6 +61,7 @@ class AnalyticalState:
             "hypotheses": self.hypotheses,
             "findings": self.findings,
             "assumptions": self.assumptions,
+            "evidence": self.evidence.to_dict(),
             "evidence_refs": self.evidence_refs,
             "validations": self.validations,
             "open_questions": self.open_questions,
@@ -73,6 +77,7 @@ class AnalyticalState:
             plan=AnalyticalPlan.from_dict(plan_data) if plan_data else AnalyticalPlan(),
             understanding=data.get("understanding"),
             hypotheses=list(data.get("hypotheses") or []),
+            evidence=EvidenceGraph.from_dict(data.get("evidence") or {}),
             evidence_refs=list(data.get("evidence_refs") or []),
             validations=list(data.get("validations") or []),
             open_questions=list(data.get("open_questions") or []),

@@ -20,12 +20,14 @@ reached so a public deployment cannot be made to spawn unbounded containers.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import shutil
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +72,13 @@ class DatasetHandle:
         stem = Path(self.name).stem.strip().lower()
         cleaned = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
         return cleaned or "table"
+
+    @cached_property
+    def content_hash(self) -> str:
+        """A fingerprint of this table's actual values, for evidence-graph dataset lineage."""
+        digest = hashlib.blake2b(digest_size=16)
+        digest.update(pd.util.hash_pandas_object(self.df, index=True).values.tobytes())
+        return digest.hexdigest()
 
     def summary(self) -> dict[str, Any]:
         return {

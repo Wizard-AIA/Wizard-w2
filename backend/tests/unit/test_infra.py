@@ -277,6 +277,14 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     manager.save_schema("t.csv", ["a"], 1, "a", session_id="s1")
     manager.save_analysis_state("s1", 1, {"objective": None})
     manager.save_plan_revisions("s1", 1, [{"index": 0, "text": "1. Plan", "why": "", "at": 1.0}])
+    manager.save_evidence_graph(
+        "s1",
+        1,
+        {
+            "nodes": [{"id": "execution-0", "kind": "execution", "label": "compute", "data": {}, "at": 1.0}],
+            "edges": [],
+        },
+    )
 
     manager.delete_session_data("s1")
 
@@ -285,6 +293,7 @@ def test_session_deletion_removes_all_scoped_rows(tmp_path) -> None:
     assert manager.get_schemas(session_id="s1") == []
     assert manager.get_analysis_state(1) is None
     assert manager.get_plan_revisions(1) == []
+    assert manager.get_evidence_graph(1) == {"nodes": [], "edges": []}
     manager.close()
 
 
@@ -321,6 +330,32 @@ def test_save_plan_revisions_tolerates_an_empty_list(tmp_path) -> None:
     manager.save_plan_revisions("s1", 7, [])
 
     assert manager.get_plan_revisions(7) == []
+    manager.close()
+
+
+def test_evidence_graph_round_trips_and_stays_scoped_to_its_message(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "evidence.db"))
+    graph = {
+        "nodes": [
+            {"id": "code-0", "kind": "code", "label": "compute total", "data": {"code": "print(1)"}, "at": 1.0},
+            {"id": "execution-0", "kind": "execution", "label": "compute total", "data": {"output": "15"}, "at": 2.0},
+        ],
+        "edges": [{"source": "code-0", "target": "execution-0", "relation": "produced"}],
+    }
+    manager.save_evidence_graph("s1", 7, graph)
+    manager.save_evidence_graph("s1", 8, {"nodes": [], "edges": []})
+
+    assert manager.get_evidence_graph(7) == graph
+    assert manager.get_evidence_graph(8) == {"nodes": [], "edges": []}
+    assert manager.get_evidence_graph(999) == {"nodes": [], "edges": []}
+    manager.close()
+
+
+def test_save_evidence_graph_tolerates_no_nodes_or_edges(tmp_path) -> None:
+    manager = DatabaseManager(db_path=str(tmp_path / "evidence_empty.db"))
+    manager.save_evidence_graph("s1", 7, {})
+
+    assert manager.get_evidence_graph(7) == {"nodes": [], "edges": []}
     manager.close()
 
 

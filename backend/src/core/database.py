@@ -137,6 +137,30 @@ SCHEMA_STATEMENTS = (
         timestamp REAL NOT NULL
     )
     """,
+    # One row per node/edge of a turn's `EvidenceGraph` (see core/analysis/provenance.py).
+    # Also embedded inside analysis_state's JSON blob; queryable directly for tracing.
+    """
+    CREATE TABLE IF NOT EXISTS evidence_nodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        node_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        label TEXT NOT NULL,
+        data TEXT NOT NULL,
+        at REAL NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        message_id INTEGER,
+        source TEXT NOT NULL,
+        target TEXT NOT NULL,
+        relation TEXT NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -152,6 +176,10 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_analysis_state_session ON analysis_state(session_id, timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_plan_revisions_message ON plan_revisions(message_id, revision_index)",
     "CREATE INDEX IF NOT EXISTS idx_plan_revisions_session ON plan_revisions(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_nodes_message ON evidence_nodes(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_nodes_session ON evidence_nodes(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_edges_message ON evidence_edges(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_evidence_edges_session ON evidence_edges(session_id)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -827,6 +855,8 @@ class DatabaseManager:
                 conn.execute("DELETE FROM schema_registry WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM analysis_state WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM plan_revisions WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM evidence_nodes WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM evidence_edges WHERE session_id = ?", (session_id,))
         except Exception as e:
             logger.error("Failed to delete session data", error=str(e))
 
@@ -894,6 +924,75 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to fetch plan revisions", error=str(e))
             return []
+
+    # ------------------------------------------------------------------ #
+    # Evidence graph (core/analysis/provenance.py)
+    # ------------------------------------------------------------------ #
+    def save_evidence_graph(self, session_id: str, message_id: int | None, graph: dict[str, Any]) -> None:
+        """Persists a turn's evidence graph as rows, one per node and per edge."""
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        if not nodes and not edges:
+            return
+        try:
+            with self._write() as conn:
+                if nodes:
+                    conn.executemany(
+                        "INSERT INTO evidence_nodes"
+                        " (session_id, message_id, node_id, kind, label, data, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                session_id,
+                                message_id,
+                                node["id"],
+                                node["kind"],
+                                node["label"],
+                                json.dumps(node.get("data") or {}),
+                                node["at"],
+                            )
+                            for node in nodes
+                        ],
+                    )
+                if edges:
+                    conn.executemany(
+                        "INSERT INTO evidence_edges (session_id, message_id, source, target, relation)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        [(session_id, message_id, edge["source"], edge["target"], edge["relation"]) for edge in edges],
+                    )
+        except Exception as e:
+            logger.error("Failed to save evidence graph", error=str(e))
+
+    def get_evidence_graph(self, message_id: int) -> dict[str, Any]:
+        """One turn's evidence graph, in the shape `EvidenceGraph.from_dict` expects."""
+        try:
+            with self._read() as conn:
+                node_rows = conn.execute(
+                    "SELECT node_id, kind, label, data, at FROM evidence_nodes WHERE message_id = ? ORDER BY id",
+                    (message_id,),
+                ).fetchall()
+                edge_rows = conn.execute(
+                    "SELECT source, target, relation FROM evidence_edges WHERE message_id = ? ORDER BY id",
+                    (message_id,),
+                ).fetchall()
+                return {
+                    "nodes": [
+                        {
+                            "id": row["node_id"],
+                            "kind": row["kind"],
+                            "label": row["label"],
+                            "data": json.loads(row["data"]),
+                            "at": row["at"],
+                        }
+                        for row in node_rows
+                    ],
+                    "edges": [
+                        {"source": row["source"], "target": row["target"], "relation": row["relation"]}
+                        for row in edge_rows
+                    ],
+                }
+        except Exception as e:
+            logger.error("Failed to fetch evidence graph", error=str(e))
+            return {"nodes": [], "edges": []}
 
     # ------------------------------------------------------------------ #
     # Schema Registry

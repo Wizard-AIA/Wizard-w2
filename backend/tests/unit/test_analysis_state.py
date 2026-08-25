@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from src.core.agent.actions import Investigation
 from src.core.analysis.objective import AnalyticalObjective
+from src.core.analysis.provenance import EvidenceGraph
 from src.core.analysis.state import AnalyticalState
 
 
@@ -65,6 +66,7 @@ def test_state_defaults_are_all_empty_or_none() -> None:
     assert state.objective is None
     assert state.understanding is None
     assert state.hypotheses == []
+    assert state.evidence.nodes == {}
     assert state.evidence_refs == []
     assert state.validations == []
     assert state.open_questions == []
@@ -97,11 +99,14 @@ def test_state_round_trips_through_dict_including_objective() -> None:
     objective = AnalyticalObjective(question="What drove the spike?", analytical_type="diagnostic")
     investigation = Investigation()
     investigation.note_finding("a single outlier region explains most of the spike")
+    evidence = EvidenceGraph()
+    execution_id = evidence.add_node("execution", "compute total", output="15")
     state = AnalyticalState(
         objective=objective,
         understanding={"grain": "one row per order"},
         hypotheses=[{"label": "regional promo", "status": "supported"}],
-        evidence_refs=["node-1"],
+        evidence=evidence,
+        evidence_refs=[execution_id],
         validations=[{"kind": "computational", "status": "verified"}],
         open_questions=["was the promo region-specific or timing coincidence?"],
         confidence={"overall": "medium"},
@@ -113,7 +118,8 @@ def test_state_round_trips_through_dict_including_objective() -> None:
     assert restored.objective == objective
     assert restored.understanding == {"grain": "one row per order"}
     assert restored.hypotheses == [{"label": "regional promo", "status": "supported"}]
-    assert restored.evidence_refs == ["node-1"]
+    assert restored.evidence.nodes[execution_id].data == {"output": "15"}
+    assert restored.evidence_refs == [execution_id]
     assert restored.validations == [{"kind": "computational", "status": "verified"}]
     assert restored.open_questions == ["was the promo region-specific or timing coincidence?"]
     assert restored.confidence == {"overall": "medium"}
