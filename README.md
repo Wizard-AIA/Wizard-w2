@@ -216,6 +216,8 @@ Report vulnerabilities privately — see [SECURITY.md](https://github.com/Wizard
 
 **A large upload is slow.** Files over `MAX_INMEMORY_ROWS` are sampled for analysis; the full file stays in the workspace and can be read directly in generated code.
 
+**Modelling code fails to import `xgboost` or `lightgbm` on macOS, host-mode.** Both ship compiled libraries that need the OpenMP runtime, which macOS does not include: `brew install libomp`, then re-run the analysis. This is an xgboost/lightgbm-on-macOS requirement, not a Wizard one — it affects any Python project using them there.
+
 ## License
 
 [BSD 3-Clause](./LICENSE).
