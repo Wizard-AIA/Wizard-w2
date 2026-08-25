@@ -157,6 +157,10 @@ async def test_fast_mode_runs_end_to_end(loaded_session: Session, stub_llm) -> N
 
 
 async def test_worker_can_execute_a_polars_group_by(loaded_session: Session, stub_llm) -> None:
+    # The production CI suite installs the API lock only; local analysis
+    # libraries are intentionally optional there. The Docker/local-analysis
+    # environments install Polars and exercise this path when it is available.
+    pytest.importorskip("polars")
     stub_llm(
         [
             "1. Group the data with Polars\n2. Report the totals",
