@@ -84,10 +84,8 @@ def _dirty_join_key() -> LoopScenario:
         tables={"orders.csv": orders, "customers.csv": customers},
         responses=[
             "1. Join and total",
-            "```python\n"
-            "merged = tables['orders'].merge(tables['customers'], on='customer_id', how='left')\n"
-            "print(merged.groupby('customer_id')['amount'].sum())\n"
-            "```",
+            "```python\nmerged = tables['orders'].merge(tables['customers'], on='customer_id', how='left')\n"
+            + "print(merged.groupby('customer_id')['amount'].sum())\n```",
             "ACTION: answer\nGOAL: report",
             "```python\nprint('VERIFIED: ok')\n```",
             "Here is the total amount per customer.",

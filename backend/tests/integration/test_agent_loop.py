@@ -1030,8 +1030,11 @@ async def test_repeating_the_same_analysis_reuses_every_phase_14_cache(
     metric (model calls per turn) proved directly: the second turn needs one fewer LLM call for
     the identical shape of turn.
     """
-    import src.core.agent.orchestrator as orchestrator_module
+    import importlib
+
     from src.core.analysis import understanding as understanding_module
+
+    orchestrator_module = importlib.import_module("src.core.agent.orchestrator")
 
     understand_calls = 0
     real_understand = understanding_module.understand

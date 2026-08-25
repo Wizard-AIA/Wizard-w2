@@ -60,8 +60,6 @@ class Validator(Protocol):
 
     def applicable(self, ctx: ValidationContext) -> bool:
         """Whether this validator has anything to say about this turn at all."""
-        ...
 
     def validate(self, ctx: ValidationContext) -> list[Finding]:
         """Findings for this turn; empty when applicable but clean."""
-        ...
