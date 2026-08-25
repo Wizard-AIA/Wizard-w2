@@ -42,8 +42,9 @@ class ValidationContext:
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     #: Phase 4's data-understanding profile, if it was computed this turn.
     understanding: dict[str, Any] | None = None
-    #: The `analysis.methods` registry key the model named, if any -- unset until an objective
-    #: names a method explicitly, which no phase yet does end-to-end.
+    #: The `analysis.methods` registry key detected in the executed code, if any -- set by
+    #: `orchestrator._verify` from `competing.detect_method(state.code)`. `critic.critique` falls
+    #: back to the same detection when a caller builds a context directly without setting this.
     method: str | None = None
     #: Set by the orchestrator from `_verify`'s own recomputation, so the computational validator
     #: costs no second LLM call or execution of its own.

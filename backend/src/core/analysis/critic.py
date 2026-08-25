@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from src.core.analysis.competing import applicability_kwargs, detect_method
 from src.core.analysis.methods import run_method
 from src.core.analysis.validation.base import ValidationContext
 from src.core.analysis.validation.semantic import check_chart_legibility
@@ -136,6 +137,22 @@ def detect_wrong_test(method: str, df: pd.DataFrame, **kwargs: Any) -> CriticFin
     )
 
 
+def detect_wrong_test_from_context(ctx: ValidationContext) -> CriticFinding | None:
+    """Wires `detect_wrong_test` into the turn's own evidence: the method named in `ctx.method`
+    (or, failing that, the first registered method literally present in the executed code), and
+    the columns that code actually references -- never a method or column pairing invented for
+    the check, the same restraint `competing._more_appropriate` applies to route comparison."""
+    if ctx.df is None:
+        return None
+    method = ctx.method or detect_method(ctx.code)
+    if method is None:
+        return None
+    kwargs = applicability_kwargs(method, ctx.code, ctx.df)
+    if kwargs is None:
+        return None
+    return detect_wrong_test(method, ctx.df, **kwargs)
+
+
 # --------------------------------------------------------------------------- #
 # Multiple comparisons / overfitting
 # --------------------------------------------------------------------------- #
@@ -238,6 +255,9 @@ def critique(ctx: ValidationContext) -> list[CriticFinding]:
         *detect_multiple_comparisons(ctx.code),
         *detect_overfitting(ctx.code),
     ]
+    wrong_test = detect_wrong_test_from_context(ctx)
+    if wrong_test:
+        findings.append(wrong_test)
     if ctx.df is not None:
         outcome = _aggregated_numeric_column(ctx.df, ctx.code)
         if outcome:

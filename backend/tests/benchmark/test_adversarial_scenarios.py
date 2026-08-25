@@ -10,9 +10,10 @@ appropriate uncertainty, correct refusal, tool-call budget, premature stopping, 
 cost), so a future change that quietly regresses one of them fails here even if no single
 phase-specific test still covers it.
 
-See `scripts/benchmark_harness/scenarios/__init__.py` for why four of the ten scenarios call a
-`core.analysis.*` function directly rather than running through the loop -- an honest boundary,
-not an oversight.
+See `scripts/benchmark_harness/scenarios/__init__.py` for why two of the ten scenarios call a
+`core.analysis.*` function directly rather than running through the loop -- there is no live turn
+for a pure function of a question string or an empty confidence context to run through, not an
+unreached capability.
 """
 
 from __future__ import annotations
@@ -47,8 +48,6 @@ from scenarios import (  # noqa: E402
     LOOP_SCENARIOS,
     UNAMBIGUOUS_QUESTION,
     LoopScenario,
-    inappropriate_test_fixture,
-    target_leakage_fixture,
 )
 
 
@@ -161,29 +160,28 @@ async def test_multi_step_investigation(run_scenario) -> None:
     assert cost.passed, cost.reasons
 
 
+async def test_target_leakage(run_scenario) -> None:
+    result, _collector, _stub = await run_scenario(_scenario("target_leakage"))
+
+    indicators = result.analysis["understanding"]["leakage"]
+    assert indicators, "a feature identical to the target must be flagged as leakage"
+    assert indicators[0]["feature"] == "leaky"
+    assert any(f["category"] == "leakage" for f in result.analysis["critic_findings"])
+
+
+async def test_statistically_inappropriate_request(run_scenario) -> None:
+    result, _collector, _stub = await run_scenario(_scenario("statistically_inappropriate_request"))
+
+    findings = [f for f in result.analysis["critic_findings"] if f["category"] == "wrong_test"]
+    assert findings, "independent_t_test on three groups must be caught live, not just by run_method"
+    assert "one_way_anova" in findings[0]["detail"]
+    components = {c["name"]: c["level"] for c in result.analysis["confidence"]["components"]}
+    assert components["method_robustness"] == "low"
+
+
 # --------------------------------------------------------------------------- #
 # Deterministic-layer scenarios -- see scenarios/__init__.py's module docstring.
 # --------------------------------------------------------------------------- #
-def test_target_leakage() -> None:
-    from src.core.analysis.understanding import leakage_indicators
-
-    indicators = leakage_indicators(target_leakage_fixture(), "label")
-
-    assert indicators, "a feature identical to the target must be flagged as leakage"
-    assert indicators[0]["feature"] == "leaky"
-
-
-def test_statistically_inappropriate_request() -> None:
-    from src.core.analysis import methods
-
-    result = methods.run_method(
-        "independent_t_test", inappropriate_test_fixture(), value_col="value", group_col="group"
-    )
-
-    assert result["status"] == "refused"
-    assert result["alternative"] == "one_way_anova"
-
-
 def test_insufficient_evidence() -> None:
     from src.core.analysis.confidence import ConfidenceContext, compute
 

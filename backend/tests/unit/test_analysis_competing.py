@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.core.analysis.competing import (
     RouteResult,
+    applicability_kwargs,
     compare_routes,
     detect_method,
     is_high_impact_or_ambiguous,
@@ -50,6 +51,22 @@ def test_detect_method_finds_a_named_registry_entry() -> None:
 
 def test_detect_method_is_none_when_nothing_is_named() -> None:
     assert detect_method("just look at the data") is None
+
+
+# --------------------------------------------------------------------------- #
+# applicability_kwargs
+# --------------------------------------------------------------------------- #
+def test_applicability_kwargs_builds_group_comparison_kwargs_from_referenced_columns() -> None:
+    df = pd.DataFrame({"value": [1, 2, 3, 4], "group": list("aabb")})
+    code = "df.groupby('group')['value'].mean()"
+
+    assert applicability_kwargs("independent_t_test", code, df) == {"value_col": "value", "group_col": "group"}
+
+
+def test_applicability_kwargs_is_none_for_an_unmapped_method() -> None:
+    df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+
+    assert applicability_kwargs("linear_regression", "df['a']", df) is None
 
 
 # --------------------------------------------------------------------------- #

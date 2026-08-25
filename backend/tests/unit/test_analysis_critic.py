@@ -22,6 +22,7 @@ from src.core.analysis.critic import (
     detect_overfitting,
     detect_simpsons_paradox,
     detect_wrong_test,
+    detect_wrong_test_from_context,
     find_simpsons_paradoxes,
 )
 from src.core.analysis.validation.base import ValidationContext
@@ -124,6 +125,40 @@ def test_detect_wrong_test_is_none_when_the_method_fits() -> None:
     df = pd.DataFrame({"value": [1, 2, 3, 10, 11, 12], "group": list("aaabbb")})
 
     assert detect_wrong_test("independent_t_test", df, value_col="value", group_col="group") is None
+
+
+def test_detect_wrong_test_from_context_uses_ctx_method_and_the_code_s_own_columns() -> None:
+    df = pd.DataFrame({"value": [1, 2, 3, 4, 5, 6, 6, 7, 8, 9], "group": list("aaabbbcccc")})
+    ctx = ValidationContext(code="df.groupby('group')['value'].mean()", df=df, method="independent_t_test")
+
+    finding = detect_wrong_test_from_context(ctx)
+
+    assert finding is not None
+    assert finding.category == "wrong_test"
+    assert "one_way_anova" in finding.detail
+
+
+def test_detect_wrong_test_from_context_falls_back_to_a_method_named_in_the_code() -> None:
+    """`ctx.method` unset -- the same "name literally present in the text" detection
+    `competing.detect_method` uses for route comparison."""
+    df = pd.DataFrame({"value": [1, 2, 3, 4, 5, 6, 6, 7, 8, 9], "group": list("aaabbbcccc")})
+    ctx = ValidationContext(code="print('independent_t_test'); df.groupby('group')['value'].mean()", df=df)
+
+    finding = detect_wrong_test_from_context(ctx)
+
+    assert finding is not None and finding.category == "wrong_test"
+
+
+def test_detect_wrong_test_from_context_is_none_without_a_dataframe_or_a_named_method() -> None:
+    assert detect_wrong_test_from_context(ValidationContext(code="independent_t_test", df=None)) is None
+    assert detect_wrong_test_from_context(ValidationContext(code="just look at it", df=pd.DataFrame())) is None
+
+
+def test_critique_includes_a_wrong_test_finding_from_context() -> None:
+    df = pd.DataFrame({"value": [1, 2, 3, 4, 5, 6, 6, 7, 8, 9], "group": list("aaabbbcccc")})
+    ctx = ValidationContext(code="df.groupby('group')['value'].mean()", df=df, method="independent_t_test")
+
+    assert any(f.category == "wrong_test" for f in critique(ctx))
 
 
 # --------------------------------------------------------------------------- #

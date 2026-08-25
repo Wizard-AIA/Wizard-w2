@@ -58,6 +58,31 @@ def test_from_dict_tolerates_a_missing_question() -> None:
     assert restored.likely_variables == {}
 
 
+def test_resolve_variables_names_the_dependent_column_from_an_explicit_predict_phrase() -> None:
+    objective = AnalyticalObjective(question="predict churn from tenure and plan")
+
+    objective.resolve_variables(["churn", "tenure", "plan"])
+
+    assert objective.likely_variables["dependent"] == ["churn"]
+
+
+def test_resolve_variables_leaves_dependent_unset_without_an_explicit_phrase() -> None:
+    """No "predict/target/classify" phrase names a column -- never guessed from position."""
+    objective = AnalyticalObjective(question="how does churn relate to tenure")
+
+    objective.resolve_variables(["churn", "tenure"])
+
+    assert "dependent" not in objective.likely_variables
+
+
+def test_resolve_variables_does_not_overwrite_an_already_resolved_dependent() -> None:
+    objective = AnalyticalObjective(question="predict churn", likely_variables={"dependent": ["already_set"]})
+
+    objective.resolve_variables(["churn"])
+
+    assert objective.likely_variables["dependent"] == ["already_set"]
+
+
 # --------------------------------------------------------------------------- #
 # AnalyticalState
 # --------------------------------------------------------------------------- #

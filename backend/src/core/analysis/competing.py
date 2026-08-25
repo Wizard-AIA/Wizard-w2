@@ -130,6 +130,13 @@ def _check_kwargs(method: str, columns: list[str], df: pd.DataFrame) -> dict[str
     return None
 
 
+def applicability_kwargs(method: str, code: str, df: pd.DataFrame) -> dict[str, Any] | None:
+    """Public wrapper over `_check_kwargs`/`_columns_mentioned` for callers outside route
+    comparison -- the critic's wrong-test detector needs the same "read the code, don't guess
+    intent" column resolution for a single named method."""
+    return _check_kwargs(method, _columns_mentioned(code, df), df)
+
+
 def _more_appropriate(routes: list[RouteResult], df: pd.DataFrame | None) -> tuple[str | None, str]:
     """Which named route's method actually fits this data, reusing Phase 5's applicability
     checks -- the same "the model names it, deterministic code checks it" split `methods.py` uses."""

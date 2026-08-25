@@ -6,17 +6,20 @@ Two layers, named honestly rather than claimed uniformly:
 `ScriptedLLM`, end to end -- see `backend/tests/benchmark/test_adversarial_scenarios.py`. These
 exercise capabilities that are actually wired into the live turn: verification, data
 understanding (always computed at `_orient`), the critic, confidence, and Phase 8's route
-comparison.
+comparison. This now includes target leakage and a named wrong-test critique: earlier phases left
+two orchestrator wiring gaps that made both unreachable live -- `_ensure_understanding` never
+resolved a target column for `understanding.understand()`, and `ValidationContext.method` was
+never populated for the critic's `detect_wrong_test` -- both fixed alongside this suite
+(`objective.resolve_variables`, `understanding.resolve_time_column`,
+`competing.detect_method(state.code)` feeding `ValidationContext.method`,
+`critic.detect_wrong_test_from_context`).
 
-**Deterministic-layer scenarios** call a `core.analysis.*` function directly (`methods.py`,
-`understanding.py`, `objective.py`, `confidence.py`) rather than the orchestrator. Two gaps
-inherited from earlier phases put these out of the live loop's reach today: target leakage needs
-an explicit target column, which nothing in the current orchestrator ever supplies (leakage
-checks require one, by design, rather than guessing which column is the target); and a named
-method reaching the critic's "wrong test" detector needs `ValidationContext.method`, which is
-never populated by `_verify`. Testing these at the function level is still a real, offline,
-CI-gated regression check on the underlying capability -- it is just not (yet) proof that a live
-turn reaches it, and this module says so rather than overclaiming a green check it cannot back.
+**Deterministic-layer scenarios** call a `core.analysis.*` function directly instead of the
+orchestrator -- not because of a wiring gap, but because there is no live "turn" for them to run
+through: `insufficient_evidence` exercises `confidence.compute` on an empty context, and
+`ambiguous_question` exercises `objective.AnalyticalObjective.infer` as a pure function of the
+question text. Testing these at the function level is the correct, offline, CI-gated regression
+check for what they are.
 
 Every fixture here is synthetic and small, built for one adversarial property, the same way
 `reference_answers.py` is real data for content grading -- these are behaviour grading instead.
@@ -190,20 +193,6 @@ def _multi_step_investigation() -> LoopScenario:
     )
 
 
-LOOP_SCENARIOS: list[LoopScenario] = [
-    _obvious_analysis_wrong(),
-    _dirty_join_key(),
-    _missingness_flips_the_conclusion(),
-    _two_methods_disagree(),
-    _simpsons_paradox(),
-    _multi_step_investigation(),
-]
-
-
-# --------------------------------------------------------------------------- #
-# Deterministic-layer scenarios -- see the module docstring for why these four
-# are not (yet) exercised through the live orchestrator loop.
-# --------------------------------------------------------------------------- #
 def target_leakage_fixture() -> pd.DataFrame:
     """A feature that is, in effect, a copy of the target -- perfect information the model would
     never see in production (`understanding.leakage_indicators`)."""
@@ -222,6 +211,61 @@ def inappropriate_test_fixture() -> pd.DataFrame:
     return pd.DataFrame({"value": [1, 2, 3, 4, 5, 6, 6, 7, 8, 9], "group": list("aaabbbcccc")})
 
 
+def _target_leakage() -> LoopScenario:
+    """An explicit "predict <column>" instruction, so `objective.resolve_variables` names `label`
+    the target and `_ensure_understanding` actually runs the leakage scan live -- this used to be
+    deterministic-layer only, before the orchestrator wiring gap this module's docstring names
+    was fixed."""
+    return LoopScenario(
+        id="target_leakage",
+        category="Target leakage",
+        instruction="predict label from the other columns",
+        dataframe=target_leakage_fixture(),
+        responses=[
+            "1. Predict label from the other columns",
+            "```python\nprint(df['label'].mean())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Done.",
+        ],
+    )
+
+
+def _statistically_inappropriate_request() -> LoopScenario:
+    """The executed code names `independent_t_test` by its registry key on three groups, so
+    `competing.detect_method` finds it in `state.code` and the critic's wrong-test detector -- now
+    wired into `critique()` -- actually fires live, not just at the `run_method` level."""
+    return LoopScenario(
+        id="statistically_inappropriate_request",
+        category="Statistically inappropriate request",
+        instruction="is there a significant difference between groups using an independent_t_test",
+        dataframe=inappropriate_test_fixture(),
+        responses=[
+            "1. Compare value across groups with independent_t_test",
+            "```python\nprint('independent_t_test')\nprint(df.groupby('group')['value'].mean())\n```",
+            "ACTION: answer\nGOAL: report",
+            "```python\nprint('VERIFIED: ok')\n```",
+            "Groups differ, though the test used may not fit three groups.",
+        ],
+    )
+
+
+LOOP_SCENARIOS: list[LoopScenario] = [
+    _obvious_analysis_wrong(),
+    _dirty_join_key(),
+    _missingness_flips_the_conclusion(),
+    _two_methods_disagree(),
+    _simpsons_paradox(),
+    _multi_step_investigation(),
+    _target_leakage(),
+    _statistically_inappropriate_request(),
+]
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic-layer scenarios -- see the module docstring for why these two
+# are not run through the live orchestrator loop.
+# --------------------------------------------------------------------------- #
 AMBIGUOUS_QUESTIONS: tuple[str, ...] = (
     "Which region should we focus on?",
     "What should we do next?",

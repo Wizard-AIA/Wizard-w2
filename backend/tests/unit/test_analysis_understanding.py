@@ -17,6 +17,7 @@ from src.core.analysis.understanding import (
     leakage_indicators,
     referential_consistency,
     render,
+    resolve_time_column,
     temporal_coverage,
     type_anomalies,
     understand,
@@ -194,6 +195,27 @@ def test_leakage_indicators_on_an_unknown_target_is_empty() -> None:
     df = pd.DataFrame({"a": [1, 2, 3]})
 
     assert leakage_indicators(df, "missing") == []
+
+
+# --------------------------------------------------------------------------- #
+# resolve_time_column
+# --------------------------------------------------------------------------- #
+def test_resolve_time_column_picks_the_one_column_profiled_as_temporal() -> None:
+    catalog = {"columns": {"created_at": {"semantic_type": "temporal"}, "amount": {"semantic_type": "numeric"}}}
+
+    assert resolve_time_column(catalog) == "created_at"
+
+
+def test_resolve_time_column_is_none_when_there_are_several_candidates() -> None:
+    """Two temporal columns: picking one over the other would be a guess, not a fact."""
+    catalog = {"columns": {"created_at": {"semantic_type": "temporal"}, "updated_at": {"semantic_type": "temporal"}}}
+
+    assert resolve_time_column(catalog) is None
+
+
+def test_resolve_time_column_is_none_with_no_temporal_column_or_no_catalog() -> None:
+    assert resolve_time_column({"columns": {"amount": {"semantic_type": "numeric"}}}) is None
+    assert resolve_time_column(None) is None
 
 
 # --------------------------------------------------------------------------- #

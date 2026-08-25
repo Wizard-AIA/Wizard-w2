@@ -1581,15 +1581,26 @@ class AnalysisOrchestrator:
 
         Built on the catalog already profiled at upload, so this costs no LLM round trip and is
         safe to run before the very first prompt of a turn -- unlike `_verify` or code generation,
-        nothing here waits on a model.
+        nothing here waits on a model. Resolves a target (from an explicit "predict/target/
+        classify <column>" phrase in the instruction) and a time column (the one column already
+        profiled as temporal) so leakage and temporal checks actually fire in the live loop --
+        both stay `None`, and both checks stay silent, rather than guess.
         """
         if state.analysis.understanding is not None:
             return state.analysis.understanding
         if session.df is None:
             return None
         try:
+            objective = state.analysis.objective
+            objective.resolve_variables(session.df.columns)
+            target = (objective.likely_variables.get("dependent") or [None])[0]
             state.analysis.understanding = understanding.understand(
-                session.df, tables=session.tables, catalog=session.catalog
+                session.df,
+                tables=session.tables,
+                catalog=session.catalog,
+                target=target,
+                time_column=understanding.resolve_time_column(session.catalog),
+                analytical_type=objective.analytical_type,
             )
         except Exception as exc:
             logger.error("Could not compute data understanding", error=str(exc))
@@ -1973,6 +1984,7 @@ class AnalysisOrchestrator:
             df=session.df,
             tables=session.tables,
             understanding=state.analysis.understanding,
+            method=competing.detect_method(state.code),
             recomputation_status=status,
             recomputation_detail=detail,
         )

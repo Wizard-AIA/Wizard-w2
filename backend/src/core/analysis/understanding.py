@@ -204,6 +204,16 @@ def leakage_indicators(df: pd.DataFrame, target: str, threshold: float = 0.98) -
     ]
 
 
+def resolve_time_column(catalog: dict[str, Any] | None) -> str | None:
+    """The one column CatalogEngine already profiled as temporal -- returns `None` when there are
+    zero or several, since picking one candidate over another would be exactly the fabricated
+    certainty this module's docstring rules out."""
+    candidates = [
+        name for name, info in ((catalog or {}).get("columns") or {}).items() if info.get("semantic_type") == "temporal"
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def understand(
     df: pd.DataFrame,
     *,

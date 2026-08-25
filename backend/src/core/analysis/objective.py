@@ -7,6 +7,8 @@ first-class field, not an absence -- an unresolved reading is recorded, never si
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
@@ -54,6 +56,24 @@ _TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("descriptive", ("how many", "what is the", "total ", "average ", "count ", "sum of")),
 )
 
+#: Phrases that name the column right after them as the outcome, not a position or a type guess --
+#: `resolve_variables` only ever fills `likely_variables['dependent']` from one of these.
+_DEPENDENT_PHRASES: tuple[str, ...] = (
+    "predict ",
+    "predicting ",
+    "target is ",
+    "target: ",
+    "outcome is ",
+    "classify ",
+)
+
+
+def _mentions(text: str, name: str) -> bool:
+    """Word-boundary match so a short column name (`id`, `n`) doesn't match inside another word --
+    the same check `rag.retriever.mentions_column` uses, kept local to avoid coupling this leaf
+    module to retrieval's heavier dependencies."""
+    return re.search(rf"(?<![a-zA-Z0-9_]){re.escape(name.lower())}(?![a-zA-Z0-9_])", text) is not None
+
 
 @dataclass
 class AnalyticalObjective:
@@ -96,6 +116,24 @@ class AnalyticalObjective:
                 analytical_type = candidate
                 break
         return cls(question=instruction or "", analytical_type=analytical_type)
+
+    def resolve_variables(self, columns: Sequence[str]) -> None:
+        """Fills `likely_variables['dependent']` only from an explicit "predict/target/classify
+        <column>" phrase that names a real column -- never from position or dtype, since a silent
+        guess here is exactly the fabricated certainty this module exists to avoid (the same
+        boundary `understanding.py` draws around leakage and temporal coverage)."""
+        if self.likely_variables.get("dependent"):
+            return
+        lowered = self.question.lower()
+        for phrase in _DEPENDENT_PHRASES:
+            index = lowered.find(phrase)
+            if index == -1:
+                continue
+            window = lowered[index : index + len(phrase) + 40]
+            for column in columns:
+                if _mentions(window, str(column)):
+                    self.likely_variables["dependent"] = [str(column)]
+                    return
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AnalyticalObjective:
