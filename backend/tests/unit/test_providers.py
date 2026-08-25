@@ -127,6 +127,7 @@ def test_the_wire_dialect_comes_from_the_descriptor() -> None:
         "lmstudio": "openai",
         "anthropic": "anthropic",
         "openai": "openai",
+        "gemini": "openai",
         "custom_gateway": "openai",
     }
 

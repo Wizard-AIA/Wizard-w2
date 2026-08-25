@@ -53,8 +53,10 @@ os.environ.update(
         # registry must never dial out to a real endpoint during a test.
         "OPENAI_BASE_URL": "http://127.0.0.1:1",
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+        "GEMINI_BASE_URL": "http://127.0.0.1:1",
         "OPENAI_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
+        "GEMINI_API_KEY": "",
         "GATEWAY_API_URL": "",
         "GATEWAY_API_KEY": "",
         # Pinned rather than derived. The default is `local-only`, which would

@@ -136,7 +136,8 @@ Copy [backend/.env.example](backend/.env.example) to `backend/.env`. Everything 
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `API_PROVIDER` | `ollama` | Default backend: `ollama`, `lmstudio`, `openai` or `custom_gateway` |
+| `API_PROVIDER` | `ollama` | Default backend: `ollama`, `lmstudio`, `anthropic`, `openai`, `gemini` or `custom_gateway` |
+| `DATA_MODE` | `""` (derives) | `local-only`, `hybrid` or `cloud-only` — what may leave this machine |
 | `MODEL_NAME` | `""` | Pin the reasoning model. Empty = use what the provider has |
 | `WORKER_MODEL_NAME` | `""` | Pin the code model. Empty = use what the provider has |
 | `AGENT_TIER` | `auto` | `auto`, `compact`, `balanced` or `full` — how long an investigation may run |

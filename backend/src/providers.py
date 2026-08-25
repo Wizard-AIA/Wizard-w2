@@ -89,6 +89,18 @@ PROVIDER_TABLE: tuple[ProviderDescriptor, ...] = (
         docs_url="https://platform.openai.com/api-keys",
     ),
     ProviderDescriptor(
+        id="gemini",
+        label="Gemini",
+        kind="cloud",
+        api_style="openai",
+        default_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        requires_key=True,
+        url_field="GEMINI_BASE_URL",
+        key_field="GEMINI_API_KEY",
+        hint="Gemini models, called over the network via Google's OpenAI-compatible endpoint. Your prompts leave this machine.",
+        docs_url="https://aistudio.google.com/apikey",
+    ),
+    ProviderDescriptor(
         id="custom_gateway",
         label="Custom gateway",
         kind="cloud",

@@ -39,7 +39,7 @@ ruff check . --fix && ruff format .                       # CI: ruff check + ruf
 - `WIZARD_CONFIG_DIR` → temp dir (no real credentials)
 - `DATA_MODE=hybrid`, `DATA_SCHEMA_ONLY=false`
 - `SKILLS_BUILTIN_DIR`, `SKILLS_PROJECT_DIR` → empty temp dirs
-- `SKILLS_REGISTRY_API`, `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` → `http://127.0.0.1:1`
+- `SKILLS_REGISTRY_API`, `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GEMINI_BASE_URL` → `http://127.0.0.1:1`
 
 Keep new env pinning at the top of `conftest.py`.
 

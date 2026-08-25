@@ -240,6 +240,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_BASE_URL: str = ""
     ANTHROPIC_API_KEY: str = ""
+    GEMINI_BASE_URL: str = ""
+    GEMINI_API_KEY: str = ""
 
     # ------------------------------------------------------------------ #
     # Embeddings

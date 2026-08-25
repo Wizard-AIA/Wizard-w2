@@ -8,7 +8,8 @@
 redis>=8.1.0
 
 # Talk to an OpenAI-compatible endpoint instead of a local Ollama daemon
-# (API_PROVIDER=openai, custom_gateway, or lmstudio).
+# (API_PROVIDER=openai, gemini, custom_gateway, or lmstudio -- Gemini's own
+# API speaks this dialect through its /v1beta/openai compatibility route).
 langchain-openai>=1.5.2
 
 # Anthropic's Messages API, which is not OpenAI-shaped and needs its own client.

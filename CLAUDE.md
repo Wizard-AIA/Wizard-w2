@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Wizard w2** — a local-first autonomous data analysis agent. A FastAPI backend orchestrates a "manager" model that reasons and a "worker" model that writes code, each resolvable to a local provider (Ollama, LM Studio) or a cloud provider (Anthropic, OpenAI, a gateway) under an explicit, session-wide data mode. Generated Python runs in a per-session sandbox — a host subprocess under OS-native containment by default, or a Docker container if you opt into that — and streams reasoning, code, stdout and the final answer to a Next.js client over one WebSocket.
+**Wizard w2** — a local-first autonomous data analysis agent. A FastAPI backend orchestrates a "manager" model that reasons and a "worker" model that writes code, each resolvable to a local provider (Ollama, LM Studio) or a cloud provider (Anthropic, OpenAI, Gemini, a gateway) under an explicit, session-wide data mode. Generated Python runs in a per-session sandbox — a host subprocess under OS-native containment by default, or a Docker container if you opt into that — and streams reasoning, code, stdout and the final answer to a Next.js client over one WebSocket.
 
 Monorepo: `backend/` (Python 3.12, FastAPI) + `frontend/` (Next.js 16 / React 19 / Tailwind v4) + `cli/` (Go, a single static binary managing both as a background service).
 
