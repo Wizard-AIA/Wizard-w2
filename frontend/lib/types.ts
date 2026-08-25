@@ -39,6 +39,12 @@ export type EventType =
   | "plan_revised"
   | "assumption"
   | "verification"
+  // The analytical control plane's own frames: a critic finding, a competing-
+  // methods comparison, and the turn's explainable confidence verdict. All
+  // additive, and all also folded into `final.analysis` — see `AnalysisSnapshot`.
+  | "critic_finding"
+  | "route_comparison"
+  | "confidence"
   // Which skill informed the turn, and whether an analysis has recurred often
   // enough to be worth naming. Both additive.
   | "skill"
@@ -145,6 +151,126 @@ export interface Grounding {
   ratio: number
 }
 
+/**
+ * The analytical control plane's working state for one turn -- everything
+ * `core.analysis.state.AnalyticalState` tracks server-side. Arrives whole on
+ * the `final` frame's `analysis` field (`AnalysisSnapshot` mirrors
+ * `AnalyticalState.to_dict()`); `criticFindings`, `routeComparisons` and
+ * `confidence` also update live as their own frames arrive mid-turn, so the
+ * workspace shows progress rather than only a post-hoc summary. `findings`
+ * and `assumptions` are deliberately not duplicated here -- `AnswerTrust`
+ * already owns those.
+ */
+export interface AnalysisObjective {
+  question: string
+  analyticalType: string | null
+  unitOfAnalysis: string | null
+  population: string | null
+  timeDimension: string | null
+  likelyVariables: Record<string, string[]>
+  constraints: string[]
+  expectedOutput: string | null
+  /** Readings of the question that were never silently resolved. */
+  ambiguity: string[]
+}
+
+export type HypothesisKind = "primary" | "null" | "alternative" | "exploratory" | "competing"
+export type HypothesisStatus = "untested" | "supported" | "refuted" | "inconclusive" | "unresolved"
+
+export interface Hypothesis {
+  id: string
+  kind: HypothesisKind
+  statement: string
+  status: HypothesisStatus
+  evidenceFor: string[]
+  evidenceAgainst: string[]
+}
+
+export interface PlanRevision {
+  index: number
+  text: string
+  why: string
+  at: number
+}
+
+export interface EvidenceNode {
+  id: string
+  kind: string
+  label: string
+  at: number
+}
+
+export interface EvidenceEdge {
+  source: string
+  target: string
+  relation: string
+}
+
+export interface EvidenceGraph {
+  nodes: EvidenceNode[]
+  edges: EvidenceEdge[]
+}
+
+export interface ValidationFinding {
+  validator: string
+  severity: "info" | "warning" | "error"
+  message: string
+  detail?: string
+}
+
+export interface CriticFinding {
+  category: string
+  severity: "info" | "warning" | "error"
+  message: string
+  detail?: string
+  suggestedReaction?: string
+}
+
+export interface RouteComparison {
+  /** Present only on the live frame -- which `parallel` fan-out this compared.
+   *  Absent once folded into `final.analysis`, which records one list for the
+   *  whole turn rather than per group. */
+  group?: string
+  verdict: "agree" | "disagree" | "inconclusive"
+  routes: string[]
+  agreementDetail: string
+  moreAppropriate: string | null
+  why: string
+  residualUncertainty: string
+}
+
+export type ConfidenceLevel = "low" | "medium" | "high" | "unknown"
+export type ConfidenceVerdict = "answerable" | "answerable_with_caveats" | "insufficient_evidence" | "cannot_answer"
+
+export interface ConfidenceComponent {
+  name: string
+  level: ConfidenceLevel
+  reason: string
+}
+
+export interface Confidence {
+  verdict: ConfidenceVerdict
+  components: ConfidenceComponent[]
+  reasons: string[]
+  stop?: {
+    reason: string
+    detail: string
+  }
+}
+
+export interface AnalysisSnapshot {
+  objective: AnalysisObjective | null
+  planRevisions: PlanRevision[]
+  hypotheses: Hypothesis[]
+  evidence: EvidenceGraph
+  evidenceRefs: string[]
+  validations: ValidationFinding[]
+  criticFindings: CriticFinding[]
+  routeComparisons: RouteComparison[]
+  openQuestions: string[]
+  confidence: Confidence | null
+}
+
 export interface ServerEvent {
   type: EventType
   at?: number
@@ -224,6 +350,11 @@ export interface ChatMessage {
   assumptions: string[]
   verification?: Verification | null
   grounding?: Grounding | null
+  /** The analytical control plane's working state -- see `AnalysisSnapshot`.
+   *  Builds up live from `critic_finding`/`route_comparison`/`confidence`
+   *  frames while streaming, then is replaced wholesale by `final.analysis`,
+   *  the authoritative whole-turn snapshot. */
+  analysis?: AnalysisSnapshot | null
   /** Which budget tier the run was sized to — compact, balanced or full. */
   tier?: string
   mode?: AnalysisMode
