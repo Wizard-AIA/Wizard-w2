@@ -35,16 +35,17 @@ jobs:
         run: |
           uv pip install --system --require-hashes -r requirements.lock.txt
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86  # v6.0.10
+        with:
+          package_json_file: frontend/package.json
+
       - name: Set up Node.js 20
-        uses: actions/setup-node@0a44ba7841725637a54e280ecb6774ac30d7a1c0  # v4.0.4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@a6425f26088496497fce442f60e38b919e74f68e  # v3.0.0
-        with:
-          version: "latest"
-          run_install: false
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install Frontend dependencies
         working-directory: frontend
