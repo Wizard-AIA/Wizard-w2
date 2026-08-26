@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import io
 import math
+
 import duckdb
 import numpy as np
 import pandas as pd
 import polars as pl
 import pyarrow as pa
-import pytest
 
 
 def _stream_arrow_bytes(df: pd.DataFrame) -> bytes:
