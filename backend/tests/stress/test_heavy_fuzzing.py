@@ -59,6 +59,7 @@ class TestHeavyHypothesisFuzzing:
         Generates random DataFrames, serializes to Arrow IPC, and verifies bit-exact roundtrip.
         """
         # Data generation based on parameterized dtype
+        col_data = None
         if dtype == "int32":
             col_data = data_obj.draw(
                 st.lists(st.integers(min_value=-(2**31), max_value=2**31 - 1), min_size=1, max_size=100)
