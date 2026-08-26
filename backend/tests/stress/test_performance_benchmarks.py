@@ -119,11 +119,17 @@ class TestPerformanceBenchmarks:
 
         # Eager
         df = pl.DataFrame(data)
-        res_eager = df.group_by("group").agg([pl.col("value").sum(), pl.col("value").mean()])
+        res_eager = df.group_by("group").agg(
+            [pl.col("value").sum().alias("value_sum"), pl.col("value").mean().alias("value_mean")]
+        )
 
         # Lazy
         lf = pl.LazyFrame(data)
-        res_lazy = lf.group_by("group").agg([pl.col("value").sum(), pl.col("value").mean()]).collect()
+        res_lazy = (
+            lf.group_by("group")
+            .agg([pl.col("value").sum().alias("value_sum"), pl.col("value").mean().alias("value_mean")])
+            .collect()
+        )
 
         assert len(res_eager) > 0
         assert len(res_lazy) > 0
