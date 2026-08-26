@@ -2,7 +2,7 @@
 
 > A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Active-success) ![Version](https://img.shields.io/badge/Version-v4.0.0-orange) ![Docker](https://img.shields.io/badge/Docker-Ready-blue) ![CI](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/ci.yml/badge.svg?branch=master) ![Security](https://github.com/Wizard-AIA/Wizard-w2/actions/workflows/codeql.yml/badge.svg?branch=master) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Wizard-AIA/Wizard-w2/badge)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![License](https://img.shields.io/github/license/Wizard-AIA/Wizard-w2)](LICENSE) [![Docs](https://img.shields.io/badge/docs-wizard--aia.github.io-blue)](https://wizard-aia.github.io/docs/)
+![Status](https://img.shields.io/badge/Status-Active-success) [![Release](https://img.shields.io/github/v/release/Wizard-AIA/Wizard-w2?label=Release&color=orange)](https://github.com/Wizard-AIA/Wizard-w2/releases/latest) [![Homebrew](https://img.shields.io/badge/brew-wizard-green)](https://github.com/Wizard-AIA/homebrew-wizard) [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Wizard-AIA/Wizard-w2) [![Awesome](https://awesome.re/badge-flat2.svg)](https://github.com/Wizard-AIA/awesome-wizard) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Wizard-AIA/Wizard-w2/badge)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![License](https://img.shields.io/github/license/Wizard-AIA/Wizard-w2)](LICENSE) [![Docs](https://img.shields.io/badge/docs-wizard--aia.github.io-blue)](https://wizard-aia.github.io/docs/)
 
 Upgrading from w1? See [the migration notes](https://github.com/Wizard-AIA/Wizard-w2/blob/master/docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
@@ -10,14 +10,25 @@ Full documentation, including task guides (EDA, model training) and an
 [edge-cases & gotchas reference](https://wizard-aia.github.io/docs/troubleshooting/edge-cases/),
 lives at **[wizard-aia.github.io/docs](https://wizard-aia.github.io/docs/)**.
 
-## Download
+## ⚡ Install & Quick Start
 
-**[Latest release](https://github.com/Wizard-AIA/Wizard-w2/releases/latest)** — pick the zip for your OS (macOS Apple Silicon/Intel, Linux x86_64/ARM64, Windows), extract it, and run:
+### 🍺 Option A: Homebrew (macOS & Linux)
+
+```bash
+brew install Wizard-AIA/wizard/wizard
+wizard init && wizard start
+```
+
+### 📦 Option B: Standalone Prebuilt Binary
+**[Download latest release package](https://github.com/Wizard-AIA/Wizard-w2/releases/latest)** for macOS, Linux, or Windows, extract it, and run:
 
 ```bash
 ./cli/wizard init       # checks prerequisites, installs dependencies
 ./cli/wizard start      # launches everything, opens a browser
 ```
+
+### ☁️ Option C: 1-Click Cloud Trial (GitHub Codespaces)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Wizard-AIA/Wizard-w2)
 
 That's it — no `git clone`, no Go toolchain, no build step. See [Quick start](#quick-start) below for what `init`/`start` actually do, and [Docker alternative](#docker-alternative) if you'd rather containerize it.
 

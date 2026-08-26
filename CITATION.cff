@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Wizard in your research, data science workflows, or projects, please cite it as below."
+title: "Wizard: Local-First Autonomous Data Analysis Agent"
+abstract: "A local-first autonomous data analysis agent that investigates, writes and executes Python code in secure OS-contained sandboxes, self-corrects on errors, and independently verifies analytical claims."
+authors:
+  - family-names: "Saha"
+    given-names: "Aniket"
+    alias: "Aniket-a14"
+url: "https://github.com/Wizard-AIA/Wizard-w2"
+repository-code: "https://github.com/Wizard-AIA/Wizard-w2"
+version: 1.0.2
+date-released: 2026-08-26
+license: BSD-3-Clause
+keywords:
+  - autonomous-agents
+  - data-analysis
+  - data-science
+  - local-first
+  - privacy
+  - duckdb
+  - polars
+  - python

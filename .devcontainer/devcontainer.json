@@ -1,0 +1,36 @@
+{
+  "name": "Wizard Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20",
+      "pnpm": "latest"
+    },
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.22"
+    }
+  },
+  "forwardPorts": [3000, 8000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Wizard Web UI",
+      "onAutoForward": "openBrowser"
+    },
+    "8000": {
+      "label": "Wizard Backend API",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "pip install uv && uv pip install --system -r requirements.txt -r requirements-local.txt && (cd frontend && pnpm install) && (cd cli && go build -o wizard ./cmd/wizard)",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "golang.go",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}
