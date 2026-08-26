@@ -1,0 +1,63 @@
+name: OpenAPI & TypeScript Contract Drift
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-sync:
+    name: Schema & Type Synchronization Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: |
+          uv pip install --system --require-hashes -r requirements.lock.txt
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@0a44ba7841725637a54e280ecb6774ac30d7a1c0  # v4.0.4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a6425f26088496497fce442f60e38b919e74f68e  # v3.0.0
+        with:
+          version: "latest"
+          run_install: false
+
+      - name: Install Frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Export OpenAPI Schema from Backend
+        run: |
+          PYTHONPATH=backend uv run python -c "import json; from src.api.api import app; open('backend/openapi.json', 'w').write(json.dumps(app.openapi(), indent=2))"
+
+      - name: Generate TypeScript API Types
+        working-directory: frontend
+        run: pnpm run generate:api-types
+
+      - name: Verify Zero Contract Drift
+        run: |
+          git diff --exit-code frontend/lib/api-types.generated.ts || (echo "❌ Backend and Frontend contract drift detected! Please run 'pnpm run generate:api-types' and commit the updated types." && exit 1)

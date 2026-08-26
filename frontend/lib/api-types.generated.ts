@@ -703,6 +703,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspace/stream-arrow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Arrow
+         * @description Streams a session-scoped preview as an Apache Arrow IPC stream.
+         *
+         *     Pagination keeps the browser request bounded while the binary format avoids
+         *     the large intermediate JSON string and per-cell JSON object allocation used
+         *     by the legacy preview route. ``limit`` can be raised by data tooling that
+         *     genuinely needs a larger contiguous extract.
+         */
+        get: operations["stream_arrow_api_workspace_stream_arrow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/file/{file_path}": {
         parameters: {
             query?: never;
@@ -1215,18 +1240,12 @@ export interface components {
     schemas: {
         /** Body_upload_dataset_api_datasets_post */
         Body_upload_dataset_api_datasets_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** Body_upload_document_api_documents_post */
         Body_upload_document_api_documents_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** ChatRequest */
@@ -1263,11 +1282,15 @@ export interface components {
              */
             status: string;
             /** Artifacts */
-            artifacts?: Record<string, never>[];
+            artifacts?: {
+                [key: string]: unknown;
+            }[];
             /** Warnings */
             warnings?: string[];
             /** Approval */
-            approval?: Record<string, never> | null;
+            approval?: {
+                [key: string]: unknown;
+            } | null;
             /** Downloads */
             downloads?: string[];
             /**
@@ -1300,9 +1323,13 @@ export interface components {
              */
             verification: string;
             /** Grounding */
-            grounding?: Record<string, never>;
+            grounding?: {
+                [key: string]: unknown;
+            };
             /** Usage */
-            usage?: Record<string, never>;
+            usage?: {
+                [key: string]: unknown;
+            };
             /** Skills Used */
             skills_used?: string[];
         };
@@ -1353,7 +1380,9 @@ export interface components {
             /** Kind */
             kind: string;
             /** Options */
-            options?: Record<string, never>;
+            options?: {
+                [key: string]: unknown;
+            };
             /** Secret */
             secret?: string | null;
         };
@@ -1371,7 +1400,9 @@ export interface components {
             /** Kind */
             kind: string;
             /** Options */
-            options?: Record<string, never>;
+            options?: {
+                [key: string]: unknown;
+            };
             /**
              * Read Only
              * @default true
@@ -1512,7 +1543,9 @@ export interface components {
             /** Source Format */
             source_format: string;
             /** Profile */
-            profile?: Record<string, never>;
+            profile?: {
+                [key: string]: unknown;
+            };
             /** Loaded At */
             loaded_at: number;
             /**
@@ -1709,7 +1742,9 @@ export interface components {
                 [key: string]: string | null;
             };
             /** Selected */
-            selected: Record<string, never>;
+            selected: {
+                [key: string]: unknown;
+            };
             /** Providers */
             providers?: components["schemas"]["ProviderInfo"][];
             /** Error */
@@ -1792,7 +1827,9 @@ export interface components {
             /** Columns */
             columns: string[];
             /** Data */
-            data: Record<string, never>[];
+            data: {
+                [key: string]: unknown;
+            }[];
         };
         /** ProviderCredentialRequest */
         ProviderCredentialRequest: {
@@ -1926,11 +1963,17 @@ export interface components {
              */
             detail: string;
             /** Checks */
-            checks?: Record<string, never>;
+            checks?: {
+                [key: string]: unknown;
+            };
             /** Applied */
-            applied?: Record<string, never>;
+            applied?: {
+                [key: string]: unknown;
+            };
             /** Capability */
-            capability?: Record<string, never>;
+            capability?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * ServerConfig
@@ -2037,7 +2080,9 @@ export interface components {
              */
             llm_keep_alive: string;
             /** Memory Plan */
-            memory_plan?: Record<string, never> | null;
+            memory_plan?: {
+                [key: string]: unknown;
+            } | null;
             /** Performance Notes */
             performance_notes?: string[];
             /**
@@ -2062,7 +2107,9 @@ export interface components {
              */
             host_sandbox: string;
             /** Sandbox Capability */
-            sandbox_capability?: Record<string, never>;
+            sandbox_capability?: {
+                [key: string]: unknown;
+            };
             /**
              * Data Mode
              * @default local-only
@@ -2114,22 +2161,34 @@ export interface components {
             /** Active Dataset */
             active_dataset?: string | null;
             /** Datasets */
-            datasets?: Record<string, never>[];
+            datasets?: {
+                [key: string]: unknown;
+            }[];
             /** Documents */
-            documents?: Record<string, never>[];
+            documents?: {
+                [key: string]: unknown;
+            }[];
             /** Models */
-            models?: Record<string, never>;
+            models?: {
+                [key: string]: unknown;
+            };
             /**
              * Data Mode
              * @default local-only
              */
             data_mode: string;
             /** Data Policy */
-            data_policy?: Record<string, never>;
+            data_policy?: {
+                [key: string]: unknown;
+            };
             /** Permissions */
-            permissions?: Record<string, never>;
+            permissions?: {
+                [key: string]: unknown;
+            };
             /** Usage */
-            usage?: Record<string, never>;
+            usage?: {
+                [key: string]: unknown;
+            };
             /**
              * Sandboxed
              * @default false
@@ -2149,7 +2208,9 @@ export interface components {
         /** SkillCandidateListResponse */
         SkillCandidateListResponse: {
             /** Candidates */
-            candidates?: Record<string, never>[];
+            candidates?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Threshold
              * @default 3
@@ -2215,7 +2276,9 @@ export interface components {
              */
             body: string;
             /** Recent Uses */
-            recent_uses?: Record<string, never>[];
+            recent_uses?: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * SkillDraftRequest
@@ -2236,7 +2299,9 @@ export interface components {
          */
         SkillInstallPreviewResponse: {
             /** Pending */
-            pending?: Record<string, never>[];
+            pending?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Sha
              * @default
@@ -2248,7 +2313,9 @@ export interface components {
              */
             short_sha: string;
             /** Source */
-            source?: Record<string, never>;
+            source?: {
+                [key: string]: unknown;
+            };
             /**
              * Message
              * @default
@@ -2270,21 +2337,29 @@ export interface components {
             /** Roots */
             roots?: components["schemas"]["SkillRoot"][];
             /** Candidates */
-            candidates?: Record<string, never>[];
+            candidates?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Enabled
              * @default true
              */
             enabled: boolean;
             /** Pending */
-            pending?: Record<string, never>[];
+            pending?: {
+                [key: string]: unknown;
+            }[];
             /** Registry */
-            registry?: Record<string, never>;
+            registry?: {
+                [key: string]: unknown;
+            };
         };
         /** SkillPendingListResponse */
         SkillPendingListResponse: {
             /** Pending */
-            pending?: Record<string, never>[];
+            pending?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Root
              * @default
@@ -2394,7 +2469,9 @@ export interface components {
             /** Warnings */
             warnings?: string[];
             /** Catalog */
-            catalog?: Record<string, never>;
+            catalog?: {
+                [key: string]: unknown;
+            };
             /** Session Id */
             session_id: string;
         };
@@ -2491,11 +2568,17 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /** VariablesResponse */
         VariablesResponse: {
             /** Variables */
-            variables?: Record<string, never>;
+            variables?: {
+                [key: string]: unknown;
+            };
             /**
              * Sandbox Available
              * @default false
@@ -2839,7 +2922,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2872,7 +2957,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3074,7 +3161,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3109,7 +3198,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3203,7 +3294,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3409,7 +3502,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3477,7 +3572,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3882,6 +3979,44 @@ export interface operations {
             };
         };
     };
+    stream_arrow_api_workspace_stream_arrow_get: {
+        parameters: {
+            query?: {
+                dataset?: string | null;
+                offset?: number;
+                limit?: number;
+                batch_size?: number;
+                sort_by?: string | null;
+                sort_order?: string;
+            };
+            header?: {
+                "X-Session-Id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_file_api_workspace_file__file_path__get: {
         parameters: {
             query?: {
@@ -3937,7 +4072,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4125,7 +4262,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4160,7 +4299,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4191,7 +4332,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4256,7 +4399,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4291,7 +4436,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4324,7 +4471,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4427,7 +4576,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4465,7 +4616,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4548,7 +4701,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -4582,7 +4737,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
