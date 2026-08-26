@@ -55,11 +55,8 @@ class TestChaosAndFaultResilience:
             reader = pa.RecordBatchStreamReader(pa.BufferReader(truncated))
             restored = reader.read_all()
             assert not restored.equals(table)
-            return
         except Exception:
-            with pytest.raises(Exception):
-                reader = pa.RecordBatchStreamReader(pa.BufferReader(truncated))
-                reader.read_all()
+            pass
 
     @pytest.mark.parametrize(
         "code",
