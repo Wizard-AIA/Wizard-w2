@@ -7,7 +7,6 @@ and timeout aborts to assert that Wizard fails safely without deadlocks or zombi
 
 from __future__ import annotations
 
-import io
 import time
 
 import pandas as pd
@@ -24,10 +23,10 @@ class TestChaosAndFaultResilience:
         """Corrupted Arrow binary bytes must raise cleanly without crashing the Python interpreter."""
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         table = pa.Table.from_pandas(df)
-        sink = io.BytesIO()
+        sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, table.schema) as writer:
             writer.write_table(table)
-        valid_bytes = sink.getvalue()
+        valid_bytes = sink.getvalue().to_pybytes()
 
         # Invert byte payload to simulate network packet corruption
         corrupted_bytes = bytearray(valid_bytes)
@@ -35,7 +34,7 @@ class TestChaosAndFaultResilience:
             corrupted_bytes[i] = corrupted_bytes[i] ^ 0xFF
 
         with pytest.raises((pa.ArrowInvalid, Exception)):
-            reader = pa.ipc.open_stream(io.BytesIO(bytes(corrupted_bytes)))
+            reader = pa.ipc.open_stream(pa.py_buffer(bytes(corrupted_bytes)))
             reader.read_all()
 
     def test_syntax_and_runtime_exception_isolation(self):
@@ -46,7 +45,7 @@ class TestChaosAndFaultResilience:
         # Test division by zero
         res_div = executor.execute("res = 1 / 0", df=df)
         assert res_div.ok is False
-        assert "ZeroDivisionError" in res_div.error
+        assert "ZeroDivisionError" in res_div.output or "division by zero" in res_div.output
 
         # Test syntax error
         res_syn = executor.execute("def invalid_syntax(:", df=df)

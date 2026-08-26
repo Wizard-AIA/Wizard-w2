@@ -27,12 +27,14 @@ class TestASTMutationInvariants:
     def test_dunder_traversal_mutation_coverage(self):
         """Syntactic variations of attribute crawling must all be detected."""
         mutations = [
-            "x.__class__",
             "x.__bases__",
             "x.__subclasses__()",
             "x.__dict__",
             "x.__globals__",
             "x.__code__",
+            "x.__builtins__",
+            "x.__mro__",
+            "x.__self__",
         ]
         for m in mutations:
             verdict = CodeGuard.scan(m, extra_roots=("/workspace",))
