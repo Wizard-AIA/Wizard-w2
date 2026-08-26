@@ -28,9 +28,9 @@ wizard init && wizard start
 ```
 
 ### ☁️ Option C: 1-Click Cloud Trial (GitHub Codespaces)
-Launch an instant full-stack environment with zero local setup:
+Launch an instant full-stack environment in your browser:
 
-[![Open in GitHub Codespaces](https://img.shields.io/badge/GitHub_Codespaces-Open_Environment-2ea44f?style=for-the-badge&logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2)
+[![Open in GitHub Codespaces](https://img.shields.io/badge/Codespaces-Open_in_Browser-blue?logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2)
 
 That's it — no `git clone`, no Go toolchain, no build step. See [Quick start](#quick-start) below for what `init`/`start` actually do, and [Docker alternative](#docker-alternative) if you'd rather containerize it.
 
