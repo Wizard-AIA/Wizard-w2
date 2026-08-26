@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import duckdb
 import numpy as np
-import polars as pl
+import pytest
+
+
+duckdb = pytest.importorskip("duckdb")
+pl = pytest.importorskip("polars")
 
 
 class TestMemoryLimitsAndSpilling:
