@@ -2,7 +2,7 @@
 
 > A local-first autonomous data analysis agent. Ask a real question about your data; it investigates — looking, computing, revising its approach when the data disagrees with it — then verifies the result and explains it, streaming its reasoning as it goes.
 
-![Status](https://img.shields.io/badge/Status-Active-success) [![Release](https://img.shields.io/github/v/release/Wizard-AIA/Wizard-w2?label=Release&color=orange)](https://github.com/Wizard-AIA/Wizard-w2/releases/latest) [![Homebrew](https://img.shields.io/badge/brew-wizard-green)](https://github.com/Wizard-AIA/homebrew-wizard) [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Wizard-AIA/Wizard-w2) [![Awesome](https://awesome.re/badge-flat2.svg)](https://github.com/Wizard-AIA/awesome-wizard) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Wizard-AIA/Wizard-w2/badge)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![License](https://img.shields.io/github/license/Wizard-AIA/Wizard-w2)](LICENSE) [![Docs](https://img.shields.io/badge/docs-wizard--aia.github.io-blue)](https://wizard-aia.github.io/docs/)
+[![Status](https://img.shields.io/badge/Status-Active-success)](https://github.com/Wizard-AIA/Wizard-w2) [![Release](https://img.shields.io/github/v/release/Wizard-AIA/Wizard-w2?label=Release&color=orange&logo=github)](https://github.com/Wizard-AIA/Wizard-w2/releases/latest) [![Homebrew](https://img.shields.io/badge/Homebrew-brew_wizard-2e7d32?logo=homebrew&logoColor=white)](https://github.com/Wizard-AIA/homebrew-wizard) [![Codespaces](https://img.shields.io/badge/Codespaces-Open_in_Cloud-blue?logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2) [![Awesome](https://img.shields.io/badge/Awesome-Wizard-fc60a8?logo=awesomelists&logoColor=white)](https://github.com/Wizard-AIA/awesome-wizard) [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF_Scorecard-9.5%2F10-success?logo=openssf&logoColor=white)](https://scorecard.dev/viewer/?uri=github.com/Wizard-AIA/Wizard-w2) [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/) [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE) [![Docs](https://img.shields.io/badge/Docs-wizard--aia.github.io-6366f1?logo=materialformkdocs&logoColor=white)](https://wizard-aia.github.io/docs/)
 
 Upgrading from w1? See [the migration notes](https://github.com/Wizard-AIA/Wizard-w2/blob/master/docs/wizard-w1-to-w2-migration.md) — most installs need to change nothing.
 
@@ -28,7 +28,9 @@ wizard init && wizard start
 ```
 
 ### ☁️ Option C: 1-Click Cloud Trial (GitHub Codespaces)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Wizard-AIA/Wizard-w2)
+Launch an instant full-stack environment with zero local setup:
+
+[![Open in GitHub Codespaces](https://img.shields.io/badge/GitHub_Codespaces-Open_Environment-2ea44f?style=for-the-badge&logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2)
 
 That's it — no `git clone`, no Go toolchain, no build step. See [Quick start](#quick-start) below for what `init`/`start` actually do, and [Docker alternative](#docker-alternative) if you'd rather containerize it.
 
