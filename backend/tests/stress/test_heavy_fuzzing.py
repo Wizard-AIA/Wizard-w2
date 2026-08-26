@@ -78,7 +78,7 @@ class TestHeavyHypothesisFuzzing:
 
         assert restored.num_rows == len(record_list)
         assert restored.num_columns == 4
-        assert restored.column_names == ["user_id", "score", "tag", "is_active"]
+        assert list(restored.column_names) == list(df.columns)
 
     @hypothesis_settings(max_examples=200, deadline=None)
     @given(

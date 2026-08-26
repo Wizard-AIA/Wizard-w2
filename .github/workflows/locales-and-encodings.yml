@@ -65,3 +65,4 @@ jobs:
           LC_ALL: ${{ matrix.locale }}
         run: |
           pytest backend/tests/stress/test_locales_encodings.py -v
+

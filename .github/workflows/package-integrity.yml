@@ -44,3 +44,4 @@ jobs:
         run: |
           python -c "import sys; print(f'Wizard runtime booted successfully on {sys.platform}')"
           pytest backend/tests/unit/test_analysis_tools.py -v
+

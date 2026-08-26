@@ -40,3 +40,4 @@ jobs:
       - name: Run Extended Hypothesis Property Fuzzing
         run: |
           pytest backend/tests/stress/test_heavy_fuzzing.py -v
+

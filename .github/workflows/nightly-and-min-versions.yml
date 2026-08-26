@@ -57,6 +57,9 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
+      - name: Install System Build Dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxml2-dev libxslt1-dev
+
       - name: Install dependencies in free-threaded environment
         run: |
           uv venv .venv --python "$pythonLocation/bin/python"
@@ -71,3 +74,4 @@ jobs:
           source .venv/bin/activate
           python -c "import sys; print('Free-threading active:', not sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'standard')"
           pytest backend/tests/unit/test_analysis_tools.py backend/tests/security/ -v
+

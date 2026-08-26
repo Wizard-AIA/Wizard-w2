@@ -59,22 +59,21 @@ class TestLivePostgresIntegration:
             conn.execute(sqlalchemy.text("INSERT INTO pg_ci_test VALUES (1, 10.5, 'alpha'), (2, 20.75, 'beta')"))
 
         spec = ConnectionSpec(
-            kind="relational",
-            connection_id="pg-live-test",
             name="Postgres Live CI",
-            config={"dsn": dsn},
+            kind="relational",
+            options={"dsn": dsn},
         )
         connector = RelationalConnector(spec)
-        probe = connector.test_connection()
-        assert probe.ok is True, f"PostgreSQL probe failed: {probe.detail}"
+        connector.probe()
 
-        schema = connector.discover_schema()
+        schema = connector.discover()
         assert any(t.name == "pg_ci_test" for t in schema.targets)
 
-        fetch_res = connector.fetch_dataset("pg_ci_test", sample_rows=100)
-        assert isinstance(fetch_res.data, pd.DataFrame)
-        assert len(fetch_res.data) == 2
-        assert list(fetch_res.data.columns) == ["id", "metric_val", "label"]
+        sampled = connector.sample("pg_ci_test", limit=100)
+        assert isinstance(sampled, pd.DataFrame)
+        assert len(sampled) == 2
+        assert list(sampled.columns) == ["id", "metric_val", "label"]
+        connector.close()
 
 
 @pytest.mark.skipif(not MYSQL_AVAILABLE, reason="Live MySQL container not reachable")
@@ -101,19 +100,18 @@ class TestLiveMySQLIntegration:
             )
 
         spec = ConnectionSpec(
-            kind="relational",
-            connection_id="mysql-live-test",
             name="MySQL Live CI",
-            config={"dsn": dsn},
+            kind="relational",
+            options={"dsn": dsn},
         )
         connector = RelationalConnector(spec)
-        probe = connector.test_connection()
-        assert probe.ok is True, f"MySQL probe failed: {probe.detail}"
+        connector.probe()
 
-        fetch_res = connector.fetch_dataset("mysql_ci_test", sample_rows=100)
-        assert isinstance(fetch_res.data, pd.DataFrame)
-        assert len(fetch_res.data) == 2
-        assert "Tokyo 🗼" in fetch_res.data["city"].values
+        sampled = connector.sample("mysql_ci_test", limit=100)
+        assert isinstance(sampled, pd.DataFrame)
+        assert len(sampled) == 2
+        assert "Tokyo 🗼" in sampled["city"].values
+        connector.close()
 
 
 @pytest.mark.skipif(not REDIS_AVAILABLE, reason="Live Redis container not reachable")
@@ -127,7 +125,7 @@ class TestLiveRedisIntegration:
         assert client.ping() is True
 
         test_key = "wizard:ci:cache_test"
-        client.setex(test_key, 60, "cached_analytical_summary")
+        client.set(test_key, "cached_analytical_summary", ex=60)
         val = client.get(test_key)
         assert val == "cached_analytical_summary"
         client.delete(test_key)

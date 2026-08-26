@@ -39,3 +39,4 @@ jobs:
       - name: Run Latency and Throughput Benchmarks
         run: |
           pytest backend/tests/stress/test_performance_benchmarks.py -v -s
+
