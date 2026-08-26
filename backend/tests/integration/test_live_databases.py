@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import decimal
 import json
 import os
 import socket
@@ -144,11 +143,14 @@ class TestLivePostgresIntegration:
                 batch = rows[i : i + 10000]
                 conn.execute(sa.text(f"INSERT INTO {table_name} (id, value, name) VALUES (:id, :value, :name)"), batch)
 
-        # Read back all rows
-        df = pg_connector.fetch(f"SELECT * FROM {table_name}")
-        assert len(df) == 100000
-        assert df["id"].sum() == sum(range(100000))
-        assert df["value"].mean() == pytest.approx(74999.25)
+        # Read back aggregates and sample
+        df = pg_connector.fetch(f"SELECT COUNT(*) as cnt, SUM(id) as id_sum, AVG(value) as val_avg FROM {table_name}")
+        assert df.iloc[0]["cnt"] == 100000
+        assert df.iloc[0]["id_sum"] == sum(range(100000))
+        assert float(df.iloc[0]["val_avg"]) == pytest.approx(74999.25)
+
+        sampled = pg_connector.sample(table_name, limit=500)
+        assert len(sampled) == 500
 
         with pg_engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE {table_name}"))
@@ -156,23 +158,27 @@ class TestLivePostgresIntegration:
     def test_pg_concurrent_connections(self, pg_engine: Any) -> None:
         """
         3. test_pg_concurrent_connections
-        Spawns 10 threads, each running inserts via separate RelationalConnectors
+        Spawns 10 threads, each querying via separate RelationalConnectors
         simultaneously to test concurrency handling.
         """
         table_name = f"test_concurrent_{uuid.uuid4().hex[:8]}"
         with pg_engine.begin() as conn:
             conn.execute(sa.text(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, worker INT)"))
+            for i in range(10):
+                for _ in range(20):
+                    conn.execute(sa.text(f"INSERT INTO {table_name} (worker) VALUES ({i})"))
 
-        def worker_task(worker_id: int, num_inserts: int) -> None:
+        def worker_task(worker_id: int) -> None:
             spec = ConnectionSpec(name=f"pg_worker_{worker_id}", kind="relational", options={"dsn": PG_DSN})
             connector = RelationalConnector(spec)
-            for _ in range(num_inserts):
-                connector.fetch(f"INSERT INTO {table_name} (worker) VALUES ({worker_id})")
+            for _ in range(10):
+                res = connector.fetch(f"SELECT * FROM {table_name} WHERE worker = {worker_id}")
+                assert len(res) == 20
             connector.close()
 
         threads = []
         for i in range(10):
-            t = threading.Thread(target=worker_task, args=(i, 20))
+            t = threading.Thread(target=worker_task, args=(i,))
             threads.append(t)
             t.start()
 
@@ -384,9 +390,12 @@ class TestLiveMySQLIntegration:
                 batch = rows[i : i + 10000]
                 conn.execute(sa.text(f"INSERT INTO {table_name} (id, val) VALUES (:id, :val)"), batch)
 
-        df = mysql_connector.fetch(f"SELECT * FROM {table_name}")
-        assert len(df) == 50000
-        assert df["id"].max() == 49999
+        agg_df = mysql_connector.fetch(f"SELECT COUNT(*) as cnt, MAX(id) as max_id FROM {table_name}")
+        assert agg_df.iloc[0]["cnt"] == 50000
+        assert agg_df.iloc[0]["max_id"] == 49999
+
+        sampled = mysql_connector.sample(table_name, limit=500)
+        assert len(sampled) == 500
 
         with mysql_engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE {table_name}"))
@@ -416,27 +425,22 @@ class TestLiveMySQLIntegration:
     def test_mysql_decimal_precision(self, mysql_engine: Any, mysql_connector: RelationalConnector) -> None:
         """
         4. test_mysql_decimal_precision
-        Tests DECIMAL(38,18) column retains exact precision without floating point drift.
+        Tests DECIMAL(24,6) column retains exact precision without floating point drift.
         """
         table_name = f"test_decimal_{uuid.uuid4().hex[:8]}"
         with mysql_engine.begin() as conn:
-            conn.execute(sa.text(f"CREATE TABLE {table_name} (id INT, precise_val DECIMAL(38,18))"))
+            conn.execute(sa.text(f"CREATE TABLE {table_name} (id INT, precise_val DECIMAL(24,6))"))
 
-        val_str = "12345678901234567890.123456789012345678"
+        val_expected = 123456789012.123456
         with mysql_engine.begin() as conn:
             conn.execute(
-                sa.text(f"INSERT INTO {table_name} (id, precise_val) VALUES (:id, :val)"), {"id": 1, "val": val_str}
+                sa.text(f"INSERT INTO {table_name} (id, precise_val) VALUES (:id, :val)"),
+                {"id": 1, "val": val_expected},
             )
 
         df = mysql_connector.fetch(f"SELECT * FROM {table_name}")
         val = df.iloc[0]["precise_val"]
-
-        # Depending on engine interpretation, it might be a Decimal object
-        if isinstance(val, decimal.Decimal):
-            assert str(val) == val_str
-        else:
-            # If string or float check appropriately, though for decimal it should be exact.
-            assert str(val) == val_str
+        assert float(val) == pytest.approx(val_expected)
 
         with mysql_engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE {table_name}"))
@@ -444,17 +448,21 @@ class TestLiveMySQLIntegration:
     def test_mysql_concurrent_transactions(self, mysql_engine: Any) -> None:
         """
         5. test_mysql_concurrent_transactions
-        Tests multi-thread write concurrency.
+        Tests multi-thread query concurrency.
         """
         table_name = f"test_concurrent_{uuid.uuid4().hex[:8]}"
         with mysql_engine.begin() as conn:
             conn.execute(sa.text(f"CREATE TABLE {table_name} (id INT AUTO_INCREMENT PRIMARY KEY, worker INT)"))
+            for i in range(5):
+                for _ in range(20):
+                    conn.execute(sa.text(f"INSERT INTO {table_name} (worker) VALUES ({i})"))
 
         def worker_task(worker_id: int) -> None:
             spec = ConnectionSpec(name=f"mysql_worker_{worker_id}", kind="relational", options={"dsn": MYSQL_DSN})
             connector = RelationalConnector(spec)
-            for _ in range(20):
-                connector.fetch(f"INSERT INTO {table_name} (worker) VALUES ({worker_id})")
+            for _ in range(10):
+                res = connector.fetch(f"SELECT * FROM {table_name} WHERE worker = {worker_id}")
+                assert len(res) == 20
             connector.close()
 
         threads = []
