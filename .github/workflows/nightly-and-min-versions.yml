@@ -1,0 +1,72 @@
+name: Upstream Nightlies & Min-Versions Compatibility
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  min-versions:
+    name: Minimum Supported Dependency Versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Install Minimum Supported Versions
+        run: |
+          uv pip install --system -r requirements.txt
+          uv pip install --system numpy==2.0.0 pyarrow==17.0.0 pandas==2.2.2
+          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+
+      - name: Run Core Test Suite with Minimum Versions
+        run: |
+          pytest backend/tests/unit/ backend/tests/stress/test_numerical_invariants.py -v
+
+  freethreading:
+    name: Python 3.13 Free-Threading (GIL-Free Mode)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13 (Free-Threading / t-build)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13t"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Install Core Engine in Free-Threaded Environment
+        run: |
+          uv venv .venv --python "$pythonLocation/bin/python"
+          source .venv/bin/activate
+          uv pip install --only-binary :all: numpy pandas pyarrow pytest
+
+      - name: Verify GIL status and Run Engine Invariant Tests
+        env:
+          PYTHON_GIL: "0"
+        run: |
+          source .venv/bin/activate
+          python -c "import sys; print('Free-threading active:', not sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'standard')"
+          pytest --noconftest backend/tests/stress/test_numerical_invariants.py backend/tests/stress/test_performance_benchmarks.py -v

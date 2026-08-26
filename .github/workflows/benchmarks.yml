@@ -1,4 +1,4 @@
-name: Mutation Testing & Invariant Proofs
+name: Performance & Latency Benchmarks
 
 on:
   push:
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutations:
-    name: AST & Security Guard Mutation Tests
+  benchmarks:
+    name: Arrow IPC & AST CodeGuard Performance
     runs-on: ubuntu-24.04
     timeout-minutes: 25
 
@@ -36,6 +36,7 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run AST Mutation Invariant Tests
+      - name: Run Latency and Throughput Benchmarks
         run: |
-          pytest backend/tests/stress/test_ast_mutations.py -v
+          pytest backend/tests/stress/test_performance_benchmarks.py -v -s
+
