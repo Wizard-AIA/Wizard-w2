@@ -1,0 +1,87 @@
+name: Live Database Services Matrix
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  databases:
+    name: PostgreSQL, MySQL & Redis Live Services
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wizard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      mysql:
+        image: mysql:9
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: wizard_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -prootpassword"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7.4
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -r requirements.txt -r requirements-local.txt
+          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+          uv pip install --system psycopg2-binary pymysql redis sqlalchemy
+
+      - name: Run Live Database Integration Suite
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+        run: |
+          pytest backend/tests/integration/test_live_databases.py -v
