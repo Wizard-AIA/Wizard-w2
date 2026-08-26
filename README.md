@@ -15,7 +15,7 @@ lives at **[wizard-aia.github.io/docs](https://wizard-aia.github.io/docs/)**.
 ### 🍺 Option A: Homebrew (macOS & Linux)
 
 ```bash
-brew install Wizard-AIA/wizard/wizard
+brew install wizard
 wizard init && wizard start
 ```
 
