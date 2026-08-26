@@ -2,9 +2,9 @@
 
 ## I have a question about using Wizard
 
-Start with the [documentation site](https://wizard-aia.github.io/docs/) —
+Start with the [documentation site](https://wizardw2.vercel.app/docs) —
 installation, configuration reference, and a
-[troubleshooting/edge-cases page](https://wizard-aia.github.io/docs/troubleshooting/edge-cases/)
+[troubleshooting/edge-cases page](https://wizardw2.vercel.app/docs/troubleshooting/edge-cases)
 covering the gotchas that come up most. If that doesn't answer it, ask in
 [GitHub Discussions](https://github.com/Wizard-AIA/Wizard-w2/discussions).
 
