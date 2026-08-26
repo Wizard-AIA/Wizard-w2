@@ -59,10 +59,8 @@ class TestPerformanceBenchmarks:
         df_read = table_read.to_pandas()
 
         assert len(df_read) == num_rows
-        # ensure throughput is reasonable (no explicit assert but we measure it)
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        file_size_mb / write_duration if write_duration > 0 else 0
-        file_size_mb / read_duration if read_duration > 0 else 0
+        assert write_duration >= 0
+        assert read_duration >= 0
 
     @pytest.mark.parametrize("iterations", [500, 1000, 3000])
     @pytest.mark.parametrize("script_complexity", ["simple", "medium", "complex"])
@@ -121,15 +119,11 @@ class TestPerformanceBenchmarks:
 
         # Eager
         df = pl.DataFrame(data)
-        start_eager = time.time()
         res_eager = df.group_by("group").agg([pl.col("value").sum(), pl.col("value").mean()])
-        time.time() - start_eager
 
         # Lazy
         lf = pl.LazyFrame(data)
-        start_lazy = time.time()
         res_lazy = lf.group_by("group").agg([pl.col("value").sum(), pl.col("value").mean()]).collect()
-        time.time() - start_lazy
 
         assert len(res_eager) > 0
         assert len(res_lazy) > 0
@@ -175,18 +169,11 @@ class TestPerformanceBenchmarks:
         num_rows = 5_000_000
         df = pd.DataFrame({"a": np.random.randn(num_rows), "b": np.random.randn(num_rows)})
 
-        start_view = time.time()
         view = df[:]
-        time.time() - start_view
-
-        start_copy = time.time()
         copy = df.copy()
-        time.time() - start_copy
 
         assert len(view) == num_rows
         assert len(copy) == num_rows
-        # copy should be slower than view
-        # assert duration_copy > duration_view # not strictly required for test to pass, flaky in extreme cases
 
     @pytest.mark.parametrize("dtypes", ["int64", "float64", "object"])
     @pytest.mark.parametrize("sizes", [1_000_000, 5_000_000])
@@ -211,19 +198,13 @@ class TestPerformanceBenchmarks:
         df = pd.DataFrame({"text": strings})
 
         # str.lower()
-        start_lower = time.time()
         res_lower = df["text"].str.lower()
-        time.time() - start_lower
 
         # str.contains()
-        start_contains = time.time()
         res_contains = df["text"].str.contains("DATA")
-        time.time() - start_contains
 
         # str.len()
-        start_len = time.time()
         res_len = df["text"].str.len()
-        time.time() - start_len
 
         assert len(res_lower) == num_rows
         assert len(res_contains) == num_rows
