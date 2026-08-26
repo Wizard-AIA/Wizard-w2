@@ -12,9 +12,11 @@ Validates the end-to-end analytical workflow:
 from __future__ import annotations
 
 import io
+
 import pandas as pd
 import pyarrow as pa
 import pytest
+
 from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.session import Session
@@ -118,4 +120,3 @@ class TestFullStackLifecycle:
         assert decoded_table.num_rows == 5
         assert decoded_table.num_columns == 3
         assert decoded_table.column_names == ["customer_id", "mrr", "churned"]
-
