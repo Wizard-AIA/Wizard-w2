@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@16999be61f5b61e2f7b8893d56e18f2d591ffcb7  # v4.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Install Minimum Supported Versions
         run: |
@@ -55,7 +55,7 @@ jobs:
           python-version: "3.13t"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@16999be61f5b61e2f7b8893d56e18f2d591ffcb7  # v4.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Install dependencies
         run: |
@@ -68,3 +68,4 @@ jobs:
         run: |
           python -c "import sys; print('Free-threading active:', not sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'standard')"
           pytest backend/tests/unit/test_analysis_tools.py backend/tests/security/ -v
+

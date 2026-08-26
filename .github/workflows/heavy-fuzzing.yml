@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@16999be61f5b61e2f7b8893d56e18f2d591ffcb7  # v4.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
       - name: Install dependencies
         run: |
@@ -39,3 +39,4 @@ jobs:
       - name: Run Extended Hypothesis Property Fuzzing
         run: |
           pytest backend/tests/stress/test_heavy_fuzzing.py -v --hypothesis-show-statistics
+

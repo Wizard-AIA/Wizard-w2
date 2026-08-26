@@ -12,15 +12,21 @@ import math
 
 import pandas as pd
 import pyarrow as pa
-from hypothesis import given, settings, strategies as st
+import pytest
 
 from src.core.security.code_guard import CodeGuard
+
+
+hypothesis = pytest.importorskip("hypothesis")
+given = hypothesis.given
+hypothesis_settings = hypothesis.settings
+st = hypothesis.strategies
 
 
 class TestHeavyHypothesisFuzzing:
     """Deep property-based test suites running with extended iteration budgets."""
 
-    @settings(max_examples=500, deadline=None)
+    @hypothesis_settings(max_examples=500, deadline=None)
     @given(
         st.lists(
             st.floats(allow_nan=False, allow_infinity=False, min_value=-1e12, max_value=1e12),
@@ -40,7 +46,7 @@ class TestHeavyHypothesisFuzzing:
         assert q50 <= q75 or math.isclose(q50, q75, rel_tol=1e-9)
         assert q75 <= q100 or math.isclose(q75, q100, rel_tol=1e-9)
 
-    @settings(max_examples=300, deadline=None)
+    @hypothesis_settings(max_examples=300, deadline=None)
     @given(
         st.lists(
             st.fixed_dictionaries(
@@ -74,7 +80,7 @@ class TestHeavyHypothesisFuzzing:
         assert restored.num_columns == 4
         assert restored.column_names == ["user_id", "score", "tag", "is_active"]
 
-    @settings(max_examples=200, deadline=None)
+    @hypothesis_settings(max_examples=200, deadline=None)
     @given(
         st.text(
             alphabet=st.characters(blacklist_categories=["Cs"]),
