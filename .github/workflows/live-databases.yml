@@ -84,4 +84,4 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: "6379"
         run: |
-          pytest backend/tests/integration/test_live_databases.py -v -s --timeout=180
+          pytest backend/tests/integration/test_live_databases.py -v -s

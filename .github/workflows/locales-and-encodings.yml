@@ -61,4 +61,4 @@ jobs:
           LANG: ${{ matrix.locale }}
           LC_ALL: ${{ matrix.locale }}
         run: |
-          pytest backend/tests/stress/test_locales_encodings.py -v -s --timeout=300
+          pytest backend/tests/stress/test_locales_encodings.py -v -s

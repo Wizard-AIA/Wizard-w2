@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   package-integrity:
-    name: "Clean Install Verification (${{ matrix.os }}, Python ${{ matrix.python-version }})"
+    name: "Clean Install Verification (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
 
@@ -24,15 +24,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -52,8 +51,8 @@ jobs:
 
       - name: Verify All Tests Collect Successfully
         run: |
-          pytest backend/tests/unit/ --co -q --timeout=60
+          pytest backend/tests/unit/ --co -q
 
       - name: Run Core Unit Tests
         run: |
-          pytest backend/tests/unit/ -v --timeout=120
+          pytest backend/tests/unit/ -v

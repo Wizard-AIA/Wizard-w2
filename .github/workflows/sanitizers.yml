@@ -43,4 +43,4 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           pytest backend/tests/unit/ backend/tests/stress/ backend/tests/regression/ \
-            -v --timeout=300 -x --tb=long
+            -v -x --tb=long

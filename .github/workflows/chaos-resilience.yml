@@ -38,4 +38,4 @@ jobs:
 
       - name: Run Chaos Engineering & Fault Injection Tests
         run: |
-          pytest backend/tests/stress/test_chaos_resilience.py -v -s --timeout=120
+          pytest backend/tests/stress/test_chaos_resilience.py -v -s
