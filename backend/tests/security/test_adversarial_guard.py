@@ -8,7 +8,6 @@ block 100% of malicious execution, reflection, dunder traversal, and escape atte
 from __future__ import annotations
 
 import pytest
-
 from src.core.security.code_guard import CodeGuard
 
 
@@ -35,7 +34,7 @@ class TestAdversarialSecurityPenetration:
             ("x = __loader__", "__loader__"),
             ("x = __spec__", "__spec__"),
             # 4. Code execution and compilation builtins
-            ('eval(\'__import__("os").system("ls")\')', "eval"),
+            ("eval('__import__(\"os\").system(\"ls\")')", "eval"),
             ("exec('import sys; sys.exit(1)')", "exec"),
             ("compile('print(1)', '<string>', 'exec')", "compile"),
             ("__import__('os').system('ls')", "__import__"),
@@ -57,9 +56,9 @@ class TestAdversarialSecurityPenetration:
         verdict = CodeGuard.scan(payload, extra_roots=("/workspace",))
         assert not verdict.ok, f"Payload was allowed through guard: {payload}"
         all_violations = " ".join(verdict.violations).lower()
-        assert expected_flag.lower() in all_violations, (
-            f"Expected '{expected_flag}' in violations '{verdict.violations}'"
-        )
+        assert (
+            expected_flag.lower() in all_violations
+        ), f"Expected '{expected_flag}' in violations '{verdict.violations}'"
 
     def test_benign_analytical_operations_allowed(self):
         """Safe data science and machine learning operations must not false-positive."""
