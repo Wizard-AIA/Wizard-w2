@@ -61,7 +61,7 @@ jobs:
         run: |
           uv venv .venv --python "$pythonLocation/bin/python"
           source .venv/bin/activate
-          uv pip install numpy pandas pyarrow pytest pytest-cov pytest-asyncio
+          uv pip install --only-binary :all: numpy pandas pyarrow pytest
 
       - name: Verify GIL status and Run Engine Tests
         env:
