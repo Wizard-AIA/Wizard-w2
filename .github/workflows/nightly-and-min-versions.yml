@@ -1,0 +1,70 @@
+name: Upstream Nightlies & Min-Versions Compatibility
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  min-versions:
+    name: Minimum Supported Dependency Versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@16999be61f5b61e2f7b8893d56e18f2d591ffcb7  # v4.0.0
+
+      - name: Install Minimum Supported Versions
+        run: |
+          uv pip install --system -r requirements.txt
+          uv pip install --system numpy==1.26.4 pyarrow==15.0.0 pandas==2.2.2
+          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+
+      - name: Run Core Test Suite with Minimum Versions
+        run: |
+          pytest backend/tests/unit/ backend/tests/stress/test_numerical_invariants.py -v
+
+  freethreading:
+    name: Python 3.13 Free-Threading (GIL-Free Mode)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13 (Free-Threading / t-build)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13t"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@16999be61f5b61e2f7b8893d56e18f2d591ffcb7  # v4.0.0
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -r requirements.txt
+          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+
+      - name: Verify GIL status and Run Engine Tests
+        env:
+          PYTHON_GIL: "0"
+        run: |
+          python -c "import sys; print('Free-threading active:', not sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'standard')"
+          pytest backend/tests/unit/test_analysis_tools.py backend/tests/security/ -v

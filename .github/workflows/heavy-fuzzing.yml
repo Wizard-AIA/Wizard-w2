@@ -1,4 +1,4 @@
-name: Mutation Testing & Invariant Proofs
+name: Extended-Budget Property Fuzzing
 
 on:
   push:
@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutations:
-    name: AST & Security Guard Mutation Tests
+  heavy-fuzz:
+    name: Hypothesis Generative Invariant Fuzzing
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,6 +36,6 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run AST Mutation Invariant Tests
+      - name: Run Extended Hypothesis Property Fuzzing
         run: |
-          pytest backend/tests/stress/test_ast_mutations.py -v
+          pytest backend/tests/stress/test_heavy_fuzzing.py -v --hypothesis-show-statistics
