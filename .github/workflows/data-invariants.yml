@@ -35,9 +35,11 @@ jobs:
         run: |
           uv pip install --system --require-hashes -r requirements.lock.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+          uv pip install --system -r requirements-local.txt
 
       - name: Run Numerical Invariant Tests
         run: pytest backend/tests/stress/test_numerical_invariants.py -v
 
       - name: Run Out-of-Core Memory Spilling Tests
         run: pytest backend/tests/stress/test_memory_spilling.py -v
+

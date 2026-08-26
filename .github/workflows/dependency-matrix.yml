@@ -37,9 +37,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.in -r requirements-local.in
-          uv pip install --system pytest pytest-cov pytest-asyncio hypothesis
+          uv pip install --system -r requirements.txt -r requirements-local.txt
+          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
       - name: Run Core Analytical Engine Tests
         run: |
           pytest backend/tests/unit/ backend/tests/stress/ -v
+
