@@ -4,20 +4,31 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
-## [Unreleased]
+## [v1.0.2] - 2026-08-26
 
-### Changed
-- Backend dependency installs (CI, Dockerfiles, `wizard init`/`update`) switched
-  from `pip` to `uv`; frontend switched from `npm` to `pnpm`, with
-  `frontend/pnpm-lock.yaml` replacing `frontend/package-lock.json`. Hash-pinned
-  lock files are unchanged -- they were already `uv pip compile` output.
-- Migrated the project from a personal account to the `Wizard-AIA` GitHub
-  organization; core repo renamed `Wizard-w1` → `Wizard-w2`.
-- Hardened repo governance and CI/CD: Go CI for the `cli/` daemon, CodeQL
-  coverage for Go, Dependabot version-bump PRs, SBOM generation on release,
-  OSSF Scorecard, `GOVERNANCE.md`/`SUPPORT.md`, and an org-wide docs site.
-- Replaced `gitleaks-action` (requires a paid license under an org) with the
-  free `gitleaks` CLI run directly in CI.
+### Added
+- **Ecosystem Documentation Overhaul:** Refreshed MkDocs documentation site with custom styling (`extra.css`), glassmorphism card layouts, and interactive Mermaid architecture flowcharts.
+- **Community Skill Registry:** Populated the `skills` repository with curated domain skills (`cohort-analysis`, `data-quality-triage`, `outlier-detection`, `time-series-forecasting`) and added automated `registry.json` compilation.
+- **Standardized Issue Forms:** Cross-platform GitHub issue forms with dropdown selectors for Operating System, Execution Backend, and LLM Provider.
+- **Organization Profile Refresh:** Direct standalone download matrix for macOS (arm64/amd64), Linux (amd64/arm64), and Windows.
+
+## [v1.0.1] - 2026-08-25
+
+### Added
+- **Polars Engine Integration:** Added Polars alongside DuckDB and Pandas for fast, multi-threaded DataFrame processing on large datasets (#113).
+- **Smart Tiered Task Router:** Deterministic classifier for `LIGHTWEIGHT`, `STANDARD`, and `REASONING_HEAVY` turns with safe dynamic downscaling to smaller installed models (#117).
+- **Zero-Copy Apache Arrow Streaming:** Binary Arrow IPC streaming endpoint (`/api/workspace/stream-arrow`) and frontend decoder for instant large dataset previews (#114).
+- **Continuous Fuzzing & Security:** Property-based fuzz testing for AST code guards and file ingest headers, plus OpenSSF Scorecard token permissions (#104).
+- **Caching & RAG:** Integrated Semantic Result Cache (#115) and Dynamic Skill RAG retrieval (#116).
+
+## [v1.0.0] - 2026-08-25
+
+### Added
+- **First Consumer Release:** Shipped pre-compiled standalone zip packages for macOS (arm64/amd64), Linux (amd64/arm64), and Windows (amd64).
+- **Supervised CLI Daemon:** Introduced `./cli/wizard init` and `./cli/wizard start` supervisor binary.
+- **Evidence-Backed Control Plane:** Multi-hypothesis tracking, adversarial verification, result grounding checks, and transparent assumption extraction.
+- **OS-Native Sandboxing:** Secure subprocess execution with Landlock/seccomp on Linux, `sandbox-exec` on macOS, and Windows Job Objects.
+- **Autonomous Feedback Loop:** Manager/Worker ReAct agent cycle with automatic Python traceback recovery.
 
 ## [v2.0.0-w2-planning] - 2026-08-07
 
