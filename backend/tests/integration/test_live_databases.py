@@ -64,7 +64,7 @@ class TestLivePostgresIntegration:
             options={"dsn": dsn},
         )
         connector = RelationalConnector(spec)
-        connector.probe()
+        connector.test()
 
         schema = connector.discover()
         assert any(t.name == "pg_ci_test" for t in schema.targets)
@@ -105,7 +105,7 @@ class TestLiveMySQLIntegration:
             options={"dsn": dsn},
         )
         connector = RelationalConnector(spec)
-        connector.probe()
+        connector.test()
 
         sampled = connector.sample("mysql_ci_test", limit=100)
         assert isinstance(sampled, pd.DataFrame)
