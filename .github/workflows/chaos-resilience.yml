@@ -1,4 +1,4 @@
-name: Chaos & Fault Resilience Suite
+name: Chaos & Fault Resilience
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
   chaos:
     name: Binary Corruption & Exception Isolation
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,7 +36,6 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run Chaos and Fault Resilience Tests
+      - name: Run Chaos Engineering & Fault Injection Tests
         run: |
-          pytest backend/tests/stress/test_chaos_resilience.py -v
-
+          pytest backend/tests/stress/test_chaos_resilience.py -v -s --timeout=120

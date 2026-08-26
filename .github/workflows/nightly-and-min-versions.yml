@@ -18,7 +18,7 @@ jobs:
   min-versions:
     name: Minimum Supported Dependency Versions
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -33,13 +33,13 @@ jobs:
 
       - name: Install Minimum Supported Versions
         run: |
-          uv pip install --system -r requirements.txt
+          uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system numpy==2.0.0 pyarrow==17.0.0 pandas==2.2.2
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run Core Test Suite with Minimum Versions
+      - name: Run Full Unit + Stress Test Suite with Minimum Versions
         run: |
-          pytest backend/tests/unit/ backend/tests/stress/test_numerical_invariants.py -v
+          pytest backend/tests/unit/ backend/tests/stress/ -v --timeout=300
 
   freethreading:
     name: Python 3.13 Free-Threading (GIL-Free Mode)

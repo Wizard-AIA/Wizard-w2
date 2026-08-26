@@ -15,36 +15,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  locales:
-    name: Locale ${{ matrix.locale }} (${{ matrix.name }})
+  locale-matrix:
+    name: "Locale ${{ matrix.locale }} (${{ matrix.label }})"
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+
     strategy:
       fail-fast: false
       matrix:
         include:
-          - locale: "it_IT.utf8"
-            name: "Italian (Comma decimal)"
-            pkg: "language-pack-it"
-          - locale: "de_DE.utf8"
-            name: "German (DD.MM.YYYY dates)"
-            pkg: "language-pack-de"
-          - locale: "zh_CN.utf8"
-            name: "Chinese (Multibyte Hanzi)"
-            pkg: "language-pack-zh-hans"
-          - locale: "ja_JP.utf8"
-            name: "Japanese (Kanji & Kana)"
-            pkg: "language-pack-ja"
+          - locale: it_IT.utf8
+            label: "Italian (Comma decimal)"
+          - locale: de_DE.utf8
+            label: "German (DD.MM.YYYY dates)"
+          - locale: ja_JP.utf8
+            label: "Japanese (Kanji & Kana)"
+          - locale: zh_CN.utf8
+            label: "Chinese (Multibyte Hanzi)"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Install System Locale Package
+      - name: Install system locale packages
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ${{ matrix.pkg }} locales
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq locales
           sudo locale-gen ${{ matrix.locale }}
-          sudo update-locale
+          sudo update-locale LANG=${{ matrix.locale }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -59,10 +56,9 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run Locale & Encoding Validation Suite
+      - name: Run Locale & Encoding Tests under ${{ matrix.locale }}
         env:
           LANG: ${{ matrix.locale }}
           LC_ALL: ${{ matrix.locale }}
         run: |
-          pytest backend/tests/stress/test_locales_encodings.py -v
-
+          pytest backend/tests/stress/test_locales_encodings.py -v -s --timeout=300
