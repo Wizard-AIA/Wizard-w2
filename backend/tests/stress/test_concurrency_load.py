@@ -6,15 +6,18 @@ and SQLite connection pools withstand concurrent multi-session loads
 with zero deadlocks, zero zombie processes, and zero memory leaks.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
-import resource
 
 import pandas as pd
 
 from src.core.execution import CodeExecutor
 from src.core.tools import runtime as runtime_backend
+
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 
 class TestConcurrencyAndMemoryLeaks:
@@ -36,7 +39,7 @@ print(f'session_{session_idx}_ok: {{mean_val:.2f}}')
             return session_idx, result.ok, result.output
 
         # Measure baseline memory RSS (ru_maxrss is in bytes on macOS, KB on Linux)
-        baseline_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        baseline_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else 0
 
         # Execute 10 parallel sessions across a thread pool
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
@@ -53,5 +56,5 @@ print(f'session_{session_idx}_ok: {{mean_val:.2f}}')
             runtime_backend.release_runtime(f"stress-session-{i}")
 
         # Measure post-run memory
-        post_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        post_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else 0
         assert post_rss >= baseline_rss
