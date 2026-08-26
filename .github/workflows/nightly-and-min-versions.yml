@@ -61,12 +61,12 @@ jobs:
         run: |
           uv venv .venv --python "$pythonLocation/bin/python"
           source .venv/bin/activate
-          uv pip install --only-binary :all: numpy pandas pyarrow matplotlib pytest
+          uv pip install --only-binary :all: numpy pandas pyarrow pytest
 
-      - name: Verify GIL status and Run Engine Tests
+      - name: Verify GIL status and Run Engine Invariant Tests
         env:
           PYTHON_GIL: "0"
         run: |
           source .venv/bin/activate
           python -c "import sys; print('Free-threading active:', not sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'standard')"
-          pytest backend/tests/stress/test_numerical_invariants.py backend/tests/stress/test_performance_benchmarks.py -v
+          pytest -c /dev/null -o testpaths="" backend/tests/stress/test_numerical_invariants.py backend/tests/stress/test_performance_benchmarks.py -v
