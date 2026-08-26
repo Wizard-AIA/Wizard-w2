@@ -18,7 +18,7 @@ jobs:
   benchmarks:
     name: Arrow IPC & AST CodeGuard Performance
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,7 +36,6 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run Latency and Throughput Benchmarks
+      - name: Run Throughput and Latency Benchmarks
         run: |
           pytest backend/tests/stress/test_performance_benchmarks.py -v -s
-

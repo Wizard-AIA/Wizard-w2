@@ -15,10 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  package:
-    name: Clean Install Verification (${{ matrix.os }})
+  package-integrity:
+    name: "Clean Install Verification (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 20
+
     strategy:
       fail-fast: false
       matrix:
@@ -35,13 +36,23 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
 
-      - name: Install dependencies in clean environment
+      - name: Clean Install from requirements.txt
         run: |
-          uv pip install --system -r requirements.txt
+          uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Test Core Engine Boot in Clean Environment
+      - name: Verify Core Module Imports
         run: |
-          python -c "import sys; print(f'Wizard runtime booted successfully on {sys.platform}')"
-          pytest backend/tests/unit/test_analysis_tools.py -v
+          python -c "from src.core.security.code_guard import CodeGuard; print('CodeGuard OK')"
+          python -c "from src.core.execution import CodeExecutor; print('CodeExecutor OK')"
+          python -c "from src.core.connectors.spec import ConnectionSpec; print('ConnectionSpec OK')"
+          python -c "import numpy, pandas, pyarrow; print('Core deps OK')"
+        working-directory: backend
 
+      - name: Verify All Tests Collect Successfully
+        run: |
+          pytest backend/tests/unit/ --co -q
+
+      - name: Run Core Unit Tests
+        run: |
+          pytest backend/tests/unit/ -v

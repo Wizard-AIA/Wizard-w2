@@ -18,7 +18,7 @@ jobs:
   sanitizers:
     name: Native Extension Memory Safety
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -36,10 +36,11 @@ jobs:
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
 
-      - name: Run Memory Safety & Leak Verification
+      - name: Run Full Test Suite Under Memory Sanitizers
         env:
-          PYTHONMALLOC: "debug"
+          PYTHONMALLOC: debug
           PYTHONDEVMODE: "1"
+          PYTHONFAULTHANDLER: "1"
         run: |
-          pytest backend/tests/stress/test_memory_spilling.py backend/tests/stress/test_concurrency_load.py -v
-
+          pytest backend/tests/unit/ backend/tests/stress/ backend/tests/regression/ \
+            -v -x --tb=long

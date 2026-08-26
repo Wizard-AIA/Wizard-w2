@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  databases:
+  live-databases:
     name: PostgreSQL, MySQL & Redis Live Services
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -30,10 +30,10 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
       mysql:
         image: mysql:9
@@ -43,20 +43,20 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mysqladmin ping -prootpassword"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
 
       redis:
         image: redis:7.4
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -73,16 +73,15 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
-          uv pip install --system psycopg2-binary pymysql redis sqlalchemy
+          uv pip install --system pymysql redis cryptography psycopg2-binary
 
-      - name: Run Live Database Integration Suite
+      - name: Run Live Database Integration Tests
         env:
           POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
+          POSTGRES_PORT: "5432"
           MYSQL_HOST: localhost
-          MYSQL_PORT: 3306
+          MYSQL_PORT: "3306"
           REDIS_HOST: localhost
-          REDIS_PORT: 6379
+          REDIS_PORT: "6379"
         run: |
-          pytest backend/tests/integration/test_live_databases.py -v
-
+          pytest backend/tests/integration/test_live_databases.py -v -s

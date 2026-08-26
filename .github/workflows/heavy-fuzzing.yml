@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  heavy-fuzz:
+  fuzzing:
     name: Hypothesis Generative Invariant Fuzzing
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -34,10 +34,9 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -r requirements.txt -r requirements-local.txt
-          uv pip install --system hypothesis
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+          uv pip install --system hypothesis
 
-      - name: Run Extended Hypothesis Property Fuzzing
+      - name: Run Extended Hypothesis Fuzzing Suite
         run: |
-          pytest backend/tests/stress/test_heavy_fuzzing.py -v
-
+          pytest backend/tests/stress/test_heavy_fuzzing.py -v -s
