@@ -53,7 +53,7 @@ jobs:
 
       - name: Export OpenAPI Schema from Backend
         run: |
-          PYTHONPATH=backend uv run python -c "import json; from src.api.api import app; open('backend/openapi.json', 'w').write(json.dumps(app.openapi(), indent=2))"
+          PYTHONPATH=backend python -c "import json; from src.api.api import app; open('backend/openapi.json', 'w').write(json.dumps(app.openapi(), indent=2))"
 
       - name: Generate TypeScript API Types
         working-directory: frontend
