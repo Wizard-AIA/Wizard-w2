@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/copy-standalone-assets.js",
     "start": "next start",
     "lint": "eslint .",
     "generate:api-types": "openapi-typescript ../backend/openapi.json -o lib/api-types.generated.ts"

@@ -359,12 +359,20 @@ class ModelRegistry:
         look like two separate faults.
         """
         import json
+        import ssl
         import urllib.error
         import urllib.request
 
+        try:
+            import certifi
+
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ssl_context = None
+
         request = urllib.request.Request(url, headers=headers or {})
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - fixed local/base URL
+            with urllib.request.urlopen(request, timeout=5, context=ssl_context) as response:  # noqa: S310 - fixed local/base URL
                 self._errors[provider] = None
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.URLError as exc:
