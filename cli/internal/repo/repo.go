@@ -20,11 +20,19 @@ var ErrNotFound = errors.New("not inside a Wizard checkout (no backend/main.py +
 // containing both backend/main.py and frontend/package.json -- present
 // together only at the checkout root, never in a subdirectory of either.
 func Root() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
+	if dir, err := os.Getwd(); err == nil {
+		if root, err := RootFrom(dir); err == nil {
+			return root, nil
+		}
 	}
-	return RootFrom(dir)
+	if exe, err := os.Executable(); err == nil {
+		if realExe, err := filepath.EvalSymlinks(exe); err == nil {
+			if root, err := RootFrom(filepath.Dir(realExe)); err == nil {
+				return root, nil
+			}
+		}
+	}
+	return "", ErrNotFound
 }
 
 // RootFrom is Root's testable core: the starting directory is a parameter
