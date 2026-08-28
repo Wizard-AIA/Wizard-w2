@@ -4,6 +4,20 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.4] - 2026-08-28
+
+### Added
+- **Global Persistent Workspace State Across Route Navigation:**
+  - Implemented top-level `WorkspaceProvider` encapsulating streaming turn state, active WebSocket connection, dataset management, and investigation trail at the root layout. Navigating across `/`, `/data`, `/skills`, `/models`, and `/settings` preserves active turn execution and chat history without interruptions or session loss.
+- **Real-Time Datasets Sidebar & Live Execution Pulse:**
+  - Integrated a persistent dataset panel in the main navigation sidebar with active dataset indicators, row/column counts, quick switching, and a global dataset loader trigger.
+  - Added real-time "Live" pulsing status badge indicating background turn execution during navigation.
+- **Interactive Runtime & Environment Settings Workbench:**
+  - Replaced read-only setting views with a full-featured control panel for execution backends (`host`, `docker`, `inprocess`), host OS sandboxing, outbound network policies, agent reasoning depths, verification gates, grounding checks, temperature, context windows, and cloud/local LLM provider configurations.
+  - Added `PATCH /api/config` and `POST /api/config` backend endpoints with atomic `.env` file persistence.
+- **Synchronized OpenAPI & TypeScript Contracts:**
+  - Generated and validated end-to-end type safety across backend schemas and frontend TypeScript models.
+
 ## [v1.0.3] - 2026-08-28
 
 ### Added

@@ -68,7 +68,7 @@ if [ -z "${TAG}" ]; then
     if command -v curl >/dev/null 2>&1; then
         LATEST_TAG=$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' || true)
     fi
-    TAG="${LATEST_TAG:-v1.0.3}"
+    TAG="${LATEST_TAG:-v1.0.4}"
 fi
 
 # Ensure tag has 'v' prefix
