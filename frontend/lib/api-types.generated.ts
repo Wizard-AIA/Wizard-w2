@@ -1248,18 +1248,12 @@ export interface components {
     schemas: {
         /** Body_upload_dataset_api_datasets_post */
         Body_upload_dataset_api_datasets_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** Body_upload_document_api_documents_post */
         Body_upload_document_api_documents_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** ChatRequest */
@@ -2703,6 +2697,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /** VariablesResponse */
         VariablesResponse: {
