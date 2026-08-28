@@ -32,7 +32,7 @@ jobs:
       - name: Report Bundle Size
         uses: preactjs/compressed-size-action@f322c295dde06a1cb7ccaef105732dd8a726d1d9  # v2
         with:
-          pattern: "{frontend/.next/static/**/*.js,frontend/public/**/*.js}"
+          pattern: "{.next/static/**/*.js,public/**/*.js}"
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           build-script: "build"
           cwd: "frontend"

@@ -35,7 +35,7 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system numpy==2.0.0 pyarrow==17.0.0 pandas==2.2.2
-          uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
+          uv pip install --system pytest pytest-cov pytest-asyncio anyio hypothesis polars duckdb
 
       - name: Run Full Unit + Stress Test Suite with Minimum Versions
         run: |

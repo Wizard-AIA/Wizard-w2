@@ -73,7 +73,7 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt -r requirements-local.txt
           uv pip install --system --require-hashes -r requirements-ci-tools.lock.txt
-          uv pip install --system pymysql redis cryptography psycopg2-binary
+          uv pip install --system pymysql redis cryptography psycopg2-binary sqlalchemy
 
       - name: Run Live Database Integration Tests
         env:

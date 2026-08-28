@@ -55,23 +55,52 @@ EMBED_HINTS = ("embed", "bge", "minilm", "nomic", "mxbai", "gte")
 # Universal exclusion patterns for non-chat, audio, video, image-gen, and task-only endpoints
 EXCLUDED_MODEL_PATTERNS = (
     # Embeddings & similarity
-    "embed", "bge-", "nomic-embed", "mxbai-embed", "gte-", "text-embedding",
+    "embed",
+    "bge-",
+    "nomic-embed",
+    "mxbai-embed",
+    "gte-",
+    "text-embedding",
     # Audio, TTS, Transcription & Voice
-    "tts", "whisper", "transcribe", "audio", "speech", "realtime", "live-translate", "lyria",
-    "live-preview", "-live", "live-",
+    "tts",
+    "whisper",
+    "transcribe",
+    "audio",
+    "speech",
+    "realtime",
+    "live-translate",
+    "lyria",
+    "live-preview",
+    "-live",
+    "live-",
     # Video & Image Generation
-    "dall-e", "imagen", "veo", "-image", "clip-preview", "image-preview",
+    "dall-e",
+    "imagen",
+    "veo",
+    "-image",
+    "clip-preview",
+    "image-preview",
     # Moderation & Non-Chat Specialized Tools
-    "moderation", "aqa", "deep-research", "computer-use", "robotics", "antigravity",
-    "nano-banana", "customtools", "search-grounding", "text-davinci", "text-curie",
-    "babbage", "ada",
+    "moderation",
+    "aqa",
+    "deep-research",
+    "computer-use",
+    "robotics",
+    "antigravity",
+    "nano-banana",
+    "customtools",
+    "search-grounding",
+    "text-davinci",
+    "text-curie",
+    "babbage",
+    "ada",
 )
 
 
 def normalize_model_name(name: str) -> str:
     """Strips leading 'models/' prefix returned by Google and some OpenAI gateways."""
     if name.startswith("models/"):
-        return name[len("models/"):]
+        return name[len("models/") :]
     return name
 
 
@@ -114,11 +143,15 @@ def classify(name: str) -> list[str]:
     caps: list[str] = []
     if any(hint in lowered for hint in EMBED_HINTS):
         return ["embedding"]
-    if any(hint in lowered for hint in VISION_HINTS) or any(h in lowered for h in ("gpt-4", "claude", "gemini", "omni")):
+    if any(hint in lowered for hint in VISION_HINTS) or any(
+        h in lowered for h in ("gpt-4", "claude", "gemini", "omni")
+    ):
         caps.append("vision")
     if any(hint in lowered for hint in CODE_HINTS) or any(h in lowered for h in ("gpt-4", "claude", "gemini", "gemma")):
         caps.append("code")
-    if any(hint in lowered for hint in REASONING_HINTS) or any(h in lowered for h in ("pro", "opus", "sonnet", "o1", "o3")):
+    if any(hint in lowered for hint in REASONING_HINTS) or any(
+        h in lowered for h in ("pro", "opus", "sonnet", "o1", "o3")
+    ):
         caps.append("reasoning")
     if not caps:
         caps.append("general")
