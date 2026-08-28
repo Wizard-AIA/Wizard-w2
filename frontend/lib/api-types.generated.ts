@@ -34,11 +34,19 @@ export interface paths {
          */
         get: operations["server_config_api_config_get"];
         put?: never;
-        post?: never;
+        /**
+         * Update Server Config
+         * @description Mutates runtime configuration and persists updates to .env and credentials.
+         */
+        post: operations["update_server_config_api_config_post"];
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Server Config
+         * @description Mutates runtime configuration and persists updates to .env and credentials.
+         */
+        patch: operations["update_server_config_api_config_patch"];
         trace?: never;
     };
     "/api/data-mode": {
@@ -1240,12 +1248,18 @@ export interface components {
     schemas: {
         /** Body_upload_dataset_api_datasets_post */
         Body_upload_dataset_api_datasets_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** Body_upload_document_api_documents_post */
         Body_upload_document_api_documents_post: {
-            /** File */
+            /**
+             * File
+             * Format: binary
+             */
             file: string;
         };
         /** ChatRequest */
@@ -2147,6 +2161,61 @@ export interface components {
              * @default 0
              */
             max_sessions: number;
+            /**
+             * Temperature
+             * @default 0
+             */
+            temperature: number;
+            /**
+             * Max Tokens
+             * @default 4096
+             */
+            max_tokens: number;
+            /**
+             * Subagent Enabled
+             * @default true
+             */
+            subagent_enabled: boolean;
+            /**
+             * Subagent Max Iterations
+             * @default 3
+             */
+            subagent_max_iterations: number;
+            /**
+             * Agent Emit Script
+             * @default true
+             */
+            agent_emit_script: boolean;
+            /**
+             * Ollama Base Url
+             * @default
+             */
+            ollama_base_url: string;
+            /**
+             * Lmstudio Base Url
+             * @default
+             */
+            lmstudio_base_url: string;
+            /**
+             * Openai Base Url
+             * @default
+             */
+            openai_base_url: string;
+            /**
+             * Anthropic Base Url
+             * @default
+             */
+            anthropic_base_url: string;
+            /**
+             * Gemini Base Url
+             * @default
+             */
+            gemini_base_url: string;
+            /**
+             * Host Sandbox Network
+             * @default deny
+             */
+            host_sandbox_network: string;
         };
         /** SessionResponse */
         SessionResponse: {
@@ -2459,6 +2528,72 @@ export interface components {
             /** Candidate Id */
             candidate_id?: number | null;
         };
+        /**
+         * UpdateConfigPayload
+         * @description Payload to update runtime environment and loop configuration.
+         */
+        UpdateConfigPayload: {
+            /** Execution Backend */
+            execution_backend?: ("host" | "docker" | "inprocess") | null;
+            /** Host Sandbox */
+            host_sandbox?: ("off" | "best-effort" | "require") | null;
+            /** Host Sandbox Network */
+            host_sandbox_network?: ("deny" | "allow") | null;
+            /** Sandbox Tier */
+            sandbox_tier?: ("core" | "standard" | "full") | null;
+            /** Sandbox Mem Limit */
+            sandbox_mem_limit?: string | null;
+            /** Max Upload Mb */
+            max_upload_mb?: number | null;
+            /** Plot Format */
+            plot_format?: ("png" | "html") | null;
+            /** Agent Tier */
+            agent_tier?: ("auto" | "compact" | "balanced" | "full") | null;
+            /** Agent Max Iterations */
+            agent_max_iterations?: number | null;
+            /** Agent Turn Timeout */
+            agent_turn_timeout?: number | null;
+            /** Agent Require Approval */
+            agent_require_approval?: boolean | null;
+            /** Agent Verify */
+            agent_verify?: boolean | null;
+            /** Agent Grounding Check */
+            agent_grounding_check?: boolean | null;
+            /** Agent Emit Script */
+            agent_emit_script?: boolean | null;
+            /** Subagent Enabled */
+            subagent_enabled?: boolean | null;
+            /** Subagent Max Iterations */
+            subagent_max_iterations?: number | null;
+            /** Temperature */
+            temperature?: number | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Llm Num Thread */
+            llm_num_thread?: number | null;
+            /** Llm Num Ctx */
+            llm_num_ctx?: number | null;
+            /** Llm Keep Alive */
+            llm_keep_alive?: string | null;
+            /** Rag Enabled */
+            rag_enabled?: boolean | null;
+            /** Ollama Base Url */
+            ollama_base_url?: string | null;
+            /** Lmstudio Base Url */
+            lmstudio_base_url?: string | null;
+            /** Openai Base Url */
+            openai_base_url?: string | null;
+            /** Openai Api Key */
+            openai_api_key?: string | null;
+            /** Anthropic Base Url */
+            anthropic_base_url?: string | null;
+            /** Anthropic Api Key */
+            anthropic_api_key?: string | null;
+            /** Gemini Base Url */
+            gemini_base_url?: string | null;
+            /** Gemini Api Key */
+            gemini_api_key?: string | null;
+        };
         /** UploadResponse */
         UploadResponse: {
             /** Message */
@@ -2568,10 +2703,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
         };
         /** VariablesResponse */
         VariablesResponse: {
@@ -2658,6 +2789,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServerConfig"];
+                };
+            };
+        };
+    };
+    update_server_config_api_config_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConfigPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_server_config_api_config_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConfigPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServerConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
