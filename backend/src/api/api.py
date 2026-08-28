@@ -227,7 +227,7 @@ app.add_middleware(
     # test passed -- TestClient makes no preflight request.
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["X-Session-Id"],
+    expose_headers=["X-Session-Id", "X-Arrow-Total-Rows", "X-Arrow-Offset"],
 )
 
 

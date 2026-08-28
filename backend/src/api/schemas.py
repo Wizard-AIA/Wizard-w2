@@ -126,17 +126,26 @@ class ServerConfig(BaseModel):
     openai_base_url: str = ""
     anthropic_base_url: str = ""
     gemini_base_url: str = ""
+    gateway_api_url: str = ""
     host_sandbox_network: str = "deny"
+    sandbox_exec_timeout: int = 180
+    vision_enabled: bool = False
+    skills_enabled: bool = True
+    api_provider: str = "ollama"
 
 
 class UpdateConfigPayload(BaseModel):
     """Payload to update runtime environment and loop configuration."""
 
+    api_provider: str | None = None
+    data_mode: Literal["local-only", "cloud-only", "hybrid"] | None = None
+    data_schema_only: bool | None = None
     execution_backend: Literal["host", "docker", "inprocess"] | None = None
     host_sandbox: Literal["off", "best-effort", "require"] | None = None
     host_sandbox_network: Literal["deny", "allow"] | None = None
     sandbox_tier: Literal["core", "standard", "full"] | None = None
     sandbox_mem_limit: str | None = None
+    sandbox_exec_timeout: int | None = None
     max_upload_mb: int | None = None
     plot_format: Literal["png", "html"] | None = None
     agent_tier: Literal["auto", "compact", "balanced", "full"] | None = None
@@ -148,6 +157,10 @@ class UpdateConfigPayload(BaseModel):
     agent_emit_script: bool | None = None
     subagent_enabled: bool | None = None
     subagent_max_iterations: int | None = None
+    council_enabled: bool | None = None
+    vision_enabled: bool | None = None
+    context_docs_enabled: bool | None = None
+    skills_enabled: bool | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     llm_num_thread: int | None = None
@@ -162,6 +175,8 @@ class UpdateConfigPayload(BaseModel):
     anthropic_api_key: str | None = None
     gemini_base_url: str | None = None
     gemini_api_key: str | None = None
+    gateway_api_url: str | None = None
+    gateway_api_key: str | None = None
 
 
 class SessionResponse(BaseModel):

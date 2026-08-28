@@ -4,6 +4,20 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.5] - 2026-08-28
+
+### Fixed
+- **Dataset Preview "No rows to show" Bug:** Corrected PyArrow schema inference in `_arrow_chunks` — schema was derived from a 0-row empty slice (`df.iloc[:0]`), causing `pa.null()` type inference for string/object columns and an `ArrowInvalid` exception that silently aborted the streaming response. Schema is now inferred from actual data rows.
+- **CORS Missing Arrow Headers:** Added `X-Arrow-Total-Rows` and `X-Arrow-Offset` to the CORS `expose_headers` list so frontend pagination can read total row count from the response.
+- **DataGrid Loading Flash:** Initialized `loading` state to `true` in `data-grid.tsx` to prevent a momentary "No rows to show" flash before the fetch fires.
+
+### Changed
+- **Universal Model Filtering:** Added `EXCLUDED_MODEL_PATTERNS` allowlist in `registry.py` that filters out embeddings, TTS, audio, image/video generation, robotics, deep-research, and other non-chat endpoints from cloud providers (Gemini, OpenAI, Anthropic). Gemini model list reduced from 54 raw models to 18 usable chat/coding/reasoning models. `models/` prefix is stripped, and capabilities (`vision`, `code`, `reasoning`, `chat`) are tagged per model.
+- **Local Provider Preservation:** Ollama and LM Studio model lists no longer run through the aggressive cloud exclusion filter — local models are user-installed intentionally, so only name normalization is applied. Fixes 3 failing unit tests in `test_providers.py`.
+
+### Added
+- **Settings UI Environment Controls:** Added comprehensive controls in the Settings Workbench for `API_PROVIDER`, `DATA_MODE`, `DATA_SCHEMA_ONLY`, `GATEWAY_API_URL`, `GATEWAY_API_KEY`, `SUBAGENT_MAX_ITERATIONS`, `SANDBOX_EXEC_TIMEOUT`, `COUNCIL_ENABLED`, `VISION_ENABLED`, `CONTEXT_DOCS_ENABLED`, and `SKILLS_ENABLED` — all with full persistence to `backend/.env` via the `PATCH /api/config` endpoint.
+
 ## [v1.0.4] - 2026-08-28
 
 ### Added
@@ -107,7 +121,8 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
-[Unreleased]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.0.0-w2-planning...HEAD
+[Unreleased]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.5...HEAD
+[v1.0.5]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.4...v1.0.5
 [v2.0.0-w2-planning]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.2.1...v2.0.0-w2-planning
 [v2.2.1]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.2.0...v2.2.1
 [v2.2.0]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.1.1...v2.2.0

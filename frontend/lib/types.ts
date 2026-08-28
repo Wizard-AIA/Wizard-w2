@@ -896,15 +896,24 @@ export interface ServerConfig {
   openai_base_url?: string
   anthropic_base_url?: string
   gemini_base_url?: string
+  gateway_api_url?: string
   host_sandbox_network?: string
+  sandbox_exec_timeout?: number
+  vision_enabled?: boolean
+  skills_enabled?: boolean
+  api_provider?: string
 }
 
 export interface UpdateConfigPayload {
+  api_provider?: string
+  data_mode?: DataMode
+  data_schema_only?: boolean
   execution_backend?: ExecutionBackend
   host_sandbox?: "off" | "best-effort" | "require"
   host_sandbox_network?: "deny" | "allow"
   sandbox_tier?: "core" | "standard" | "full"
   sandbox_mem_limit?: string
+  sandbox_exec_timeout?: number
   max_upload_mb?: number
   plot_format?: "png" | "html"
   agent_tier?: "auto" | "compact" | "balanced" | "full"
@@ -916,6 +925,10 @@ export interface UpdateConfigPayload {
   agent_emit_script?: boolean
   subagent_enabled?: boolean
   subagent_max_iterations?: number
+  council_enabled?: boolean
+  vision_enabled?: boolean
+  context_docs_enabled?: boolean
+  skills_enabled?: boolean
   temperature?: number
   max_tokens?: number
   llm_num_thread?: number
@@ -930,6 +943,8 @@ export interface UpdateConfigPayload {
   anthropic_api_key?: string
   gemini_base_url?: string
   gemini_api_key?: string
+  gateway_api_url?: string
+  gateway_api_key?: string
 }
 
 export interface WorkspaceFileEntry {

@@ -29,7 +29,7 @@ export function DataGrid({ dataset = null, perPage = 50 }: DataGridProps) {
   const [totalPages, setTotalPages] = useState(1)
   const [sortBy, setSortBy] = useState<string | null>(null)
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {

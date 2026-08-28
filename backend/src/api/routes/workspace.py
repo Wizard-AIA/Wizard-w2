@@ -112,7 +112,11 @@ def _arrow_chunks(df, batch_size: int) -> Iterator[bytes]:
     import pyarrow.ipc as ipc
 
     sink = _ArrowChunkSink()
-    schema = pa.Schema.from_pandas(df.iloc[:0], preserve_index=False)
+    # Infer schema from a small sample of real data so PyArrow can determine
+    # correct types for object/string columns (an empty slice defaults to
+    # pa.null() which crashes when actual rows are serialized against it).
+    sample = df.head(min(1, len(df))) if len(df) > 0 else df
+    schema = pa.Schema.from_pandas(sample, preserve_index=False)
     writer = ipc.new_stream(sink, schema)
     closed = False
     try:

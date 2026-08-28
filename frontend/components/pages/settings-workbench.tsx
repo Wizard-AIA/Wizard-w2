@@ -47,11 +47,15 @@ export function SettingsWorkbench() {
 
   const syncFormFromConfig = useCallback((cfg: ServerConfig) => {
     setForm({
+      api_provider: cfg.api_provider || cfg.model_provider || "ollama",
+      data_mode: (cfg.data_mode || "local-only") as import("@/lib/types").DataMode,
+      data_schema_only: cfg.data_schema_only ?? true,
       execution_backend: cfg.execution_backend,
       host_sandbox: cfg.host_sandbox as "off" | "best-effort" | "require",
       host_sandbox_network: (cfg.host_sandbox_network || "deny") as "deny" | "allow",
       sandbox_tier: (cfg.sandbox_tier || "standard") as "core" | "standard" | "full",
       sandbox_mem_limit: cfg.sandbox_mem_limit || "2g",
+      sandbox_exec_timeout: cfg.sandbox_exec_timeout ?? 180,
       max_upload_mb: cfg.max_upload_mb || 512,
       plot_format: cfg.plot_format || "html",
       agent_tier: (cfg.agent_tier || "auto") as "auto" | "compact" | "balanced" | "full",
@@ -63,6 +67,10 @@ export function SettingsWorkbench() {
       agent_emit_script: cfg.agent_emit_script ?? true,
       subagent_enabled: cfg.subagent_enabled ?? true,
       subagent_max_iterations: cfg.subagent_max_iterations ?? 3,
+      council_enabled: cfg.council_enabled ?? true,
+      vision_enabled: cfg.vision_enabled ?? false,
+      context_docs_enabled: cfg.context_docs_enabled ?? true,
+      skills_enabled: cfg.skills_enabled ?? true,
       temperature: cfg.temperature ?? 0.0,
       max_tokens: cfg.max_tokens ?? 4096,
       llm_num_thread: cfg.llm_num_thread ?? 0,
@@ -77,6 +85,8 @@ export function SettingsWorkbench() {
       anthropic_api_key: "",
       gemini_base_url: cfg.gemini_base_url || "https://generativelanguage.googleapis.com/v1beta",
       gemini_api_key: "",
+      gateway_api_url: cfg.gateway_api_url || "",
+      gateway_api_key: "",
     })
   }, [])
 
@@ -111,6 +121,7 @@ export function SettingsWorkbench() {
       if (!payload.openai_api_key) delete payload.openai_api_key
       if (!payload.anthropic_api_key) delete payload.anthropic_api_key
       if (!payload.gemini_api_key) delete payload.gemini_api_key
+      if (!payload.gateway_api_key) delete payload.gateway_api_key
 
       const updated = await api.updateConfig(payload)
       setConfig(updated)
@@ -196,7 +207,74 @@ export function SettingsWorkbench() {
         </div>
       )}
 
-      {/* 1. Interface Preferences */}
+      {/* 1. Global Environment & Provider Defaults */}
+      <Section
+        title="Environment & Provider Defaults"
+        description="Global runtime backend and privacy settings saved to backend/.env."
+      >
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Default API Provider */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Default LLM Provider
+              </label>
+              <select
+                value={form.api_provider ?? "ollama"}
+                onChange={(e) => setForm({ ...form, api_provider: e.target.value })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="ollama">Ollama (Local / On-Device)</option>
+                <option value="lmstudio">LM Studio (Local / On-Device)</option>
+                <option value="gemini">Google Gemini (Cloud)</option>
+                <option value="openai">OpenAI (Cloud)</option>
+                <option value="anthropic">Anthropic (Cloud)</option>
+                <option value="custom_gateway">Custom Gateway (Groq, OpenRouter, vLLM)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                The primary inference engine for new sessions.
+              </p>
+            </div>
+
+            {/* Default Data Mode */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Data Mode & Privacy Tier
+              </label>
+              <select
+                value={form.data_mode ?? "local-only"}
+                onChange={(e) => setForm({ ...form, data_mode: e.target.value as import("@/lib/types").DataMode })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="local-only">Local Only (100% on-device)</option>
+                <option value="cloud-only">Cloud Only (Cloud frontier models)</option>
+                <option value="hybrid">Hybrid (Local worker + Cloud planner)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Enforces whether data may leave this machine.
+              </p>
+            </div>
+
+            {/* Schema Only Mode */}
+            <div className="flex flex-col justify-end">
+              <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+                <div>
+                  <span className="block text-[13px] font-medium text-foreground">Schema-Only Mode</span>
+                  <span className="block text-[11.5px] text-muted-foreground">Withhold raw data rows from cloud prompts</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={form.data_schema_only ?? true}
+                  onChange={(e) => setForm({ ...form, data_schema_only: e.target.checked })}
+                  className="h-4 w-4 rounded text-brand focus:ring-brand"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* 2. Interface Preferences */}
       <Section
         title="Interface"
         description="Stored in this browser only. Nothing here is sent to the server."
@@ -236,7 +314,7 @@ export function SettingsWorkbench() {
         </div>
       </Section>
 
-      {/* 2. Execution & Sandboxing Controls */}
+      {/* 3. Execution & Sandboxing Controls */}
       <Section
         title="Execution & Sandbox"
         description="Where generated Python runs and how tightly it is isolated from your filesystem and network."
@@ -352,6 +430,24 @@ export function SettingsWorkbench() {
                 Generated visualization rendering artifact format.
               </p>
             </div>
+
+            {/* Execution Timeout */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Execution Timeout (Seconds)
+              </label>
+              <input
+                type="number"
+                min={10}
+                max={3600}
+                value={form.sandbox_exec_timeout ?? 180}
+                onChange={(e) => setForm({ ...form, sandbox_exec_timeout: parseInt(e.target.value, 10) || 180 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Per-step script execution deadline before termination.
+              </p>
+            </div>
           </div>
 
           {config && <IsolationNote isolation={config.execution_isolation} />}
@@ -359,13 +455,13 @@ export function SettingsWorkbench() {
         </div>
       </Section>
 
-      {/* 3. Agent Reasoning & Verification Controls */}
+      {/* 4. Agent Reasoning & Verification Controls */}
       <Section
         title="Agent Reasoning & Safety Loop"
         description="Control iteration budgets, multi-turn verification, grounding checks, and approval gates."
       >
         <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {/* Depth Tier */}
             <div>
               <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -389,7 +485,7 @@ export function SettingsWorkbench() {
             {/* Max Iterations */}
             <div>
               <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-                Max Iteration Ceiling
+                Max Turn Budget
               </label>
               <input
                 type="number"
@@ -400,14 +496,32 @@ export function SettingsWorkbench() {
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Maximum tool steps before forcing a conclusion.
+                Maximum tool steps before forcing conclusion.
+              </p>
+            </div>
+
+            {/* Subagent Max Iterations */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Subagent Budget
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={form.subagent_max_iterations ?? 3}
+                onChange={(e) => setForm({ ...form, subagent_max_iterations: parseInt(e.target.value, 10) || 3 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Maximum tool steps per subagent branch.
               </p>
             </div>
 
             {/* Turn Timeout */}
             <div>
               <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-                Turn Deadline (Seconds)
+                Turn Deadline (s)
               </label>
               <input
                 type="number"
@@ -494,6 +608,48 @@ export function SettingsWorkbench() {
               />
             </label>
 
+            {/* Council Review */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Council of Specialists</span>
+                <span className="block text-[11.5px] text-muted-foreground">Run specialist peer reviews before finalizing findings</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.council_enabled ?? true}
+                onChange={(e) => setForm({ ...form, council_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Vision Chart Analysis */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Vision Chart Analysis</span>
+                <span className="block text-[11.5px] text-muted-foreground">Inspect generated charts visually via multimodal models</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.vision_enabled ?? false}
+                onChange={(e) => setForm({ ...form, vision_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Context Documents */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Context Documents (PDF / DOCX)</span>
+                <span className="block text-[11.5px] text-muted-foreground">Attach reference guides, dictionaries, and domain rules</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.context_docs_enabled ?? true}
+                onChange={(e) => setForm({ ...form, context_docs_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
             {/* RAG Enabled */}
             <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
               <div>
@@ -507,11 +663,25 @@ export function SettingsWorkbench() {
                 className="h-4 w-4 rounded text-brand focus:ring-brand"
               />
             </label>
+
+            {/* Skills System */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Skills Engine & Promotion</span>
+                <span className="block text-[11.5px] text-muted-foreground">Enable reusable analytical skill recipes and auto-suggestions</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.skills_enabled ?? true}
+                onChange={(e) => setForm({ ...form, skills_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
           </div>
         </div>
       </Section>
 
-      {/* 4. LLM Inference & Local Host Parameters */}
+      {/* 5. LLM Inference & Local Host Parameters */}
       <Section
         title="LLM Inference Parameters"
         description="Tune generation hyperparameters, context window sizes, thread pools, and cache keep-alive."
@@ -739,16 +909,30 @@ export function SettingsWorkbench() {
               />
             </div>
 
-            {/* Gemini Key */}
+            {/* Custom Gateway URL */}
             <div>
               <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-                Gemini API Key
+                Custom Gateway URL
+              </label>
+              <input
+                type="text"
+                value={form.gateway_api_url ?? ""}
+                onChange={(e) => setForm({ ...form, gateway_api_url: e.target.value })}
+                placeholder="https://api.groq.com/openai/v1 or https://openrouter.ai/api/v1"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* Custom Gateway Key */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Custom Gateway API Key
               </label>
               <input
                 type="password"
-                value={form.gemini_api_key ?? ""}
-                onChange={(e) => setForm({ ...form, gemini_api_key: e.target.value })}
-                placeholder="AIzaSy..."
+                value={form.gateway_api_key ?? ""}
+                onChange={(e) => setForm({ ...form, gateway_api_key: e.target.value })}
+                placeholder="gsk-... or sk-or-..."
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
               />
             </div>
@@ -756,7 +940,7 @@ export function SettingsWorkbench() {
         </div>
       </Section>
 
-      {/* 6. Active Session Controls */}
+      {/* 7. Active Session Controls */}
       <Section
         title="Session"
         description="The server state bound to this tab. A reset clears variables, plots and the sandbox without dropping your dataset."
@@ -795,7 +979,7 @@ export function SettingsWorkbench() {
         </div>
       </Section>
 
-      {/* 7. Permissions Matrix */}
+      {/* 8. Permissions Matrix */}
       <Section
         title="Permissions"
         description="What the agent is allowed to do without stopping to ask."
@@ -807,7 +991,7 @@ export function SettingsWorkbench() {
         />
       </Section>
 
-      {/* 8. Usage & Metering */}
+      {/* 9. Usage & Metering */}
       <Section
         title="Usage"
         description="Tokens and estimated costs for cloud providers in this session."

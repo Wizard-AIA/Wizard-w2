@@ -238,7 +238,12 @@ async def server_config() -> ServerConfig:
         openai_base_url=settings.OPENAI_BASE_URL,
         anthropic_base_url=settings.ANTHROPIC_BASE_URL,
         gemini_base_url=settings.GEMINI_BASE_URL,
+        gateway_api_url=settings.GATEWAY_API_URL,
         host_sandbox_network=settings.HOST_SANDBOX_NETWORK,
+        sandbox_exec_timeout=settings.SANDBOX_EXEC_TIMEOUT,
+        vision_enabled=settings.VISION_ENABLED,
+        skills_enabled=settings.SKILLS_ENABLED,
+        api_provider=settings.API_PROVIDER,
     )
 
 
@@ -436,6 +441,46 @@ async def update_server_config(
         credentials.set_key("anthropic", payload.anthropic_api_key)
         env_updates["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
 
+    if payload.api_provider is not None:
+        settings.API_PROVIDER = payload.api_provider
+        os.environ["API_PROVIDER"] = payload.api_provider
+        env_updates["API_PROVIDER"] = payload.api_provider
+
+    if payload.data_mode is not None:
+        settings.DATA_MODE = payload.data_mode
+        os.environ["DATA_MODE"] = payload.data_mode
+        env_updates["DATA_MODE"] = payload.data_mode
+
+    if payload.data_schema_only is not None:
+        settings.DATA_SCHEMA_ONLY = payload.data_schema_only
+        os.environ["DATA_SCHEMA_ONLY"] = str(payload.data_schema_only).lower()
+        env_updates["DATA_SCHEMA_ONLY"] = str(payload.data_schema_only).lower()
+
+    if payload.sandbox_exec_timeout is not None:
+        settings.SANDBOX_EXEC_TIMEOUT = payload.sandbox_exec_timeout
+        os.environ["SANDBOX_EXEC_TIMEOUT"] = str(payload.sandbox_exec_timeout)
+        env_updates["SANDBOX_EXEC_TIMEOUT"] = str(payload.sandbox_exec_timeout)
+
+    if payload.council_enabled is not None:
+        settings.COUNCIL_ENABLED = payload.council_enabled
+        os.environ["COUNCIL_ENABLED"] = str(payload.council_enabled).lower()
+        env_updates["COUNCIL_ENABLED"] = str(payload.council_enabled).lower()
+
+    if payload.vision_enabled is not None:
+        settings.VISION_ENABLED = payload.vision_enabled
+        os.environ["VISION_ENABLED"] = str(payload.vision_enabled).lower()
+        env_updates["VISION_ENABLED"] = str(payload.vision_enabled).lower()
+
+    if payload.context_docs_enabled is not None:
+        settings.CONTEXT_DOCS_ENABLED = payload.context_docs_enabled
+        os.environ["CONTEXT_DOCS_ENABLED"] = str(payload.context_docs_enabled).lower()
+        env_updates["CONTEXT_DOCS_ENABLED"] = str(payload.context_docs_enabled).lower()
+
+    if payload.skills_enabled is not None:
+        settings.SKILLS_ENABLED = payload.skills_enabled
+        os.environ["SKILLS_ENABLED"] = str(payload.skills_enabled).lower()
+        env_updates["SKILLS_ENABLED"] = str(payload.skills_enabled).lower()
+
     if payload.gemini_base_url is not None:
         settings.GEMINI_BASE_URL = payload.gemini_base_url
         os.environ["GEMINI_BASE_URL"] = payload.gemini_base_url
@@ -446,6 +491,17 @@ async def update_server_config(
         os.environ["GEMINI_API_KEY"] = payload.gemini_api_key
         credentials.set_key("gemini", payload.gemini_api_key)
         env_updates["GEMINI_API_KEY"] = payload.gemini_api_key
+
+    if payload.gateway_api_url is not None:
+        settings.GATEWAY_API_URL = payload.gateway_api_url
+        os.environ["GATEWAY_API_URL"] = payload.gateway_api_url
+        env_updates["GATEWAY_API_URL"] = payload.gateway_api_url
+
+    if payload.gateway_api_key is not None:
+        settings.GATEWAY_API_KEY = payload.gateway_api_key
+        os.environ["GATEWAY_API_KEY"] = payload.gateway_api_key
+        credentials.set_key("custom_gateway", payload.gateway_api_key)
+        env_updates["GATEWAY_API_KEY"] = payload.gateway_api_key
 
     if env_updates:
         _persist_env_file(env_updates)

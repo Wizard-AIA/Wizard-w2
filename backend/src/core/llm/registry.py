@@ -48,9 +48,37 @@ FAILURE_TTL_SECONDS = 5
 
 # Substrings that indicate a model is specialised. Ordered by specificity.
 CODE_HINTS = ("coder", "code", "starcoder", "deepseek-coder", "codellama", "codegemma", "qwen2.5-coder")
-REASONING_HINTS = ("r1", "reason", "think", "qwq", "o1", "phi-4", "marco")
+REASONING_HINTS = ("r1", "reason", "think", "qwq", "o1", "o3", "phi-4", "marco", "thinking")
 VISION_HINTS = ("llava", "vision", "bakllava", "moondream", "minicpm-v", "gemma3", "pixtral")
 EMBED_HINTS = ("embed", "bge", "minilm", "nomic", "mxbai", "gte")
+
+# Universal exclusion patterns for non-chat, audio, video, image-gen, and task-only endpoints
+EXCLUDED_MODEL_PATTERNS = (
+    # Embeddings & similarity
+    "embed", "bge-", "nomic-embed", "mxbai-embed", "gte-", "text-embedding",
+    # Audio, TTS, Transcription & Voice
+    "tts", "whisper", "transcribe", "audio", "speech", "realtime", "live-translate", "lyria",
+    "live-preview", "-live", "live-",
+    # Video & Image Generation
+    "dall-e", "imagen", "veo", "-image", "clip-preview", "image-preview",
+    # Moderation & Non-Chat Specialized Tools
+    "moderation", "aqa", "deep-research", "computer-use", "robotics", "antigravity",
+    "nano-banana", "customtools", "search-grounding", "text-davinci", "text-curie",
+    "babbage", "ada",
+)
+
+
+def normalize_model_name(name: str) -> str:
+    """Strips leading 'models/' prefix returned by Google and some OpenAI gateways."""
+    if name.startswith("models/"):
+        return name[len("models/"):]
+    return name
+
+
+def is_usable_chat_model(name: str, provider: str = "") -> bool:
+    """Universal filter to keep only models capable of general chat, reasoning, and coding."""
+    clean = normalize_model_name(name).lower()
+    return not any(pat in clean for pat in EXCLUDED_MODEL_PATTERNS)
 
 
 # LM Studio reports a model `type` directly, which beats guessing from the name.
@@ -86,11 +114,11 @@ def classify(name: str) -> list[str]:
     caps: list[str] = []
     if any(hint in lowered for hint in EMBED_HINTS):
         return ["embedding"]
-    if any(hint in lowered for hint in VISION_HINTS):
+    if any(hint in lowered for hint in VISION_HINTS) or any(h in lowered for h in ("gpt-4", "claude", "gemini", "omni")):
         caps.append("vision")
-    if any(hint in lowered for hint in CODE_HINTS):
+    if any(hint in lowered for hint in CODE_HINTS) or any(h in lowered for h in ("gpt-4", "claude", "gemini", "gemma")):
         caps.append("code")
-    if any(hint in lowered for hint in REASONING_HINTS):
+    if any(hint in lowered for hint in REASONING_HINTS) or any(h in lowered for h in ("pro", "opus", "sonnet", "o1", "o3")):
         caps.append("reasoning")
     if not caps:
         caps.append("general")
@@ -172,6 +200,8 @@ class ModelRegistry:
             models = self._list_ollama(name)
         elif name == "lmstudio":
             models = self._list_lmstudio(name)
+        elif name == "gemini":
+            models = self._list_gemini(name)
         elif (descriptor := describe(name)) is not None and descriptor.api_style == "anthropic":
             models = self._list_anthropic(name)
         else:
@@ -221,7 +251,8 @@ class ModelRegistry:
 
         models: list[ModelInfo] = []
         for entry in payload.get("models", []):
-            name = entry.get("name") or entry.get("model") or ""
+            raw_name = entry.get("name") or entry.get("model") or ""
+            name = normalize_model_name(raw_name)
             if not name:
                 continue
             details = entry.get("details") or {}
@@ -256,7 +287,8 @@ class ModelRegistry:
 
         models: list[ModelInfo] = []
         for entry in payload.get("data", []):
-            name = entry.get("id") or ""
+            raw_name = entry.get("id") or ""
+            name = normalize_model_name(raw_name)
             if not name:
                 continue
             model_type = str(entry.get("type") or "llm").lower()
@@ -304,8 +336,9 @@ class ModelRegistry:
 
         models: list[ModelInfo] = []
         for entry in payload.get("data", []):
-            name = entry.get("id") or ""
-            if name:
+            raw_name = entry.get("id") or ""
+            name = normalize_model_name(raw_name)
+            if name and is_usable_chat_model(name, provider):
                 models.append(
                     ModelInfo(
                         name=name,
@@ -317,6 +350,39 @@ class ModelRegistry:
         models.sort(key=lambda m: m.name, reverse=True)
         return models
 
+    def _list_gemini(self, provider: str) -> list[ModelInfo]:
+        """Gemini model list filtered to chat, reasoning, and code generation models."""
+        base = settings.provider_openai_base_url(provider).rstrip("/")
+        if not base:
+            self._errors[provider] = "No endpoint is configured for Gemini."
+            return []
+
+        api_key = settings.provider_api_key(provider)
+        if not api_key:
+            self._errors[provider] = "No Gemini API key is set. Add one to list the available models."
+            return []
+
+        headers = {"Authorization": f"Bearer {api_key}"}
+        payload = self._get_json(provider, f"{base}/models", headers=headers)
+        if payload is None:
+            return []
+
+        seen: set[str] = set()
+        models: list[ModelInfo] = []
+        for entry in payload.get("data", []):
+            raw_name = entry.get("id") or ""
+            name = normalize_model_name(raw_name)
+            if not name or name in seen:
+                continue
+            if not is_usable_chat_model(name, provider):
+                continue
+            seen.add(name)
+            models.append(ModelInfo(name=name, capabilities=classify(name), provider=provider))
+
+        # Sort so modern primary models appear at top
+        models.sort(key=lambda m: m.name)
+        return models
+
     def _list_gateway(self, provider: str, base_url: str | None = None) -> list[ModelInfo]:
         base = (base_url if base_url is not None else settings.provider_openai_base_url(provider)).rstrip("/")
         if not base:
@@ -324,9 +390,9 @@ class ModelRegistry:
             # empty, but not the blank strings they now default to.
             self._errors[provider] = f"No endpoint is configured for {provider}. Set its base URL to list models."
             return [
-                ModelInfo(name=name, capabilities=classify(name), provider=provider)
+                ModelInfo(name=normalize_model_name(name), capabilities=classify(name), provider=provider)
                 for name in dict.fromkeys([settings.MODEL_NAME.strip(), settings.WORKER_MODEL_NAME.strip()])
-                if name
+                if name and is_usable_chat_model(name, provider)
             ]
 
         api_key = settings.provider_api_key(provider)
@@ -335,11 +401,17 @@ class ModelRegistry:
         if payload is None:
             return []
 
-        models = []
+        seen: set[str] = set()
+        models: list[ModelInfo] = []
         for entry in payload.get("data", []):
-            name = entry.get("id") or ""
-            if name:
-                models.append(ModelInfo(name=name, capabilities=classify(name), provider=provider))
+            raw_name = entry.get("id") or ""
+            name = normalize_model_name(raw_name)
+            if not name or name in seen:
+                continue
+            if not is_usable_chat_model(name, provider):
+                continue
+            seen.add(name)
+            models.append(ModelInfo(name=name, capabilities=classify(name), provider=provider))
         models.sort(key=lambda m: m.name)
         return models
 
