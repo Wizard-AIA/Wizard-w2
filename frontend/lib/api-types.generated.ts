@@ -2206,10 +2206,35 @@ export interface components {
              */
             gemini_base_url: string;
             /**
+             * Gateway Api Url
+             * @default
+             */
+            gateway_api_url: string;
+            /**
              * Host Sandbox Network
              * @default deny
              */
             host_sandbox_network: string;
+            /**
+             * Sandbox Exec Timeout
+             * @default 180
+             */
+            sandbox_exec_timeout: number;
+            /**
+             * Vision Enabled
+             * @default false
+             */
+            vision_enabled: boolean;
+            /**
+             * Skills Enabled
+             * @default true
+             */
+            skills_enabled: boolean;
+            /**
+             * Api Provider
+             * @default ollama
+             */
+            api_provider: string;
         };
         /** SessionResponse */
         SessionResponse: {
@@ -2527,6 +2552,12 @@ export interface components {
          * @description Payload to update runtime environment and loop configuration.
          */
         UpdateConfigPayload: {
+            /** Api Provider */
+            api_provider?: string | null;
+            /** Data Mode */
+            data_mode?: ("local-only" | "cloud-only" | "hybrid") | null;
+            /** Data Schema Only */
+            data_schema_only?: boolean | null;
             /** Execution Backend */
             execution_backend?: ("host" | "docker" | "inprocess") | null;
             /** Host Sandbox */
@@ -2537,6 +2568,8 @@ export interface components {
             sandbox_tier?: ("core" | "standard" | "full") | null;
             /** Sandbox Mem Limit */
             sandbox_mem_limit?: string | null;
+            /** Sandbox Exec Timeout */
+            sandbox_exec_timeout?: number | null;
             /** Max Upload Mb */
             max_upload_mb?: number | null;
             /** Plot Format */
@@ -2559,6 +2592,14 @@ export interface components {
             subagent_enabled?: boolean | null;
             /** Subagent Max Iterations */
             subagent_max_iterations?: number | null;
+            /** Council Enabled */
+            council_enabled?: boolean | null;
+            /** Vision Enabled */
+            vision_enabled?: boolean | null;
+            /** Context Docs Enabled */
+            context_docs_enabled?: boolean | null;
+            /** Skills Enabled */
+            skills_enabled?: boolean | null;
             /** Temperature */
             temperature?: number | null;
             /** Max Tokens */
@@ -2587,6 +2628,10 @@ export interface components {
             gemini_base_url?: string | null;
             /** Gemini Api Key */
             gemini_api_key?: string | null;
+            /** Gateway Api Url */
+            gateway_api_url?: string | null;
+            /** Gateway Api Key */
+            gateway_api_key?: string | null;
         };
         /** UploadResponse */
         UploadResponse: {
