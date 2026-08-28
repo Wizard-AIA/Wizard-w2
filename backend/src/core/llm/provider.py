@@ -498,8 +498,11 @@ class LLMProvider:
 
             try:
                 from langchain_openai import ChatOpenAI
-            except ImportError:  # pragma: no cover - depends on optional extra
-                from langchain_community.chat_models import ChatOpenAI
+            except ImportError as exc:  # pragma: no cover - depends on optional extra
+                raise LLMUnavailableError(
+                    "OpenAI, Gemini, and gateway support needs the `langchain-openai` package. "
+                    "Install it with `uv pip install -r requirements-optional.txt`."
+                ) from exc
 
             # LM Studio, vLLM, llama.cpp's server and hosted gateways all speak
             # this dialect. Note that context length is *not* sent: LM Studio
