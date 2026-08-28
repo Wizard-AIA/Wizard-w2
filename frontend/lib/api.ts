@@ -109,6 +109,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   config: () => request<ServerConfig>("/api/config"),
 
+  updateConfig: (payload: import("./types").UpdateConfigPayload) =>
+    request<ServerConfig>("/api/config", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
   session: () => request<SessionInfo>("/api/session"),
 
   createSession: () => request<SessionInfo>("/api/session", { method: "POST" }),

@@ -1,95 +1,138 @@
 "use client"
 
-import { AlertTriangle, Loader2, RotateCcw, ShieldAlert, ShieldCheck, Volume2, VolumeX } from "lucide-react"
+import {
+  AlertTriangle,
+  Check,
+  Loader2,
+  RotateCcw,
+  Save,
+  ShieldAlert,
+  ShieldCheck,
+  Volume2,
+  VolumeX,
+} from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader, Section } from "@/components/page-header"
 import { api, clearStoredSessionId, getStoredSessionId } from "@/lib/api"
 import type {
-  DataModeInfo,
-  ModelListResponse,
+  ExecutionBackend,
   PermissionProfile,
   PermissionRuling,
   PermissionsInfo,
   SandboxSelfTest,
   ServerConfig,
   SessionInfo,
+  UpdateConfigPayload,
   UsageTotals,
 } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
+import { useWorkspace } from "@/lib/workspace-context"
 
-/**
- * Session controls, interface preferences and a straight readout of what the
- * server actually resolved at boot.
- *
- * The diagnostics half is deliberately plain: when someone asks "why is this
- * slow" or "is my data really staying local", the answer should be one screen
- * of facts rather than a support conversation.
- */
 export function SettingsWorkbench() {
-  const [config, setConfig] = useState<ServerConfig | null>(null)
+  const { config: globalConfig, refreshConfig: globalRefreshConfig } = useWorkspace()
+  const [config, setConfig] = useState<ServerConfig | null>(globalConfig)
   const [session, setSession] = useState<SessionInfo | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
   const [permissions, setPermissions] = useState<PermissionsInfo | null>(null)
   const [usage, setUsage] = useState<UsageTotals | null>(null)
-  const [models, setModels] = useState<ModelListResponse | null>(null)
-  const { soundOn, toggleSound } = useSound()
+  const { soundOn, toggleSound, playSound } = useSound()
 
-  const refresh = useCallback(async () => {
-    const [nextConfig, nextSession, nextMode, nextPermissions, nextUsage, nextModels] = await Promise.allSettled([
-      api.config(),
-      api.session(),
-      api.dataMode(),
-      api.permissions(),
-      api.usage(),
-      api.models(),
-    ])
-    if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
-    if (nextSession.status === "fulfilled") setSession(nextSession.value)
-    if (nextMode.status === "fulfilled") setDataMode(nextMode.value)
-    if (nextPermissions.status === "fulfilled") setPermissions(nextPermissions.value)
-    if (nextUsage.status === "fulfilled") setUsage(nextUsage.value)
-    if (nextModels.status === "fulfilled") setModels(nextModels.value)
-    setSessionId(getStoredSessionId())
+  // Form State for Mutable Settings
+  const [form, setForm] = useState<UpdateConfigPayload>({})
+  const [savedSuccess, setSavedSuccess] = useState(false)
+  const [savingError, setSavingError] = useState<string | null>(null)
+
+  const syncFormFromConfig = useCallback((cfg: ServerConfig) => {
+    setForm({
+      execution_backend: cfg.execution_backend,
+      host_sandbox: cfg.host_sandbox as "off" | "best-effort" | "require",
+      host_sandbox_network: (cfg.host_sandbox_network || "deny") as "deny" | "allow",
+      sandbox_tier: (cfg.sandbox_tier || "standard") as "core" | "standard" | "full",
+      sandbox_mem_limit: cfg.sandbox_mem_limit || "2g",
+      max_upload_mb: cfg.max_upload_mb || 512,
+      plot_format: cfg.plot_format || "html",
+      agent_tier: (cfg.agent_tier || "auto") as "auto" | "compact" | "balanced" | "full",
+      agent_max_iterations: cfg.agent_max_iterations ?? 24,
+      agent_turn_timeout: cfg.agent_turn_timeout ?? 300,
+      agent_require_approval: cfg.agent_require_approval ?? false,
+      agent_verify: cfg.agent_verify ?? true,
+      agent_grounding_check: cfg.agent_grounding_check ?? true,
+      agent_emit_script: cfg.agent_emit_script ?? true,
+      subagent_enabled: cfg.subagent_enabled ?? true,
+      subagent_max_iterations: cfg.subagent_max_iterations ?? 3,
+      temperature: cfg.temperature ?? 0.0,
+      max_tokens: cfg.max_tokens ?? 4096,
+      llm_num_thread: cfg.llm_num_thread ?? 0,
+      llm_num_ctx: cfg.llm_num_ctx ?? 0,
+      llm_keep_alive: cfg.llm_keep_alive || "30m",
+      rag_enabled: cfg.rag_enabled ?? false,
+      ollama_base_url: cfg.ollama_base_url || "http://localhost:11434",
+      lmstudio_base_url: cfg.lmstudio_base_url || "http://localhost:1234",
+      openai_base_url: cfg.openai_base_url || "https://api.openai.com/v1",
+      openai_api_key: "",
+      anthropic_base_url: cfg.anthropic_base_url || "https://api.anthropic.com",
+      anthropic_api_key: "",
+      gemini_base_url: cfg.gemini_base_url || "https://generativelanguage.googleapis.com/v1beta",
+      gemini_api_key: "",
+    })
   }, [])
 
-  const unifyModels = useCallback(async (model: string, provider: string) => {
-    setBusy(`unify:${model}`)
+  const refresh = useCallback(async () => {
+    const [nextConfig, nextSession, nextPermissions, nextUsage] = await Promise.allSettled([
+      api.config(),
+      api.session(),
+      api.permissions(),
+      api.usage(),
+    ])
+    if (nextConfig.status === "fulfilled") {
+      setConfig(nextConfig.value)
+      syncFormFromConfig(nextConfig.value)
+    }
+    if (nextSession.status === "fulfilled") setSession(nextSession.value)
+    if (nextPermissions.status === "fulfilled") setPermissions(nextPermissions.value)
+    if (nextUsage.status === "fulfilled") setUsage(nextUsage.value)
+    setSessionId(getStoredSessionId())
+  }, [syncFormFromConfig])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const handleSaveSettings = useCallback(async () => {
+    setBusy("save-config")
+    setSavingError(null)
+    setSavedSuccess(false)
     try {
-      await api.selectModels({
-        manager: model,
-        manager_provider: provider,
-        worker: model,
-        worker_provider: provider,
-      })
-      const [nextModels, nextConfig] = await Promise.allSettled([api.models(), api.config()])
-      if (nextModels.status === "fulfilled") setModels(nextModels.value)
-      if (nextConfig.status === "fulfilled") setConfig(nextConfig.value)
+      // Filter out empty API keys so we don't wipe existing stored keys unless requested
+      const payload: UpdateConfigPayload = { ...form }
+      if (!payload.openai_api_key) delete payload.openai_api_key
+      if (!payload.anthropic_api_key) delete payload.anthropic_api_key
+      if (!payload.gemini_api_key) delete payload.gemini_api_key
+
+      const updated = await api.updateConfig(payload)
+      setConfig(updated)
+      syncFormFromConfig(updated)
+      await globalRefreshConfig()
+      setSavedSuccess(true)
+      playSound("click")
+      setTimeout(() => setSavedSuccess(false), 4000)
+    } catch (err) {
+      setSavingError(err instanceof Error ? err.message : "Failed to update configuration")
     } finally {
       setBusy(null)
     }
-  }, [])
-
-  const setSchemaOnly = useCallback(async (schemaOnly: boolean) => {
-    setDataMode(await api.setDataMode({ schema_only: schemaOnly }))
-  }, [])
+  }, [form, globalRefreshConfig, playSound, syncFormFromConfig])
 
   const setProfile = useCallback(async (profile: PermissionProfile) => {
     setPermissions(await api.setPermissions({ profile }))
   }, [])
 
   const setRuling = useCallback(async (key: string, ruling: PermissionRuling) => {
-    // Sent one row at a time. The server owns the matrix, so echoing the whole
-    // thing back would let a stale local copy overwrite a row it never touched.
     setPermissions(await api.setPermissions({ categories: { [key]: ruling } }))
   }, [])
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
 
   const resetWorkspace = useCallback(async () => {
     setBusy("reset")
@@ -106,7 +149,7 @@ export function SettingsWorkbench() {
     try {
       await api.deleteSession()
     } catch {
-      // Already gone; a fresh id is minted on the next call either way.
+      // Already gone
     } finally {
       clearStoredSessionId()
       await refresh()
@@ -115,13 +158,45 @@ export function SettingsWorkbench() {
   }, [refresh])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-16">
       <PageHeader
         eyebrow="Preferences"
         title="Settings"
-        description="How this session behaves, and what the server resolved when it started."
+        description="Configure runtime execution, agent depth tiers, safety verification, LLM inference, and API keys."
+        actions={
+          <button
+            type="button"
+            onClick={() => void handleSaveSettings()}
+            disabled={busy === "save-config"}
+            className="flex items-center gap-2 rounded-lg bg-[linear-gradient(120deg,var(--brand),var(--brand-2))] px-4 py-2 text-[13px] font-medium text-brand-foreground shadow-brand transition-all hover:brightness-105 active:scale-[0.985] disabled:opacity-50"
+          >
+            {busy === "save-config" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : savedSuccess ? (
+              <Check className="h-4 w-4 text-white" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            {busy === "save-config" ? "Saving..." : savedSuccess ? "Settings Saved!" : "Save Settings"}
+          </button>
+        }
       />
 
+      {savingError && (
+        <div className="mx-6 mt-4 flex items-start gap-2.5 rounded-xl border border-destructive/25 bg-destructive/8 p-3.5 text-sm text-destructive md:mx-9">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{savingError}</span>
+        </div>
+      )}
+
+      {savedSuccess && (
+        <div className="mx-6 mt-4 flex items-start gap-2.5 rounded-xl border border-success/30 bg-success/10 p-3.5 text-sm text-success md:mx-9">
+          <Check className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>Runtime configuration updated and persisted to environment successfully.</span>
+        </div>
+      )}
+
+      {/* 1. Interface Preferences */}
       <Section
         title="Interface"
         description="Stored in this browser only. Nothing here is sent to the server."
@@ -153,139 +228,577 @@ export function SettingsWorkbench() {
           >
             <span
               className={cn(
-                "absolute top-0.5 h-5 w-5 rounded-full bg-card shadow-sm",
-                "transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
-                soundOn ? "translate-x-[1.375rem]" : "translate-x-0.5",
+                "block h-5 w-5 rounded-full bg-white shadow-xs transition-transform duration-[var(--duration-base)]",
+                soundOn ? "translate-x-5.5" : "translate-x-0.5",
               )}
             />
           </button>
         </div>
       </Section>
 
+      {/* 2. Execution & Sandboxing Controls */}
       <Section
-        title="Session"
-        description="Datasets, chat history and the sandbox container are all scoped to this id."
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={() => void resetWorkspace()}
-              disabled={busy !== null}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3.5 text-[13px] font-medium shadow-xs transition-colors duration-[var(--duration-fast)] hover:border-brand/40 disabled:opacity-50"
-            >
-              {busy === "reset" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3.5 w-3.5" />
-              )}
-              Clear variables
-            </button>
-            <button
-              type="button"
-              onClick={() => void newSession()}
-              disabled={busy !== null}
-              className="flex h-9 items-center gap-2 rounded-lg border border-destructive/30 px-3.5 text-[13px] font-medium text-destructive transition-colors duration-[var(--duration-fast)] hover:bg-destructive/8 disabled:opacity-50"
-            >
-              {busy === "session" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              Start over
-            </button>
-          </>
-        }
+        title="Execution & Sandbox"
+        description="Where generated Python runs and how tightly it is isolated from your filesystem and network."
       >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
-          <Fact label="Session id" value={sessionId ? `${sessionId.slice(0, 12)}…` : "Not yet issued"} mono />
-          <Fact label="Datasets loaded" value={String(session?.datasets.length ?? 0)} />
-          <Fact label="Active dataset" value={session?.active_dataset ?? "None"} />
-        </dl>
-        <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
-          <strong className="font-medium text-foreground">Clear variables</strong> resets the sandbox
-          namespace but keeps your data loaded.{" "}
-          <strong className="font-medium text-foreground">Start over</strong> discards the session
-          entirely — datasets, history and container.
-        </p>
-      </Section>
-
-      <Section
-        title="Data"
-        description="Which models this session may reach, and how much of your data a cloud-bound prompt carries."
-      >
-        <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <span className="text-[13.5px] font-medium">{MODE_LABELS[dataMode?.mode ?? ""] ?? "—"}</span>
-            <span className="text-[12.5px] text-muted-foreground">{dataMode?.description}</span>
-          </div>
-          <p className="mt-2 text-[12px] text-muted-foreground">
-            Change it from the control in the sidebar — it is there on every screen because it decides
-            whether anything leaves this machine.
-          </p>
-
-          {/* Named up front rather than discovered mid-run: a tool this mode
-              switches off is unavailable, not merely unchosen. */}
-          {dataMode && dataMode.disabled_tools.length > 0 && (
-            <p className="mt-3 border-t border-border pt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-              Unavailable in this mode:{" "}
-              <span className="font-medium text-foreground">
-                {dataMode.disabled_tools.map((tool) => tool.replace(/_/g, " ")).join(", ")}
-              </span>
-              . The agent is not permitted to use it, rather than being asked not to.
-            </p>
-          )}
-        </div>
-
-        {/* Only meaningful once something can be cloud-bound. Under local-only
-            nothing is withheld because nothing is sent. */}
-        {dataMode && dataMode.mode !== "local-only" && (
-          <div className="mt-3 rounded-xl border border-border bg-card p-4 shadow-xs">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-[13.5px] font-medium">Withhold real values from cloud prompts</p>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-                  Column names, types, null rates and row counts still go — a model cannot write
-                  correct code without them. Computed results still come back, because the answer is
-                  written from them.
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={dataMode.schema_only}
-                aria-label="Withhold real values from cloud prompts"
-                onClick={() => void setSchemaOnly(!dataMode.schema_only)}
-                className={cn(
-                  "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-[var(--duration-base)]",
-                  dataMode.schema_only ? "bg-brand" : "bg-muted",
-                )}
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Execution Backend */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Execution Backend
+              </label>
+              <select
+                value={form.execution_backend ?? "host"}
+                onChange={(e) => setForm({ ...form, execution_backend: e.target.value as ExecutionBackend })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
               >
-                <span
-                  className={cn(
-                    "absolute top-0.5 h-5 w-5 rounded-full bg-card shadow-sm",
-                    "transition-transform duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",
-                    dataMode.schema_only ? "translate-x-[1.375rem]" : "translate-x-0.5",
-                  )}
-                />
-              </button>
+                <option value="host">Host Subprocess (Recommended)</option>
+                <option value="docker">Docker Container (Highest Isolation)</option>
+                <option value="inprocess">In-Process (CI / Fast Testing Only)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Where python commands and analytical scripts execute.
+              </p>
             </div>
 
-            {dataMode.withheld.length > 0 && (
-              <ul className="mt-3 space-y-1 border-t border-border pt-3">
-                {dataMode.withheld.map((item) => (
-                  <li key={item} className="text-[12px] text-muted-foreground">
-                    — {item}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+            {/* Host Sandbox Mode */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Host OS Containment
+              </label>
+              <select
+                value={form.host_sandbox ?? "best-effort"}
+                onChange={(e) => setForm({ ...form, host_sandbox: e.target.value as "off" | "best-effort" | "require" })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="best-effort">Best Effort (Applies OS Sandbox)</option>
+                <option value="require">Require (Refuses if unsupported)</option>
+                <option value="off">Off (Standard Subprocess)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Uses Seatbelt (macOS) or Landlock/cgroups (Linux).
+              </p>
+            </div>
 
-        <div className="mt-3">
-          <UsagePanel usage={usage} />
+            {/* Sandbox Network */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Outbound Network Policy
+              </label>
+              <select
+                value={form.host_sandbox_network ?? "deny"}
+                onChange={(e) => setForm({ ...form, host_sandbox_network: e.target.value as "deny" | "allow" })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="deny">Deny (Block All Outbound Traffic)</option>
+                <option value="allow">Allow (Allow Outbound Network)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Prevents data leakage or unauthorized external requests.
+              </p>
+            </div>
+
+            {/* Toolkit Tier */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Toolkit Tier
+              </label>
+              <select
+                value={form.sandbox_tier ?? "standard"}
+                onChange={(e) => setForm({ ...form, sandbox_tier: e.target.value as "core" | "standard" | "full" })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="core">Core (Pandas, DuckDB, Plotly)</option>
+                <option value="standard">Standard (+ Scikit-learn, Scipy, Statsmodels)</option>
+                <option value="full">Full (+ Geospatial, PyTorch, Lifelines)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Preloaded library environment inside the sandbox.
+              </p>
+            </div>
+
+            {/* Memory Limit */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Sandbox Memory Limit
+              </label>
+              <input
+                type="text"
+                value={form.sandbox_mem_limit ?? "2g"}
+                onChange={(e) => setForm({ ...form, sandbox_mem_limit: e.target.value })}
+                placeholder="2g, 4g, 8g"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Hard ceiling for analytical memory allocations.
+              </p>
+            </div>
+
+            {/* Plot Format */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Default Plot Format
+              </label>
+              <select
+                value={form.plot_format ?? "html"}
+                onChange={(e) => setForm({ ...form, plot_format: e.target.value as "html" | "png" })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="html">Interactive HTML (Plotly / Vega)</option>
+                <option value="png">Static PNG (Matplotlib / Seaborn)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Generated visualization rendering artifact format.
+              </p>
+            </div>
+          </div>
+
+          {config && <IsolationNote isolation={config.execution_isolation} />}
+          {config && <SandboxPanel config={config} />}
         </div>
       </Section>
 
+      {/* 3. Agent Reasoning & Verification Controls */}
+      <Section
+        title="Agent Reasoning & Safety Loop"
+        description="Control iteration budgets, multi-turn verification, grounding checks, and approval gates."
+      >
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Depth Tier */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Depth Tier
+              </label>
+              <select
+                value={form.agent_tier ?? "auto"}
+                onChange={(e) => setForm({ ...form, agent_tier: e.target.value as "auto" | "compact" | "balanced" | "full" })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-medium text-foreground focus:border-brand focus:outline-none"
+              >
+                <option value="auto">Auto (Adaptive based on model size)</option>
+                <option value="compact">Compact (Fast, lightweight turns)</option>
+                <option value="balanced">Balanced (Standard reasoning & checks)</option>
+                <option value="full">Full (Deep exploratory & competing hypotheses)</option>
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Determines the depth of planning and step breakdown.
+              </p>
+            </div>
+
+            {/* Max Iterations */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Max Iteration Ceiling
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={form.agent_max_iterations ?? 24}
+                onChange={(e) => setForm({ ...form, agent_max_iterations: parseInt(e.target.value, 10) || 24 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Maximum tool steps before forcing a conclusion.
+              </p>
+            </div>
+
+            {/* Turn Timeout */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Turn Deadline (Seconds)
+              </label>
+              <input
+                type="number"
+                min={10}
+                max={1800}
+                value={form.agent_turn_timeout ?? 300}
+                onChange={(e) => setForm({ ...form, agent_turn_timeout: parseFloat(e.target.value) || 300 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Overall timeout deadline per question.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 pt-3 border-t border-border sm:grid-cols-2">
+            {/* Approval Gate */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Require Plan Approval</span>
+                <span className="block text-[11.5px] text-muted-foreground">Pause for human consent before executing analysis plan</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.agent_require_approval ?? false}
+                onChange={(e) => setForm({ ...form, agent_require_approval: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Verification Recompute */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Independent Verification Pass</span>
+                <span className="block text-[11.5px] text-muted-foreground">Re-derives findings with alternative code to ensure integrity</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.agent_verify ?? true}
+                onChange={(e) => setForm({ ...form, agent_verify: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Grounding Check */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Strict Grounding Verification</span>
+                <span className="block text-[11.5px] text-muted-foreground">Checks that every claimed fact matches real execution output</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.agent_grounding_check ?? true}
+                onChange={(e) => setForm({ ...form, agent_grounding_check: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Emit Python Script */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Emit Reproducible Script</span>
+                <span className="block text-[11.5px] text-muted-foreground">Generates a self-contained clean script artifact at the end</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.agent_emit_script ?? true}
+                onChange={(e) => setForm({ ...form, agent_emit_script: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* Subagent Enabled */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Subagent Forking</span>
+                <span className="block text-[11.5px] text-muted-foreground">Allow spawning parallel subagents for competing hypotheses</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.subagent_enabled ?? true}
+                onChange={(e) => setForm({ ...form, subagent_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+
+            {/* RAG Enabled */}
+            <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">
+              <div>
+                <span className="block text-[13px] font-medium text-foreground">Semantic Document Retrieval (RAG)</span>
+                <span className="block text-[11.5px] text-muted-foreground">Retrieve relevant chunks from attached PDF / DOCX files</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={form.rag_enabled ?? false}
+                onChange={(e) => setForm({ ...form, rag_enabled: e.target.checked })}
+                className="h-4 w-4 rounded text-brand focus:ring-brand"
+              />
+            </label>
+          </div>
+        </div>
+      </Section>
+
+      {/* 4. LLM Inference & Local Host Parameters */}
+      <Section
+        title="LLM Inference Parameters"
+        description="Tune generation hyperparameters, context window sizes, thread pools, and cache keep-alive."
+      >
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Temperature */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Temperature
+                </label>
+                <span className="font-mono text-[12px] text-foreground font-medium">{form.temperature?.toFixed(2) ?? "0.00"}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={form.temperature ?? 0}
+                onChange={(e) => setForm({ ...form, temperature: parseFloat(e.target.value) })}
+                className="w-full accent-brand"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                0.00 is strictly deterministic. Higher produces more varied phrasing.
+              </p>
+            </div>
+
+            {/* Max Tokens */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Max Output Tokens
+              </label>
+              <input
+                type="number"
+                min={256}
+                max={32768}
+                value={form.max_tokens ?? 4096}
+                onChange={(e) => setForm({ ...form, max_tokens: parseInt(e.target.value, 10) || 4096 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Maximum token generation length per step.
+              </p>
+            </div>
+
+            {/* Context Window */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Context Window (LLM_NUM_CTX)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={131072}
+                value={form.llm_num_ctx ?? 0}
+                onChange={(e) => setForm({ ...form, llm_num_ctx: parseInt(e.target.value, 10) || 0 })}
+                placeholder="0 = model default"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                0 uses provider defaults. Local models support up to 32k/64k.
+              </p>
+            </div>
+
+            {/* Inference Threads */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                CPU Threads (LLM_NUM_THREAD)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={128}
+                value={form.llm_num_thread ?? 0}
+                onChange={(e) => setForm({ ...form, llm_num_thread: parseInt(e.target.value, 10) || 0 })}
+                placeholder="0 = physical core count"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                0 automatically matches your machine&apos;s physical cores.
+              </p>
+            </div>
+
+            {/* Model Keep Alive */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Model Keep-Alive Duration
+              </label>
+              <input
+                type="text"
+                value={form.llm_keep_alive ?? "30m"}
+                onChange={(e) => setForm({ ...form, llm_keep_alive: e.target.value })}
+                placeholder="30m, 1h, -1 (indefinite)"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                How long the model stays loaded in VRAM/RAM between turns.
+              </p>
+            </div>
+
+            {/* Max Upload MB */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Max Upload Limit (MB)
+              </label>
+              <input
+                type="number"
+                min={10}
+                max={4096}
+                value={form.max_upload_mb ?? 512}
+                onChange={(e) => setForm({ ...form, max_upload_mb: parseInt(e.target.value, 10) || 512 })}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Maximum file upload size per dataset.
+              </p>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* 5. Provider Base URLs & API Keys */}
+      <Section
+        title="Provider Endpoints & Credentials"
+        description="Configure API gateways, custom endpoints, and secure credentials saved directly to backend/.env."
+      >
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Ollama URL */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Ollama Base URL
+              </label>
+              <input
+                type="text"
+                value={form.ollama_base_url ?? ""}
+                onChange={(e) => setForm({ ...form, ollama_base_url: e.target.value })}
+                placeholder="http://localhost:11434"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* LM Studio URL */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                LM Studio Base URL
+              </label>
+              <input
+                type="text"
+                value={form.lmstudio_base_url ?? ""}
+                onChange={(e) => setForm({ ...form, lmstudio_base_url: e.target.value })}
+                placeholder="http://localhost:1234"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* OpenAI Gateway */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                OpenAI Base URL
+              </label>
+              <input
+                type="text"
+                value={form.openai_base_url ?? ""}
+                onChange={(e) => setForm({ ...form, openai_base_url: e.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* OpenAI Key */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                OpenAI API Key
+              </label>
+              <input
+                type="password"
+                value={form.openai_api_key ?? ""}
+                onChange={(e) => setForm({ ...form, openai_api_key: e.target.value })}
+                placeholder="sk-..."
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* Anthropic Gateway */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Anthropic Base URL
+              </label>
+              <input
+                type="text"
+                value={form.anthropic_base_url ?? ""}
+                onChange={(e) => setForm({ ...form, anthropic_base_url: e.target.value })}
+                placeholder="https://api.anthropic.com"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* Anthropic Key */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Anthropic API Key
+              </label>
+              <input
+                type="password"
+                value={form.anthropic_api_key ?? ""}
+                onChange={(e) => setForm({ ...form, anthropic_api_key: e.target.value })}
+                placeholder="sk-ant-..."
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* Gemini Gateway */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Gemini Base URL
+              </label>
+              <input
+                type="text"
+                value={form.gemini_base_url ?? ""}
+                onChange={(e) => setForm({ ...form, gemini_base_url: e.target.value })}
+                placeholder="https://generativelanguage.googleapis.com/v1beta"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+
+            {/* Gemini Key */}
+            <div>
+              <label className="block text-[12px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={form.gemini_api_key ?? ""}
+                onChange={(e) => setForm({ ...form, gemini_api_key: e.target.value })}
+                placeholder="AIzaSy..."
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground focus:border-brand focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* 6. Active Session Controls */}
+      <Section
+        title="Session"
+        description="The server state bound to this tab. A reset clears variables, plots and the sandbox without dropping your dataset."
+      >
+        <div className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[12.5px] text-muted-foreground">
+                Session: <span className="text-foreground">{sessionId ?? "—"}</span>
+              </p>
+              <p className="mt-1 text-[12.5px] text-muted-foreground">
+                {session?.has_data ? "Dataset loaded" : "No dataset loaded"} · {session?.data_mode ?? "local-only"}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={resetWorkspace}
+                disabled={busy === "reset"}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {busy === "reset" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                Reset session
+              </button>
+              <button
+                type="button"
+                onClick={newSession}
+                disabled={busy === "session"}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {busy === "session" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                New session
+              </button>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* 7. Permissions Matrix */}
       <Section
         title="Permissions"
-        description="What the agent may do without asking. Separate from the data mode above: that decides what is possible at all, this decides what you are asked about."
+        description="What the agent is allowed to do without stopping to ask."
       >
         <PermissionsPanel
           permissions={permissions}
@@ -294,335 +807,21 @@ export function SettingsWorkbench() {
         />
       </Section>
 
+      {/* 8. Usage & Metering */}
       <Section
-        title="Execution"
-        description="Where generated code runs. Docker is opt-in — set EXECUTION_BACKEND in backend/.env."
+        title="Usage"
+        description="Tokens and estimated costs for cloud providers in this session."
       >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-          <Fact
-            label="Runtime"
-            value={config ? BACKEND_LABELS[config.execution_backend] ?? config.execution_backend : "—"}
-            tone={config ? BACKEND_TONE[config.execution_backend] : undefined}
-          />
-          <Fact
-            label="Setting"
-            value={
-              config
-                ? config.execution_backend_setting === config.execution_backend
-                  ? config.execution_backend_setting
-                  : `${config.execution_backend_setting} → ${config.execution_backend}`
-                : "—"
-            }
-            mono
-          />
-          <Fact
-            label="Containment"
-            value={
-              config
-                ? (ISOLATION_LABELS[config.execution_isolation] ?? config.execution_isolation)
-                : "—"
-            }
-            tone={config?.execution_isolation === "none" ? "warn" : undefined}
-          />
-          <Fact
-            label="Toolkit tier"
-            value={config ? TIER_TOOLKIT_LABELS[config.sandbox_tier] ?? config.sandbox_tier : "—"}
-          />
-          <Fact label="Memory per runtime" value={config?.sandbox_mem_limit || "—"} mono />
-          <Fact label="Concurrent sessions" value={config ? String(config.max_sessions) : "—"} />
-          <Fact label="Plot format" value={config?.plot_format ?? "—"} />
-        </dl>
-
-        {config && <IsolationNote isolation={config.execution_isolation} />}
-        {config && <SandboxPanel config={config} />}
-      </Section>
-
-      <Section
-        title="This machine"
-        description="Measured at boot. Thread count, runtime memory and the session cap are derived from these unless you set them yourself."
-      >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-          <Fact
-            label="Profile"
-            value={config ? PROFILE_LABELS[config.system_profile] ?? config.system_profile : "—"}
-          />
-          <Fact label="CPU cores" value={config?.host_cores ? String(config.host_cores) : "—"} />
-          <Fact
-            label="Memory"
-            value={config?.host_ram_gb ? `${config.host_ram_gb} GB` : "—"}
-          />
-          <Fact
-            label="Embeddings"
-            value={config ? EMBEDDING_LABEL(config.embeddings_backend) : "—"}
-            tone={config ? (config.embeddings_semantic ? "ok" : undefined) : undefined}
-          />
-        </dl>
-        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          Embeddings come from whichever model server you already run — Ollama&apos;s{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11.5px]">/api/embed</code> or
-          an OpenAI-compatible{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11.5px]">/v1/embeddings</code>
-          . Pull an embedding model to get semantic retrieval; without one, matching falls back to
-          word overlap and nothing breaks.
-        </p>
-      </Section>
-
-      <Section
-        title="Inference"
-        description="What local inference actually runs with. Derived from the machine above unless you pin them in backend/.env — and a pinned value that does not fit the machine is the usual reason a question is slow."
-      >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
-          <Fact
-            label="Inference threads"
-            value={config?.llm_num_thread ? String(config.llm_num_thread) : "—"}
-            tone={config && config.llm_num_thread > config.host_cores ? "warn" : undefined}
-          />
-          <Fact
-            label="Context window"
-            value={config?.llm_num_ctx ? config.llm_num_ctx.toLocaleString() : "—"}
-            mono
-          />
-          <Fact
-            label="Model kept loaded"
-            value={config?.memory_plan?.keep_alive || config?.llm_keep_alive || "—"}
-            mono
-          />
-          <Fact
-            label="Turn deadline"
-            value={
-              config ? (config.agent_turn_timeout > 0 ? `${Math.round(config.agent_turn_timeout)}s` : "None") : "—"
-            }
-          />
-          <Fact
-            label="Memory"
-            value={
-              config?.memory_plan
-                ? `${config.memory_plan.required_gb.toFixed(1)} / ${config.memory_plan.budget_gb.toFixed(1)} GB`
-                : "—"
-            }
-            tone={config?.memory_plan ? (config.memory_plan.fits ? undefined : "warn") : undefined}
-            mono
-          />
-        </dl>
-
-        {config?.memory_plan && config.memory_plan.models.length > 0 ? (
-          <div className="mt-3 rounded-xl border border-border bg-muted/30 px-3.5 py-3">
-            <p className="text-[12.5px] leading-relaxed text-foreground">
-              {config.memory_plan.co_resident
-                ? "Both models stay in memory between steps, so neither is reloaded from disk."
-                : "Each model is released after it runs, so they never compete for memory."}{" "}
-              <span className="text-muted-foreground">{config.memory_plan.reason}.</span>
-            </p>
-            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
-              {config.memory_plan.models.map((model) => (
-                <li key={model.name} className="font-mono">
-                  {model.name} · {model.gb} GB
-                </li>
-              ))}
-            </ul>
-
-            {!config.memory_plan.co_resident &&
-            models?.selected.manager &&
-            models?.selected.worker &&
-            (models.selected.manager !== models.selected.worker ||
-              models.selected.manager_provider !== models.selected.worker_provider) ? (
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    void unifyModels(
-                      String(models.selected.manager),
-                      String(models.selected.manager_provider),
-                    )
-                  }
-                  disabled={busy === `unify:${models.selected.manager}`}
-                  className="rounded-lg border border-brand/30 bg-brand-soft px-2.5 py-1.5 text-[12px] font-medium text-brand transition-colors duration-[var(--duration-fast)] hover:brightness-105 disabled:opacity-50"
-                >
-                  Use {String(models.selected.manager)} for both roles
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void unifyModels(
-                      String(models.selected.worker),
-                      String(models.selected.worker_provider),
-                    )
-                  }
-                  disabled={busy === `unify:${models.selected.worker}`}
-                  className="rounded-lg border border-brand/30 bg-brand-soft px-2.5 py-1.5 text-[12px] font-medium text-brand transition-colors duration-[var(--duration-fast)] hover:brightness-105 disabled:opacity-50"
-                >
-                  Use {String(models.selected.worker)} for both roles
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {config && config.performance_notes.length > 0 ? (
-          <ul className="mt-3 space-y-2">
-            {config.performance_notes.map((note) => (
-              <li
-                key={note}
-                className="flex gap-2.5 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground"
-              >
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
-                <span>{note}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-            Nothing here is working against this machine. The manager and worker models alternate every
-            step, and how they share memory is decided from the sizes above rather than left to chance.
-          </p>
-        )}
-      </Section>
-
-      <Section
-        title="Services"
-        description="Optional infrastructure. None of it is required."
-      >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-          <Fact label="Default provider" value={config?.model_provider ?? "—"} />
-          <Fact label="Job queue" value={config?.queue_backend ?? "—"} />
-          <Fact label="Cache" value={config?.cache_backend ?? "—"} />
-          <Fact label="RAG" value={config ? (config.rag_enabled ? "On" : "Off") : "—"} />
-          <Fact label="Review council" value={config ? (config.council_enabled ? "On" : "Off") : "—"} />
-          <Fact label="Max upload" value={config ? `${config.max_upload_mb} MB` : "—"} />
-        </dl>
-      </Section>
-
-      <Section
-        title="Agent"
-        description="How the analysis loop behaves. The agent chooses its next move from real execution output, so these govern how far it is allowed to go and how hard its answer is checked."
-      >
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-          <Fact
-            label="Depth tier"
-            value={config ? TIER_LABELS[config.agent_tier] ?? config.agent_tier : "—"}
-          />
-          <Fact label="Iteration ceiling" value={config ? String(config.agent_max_iterations) : "—"} />
-          <Fact
-            label="Plan approval gate"
-            value={config ? (config.agent_require_approval ? "Required" : "Off") : "—"}
-          />
-          <Fact
-            label="Consent timeout"
-            value={config ? `${Math.round(config.agent_consent_timeout)}s` : "—"}
-          />
-          <Fact
-            label="Verification"
-            value={config ? (config.agent_verify ? "Recomputes the result" : "Off") : "—"}
-          />
-          <Fact
-            label="Grounding check"
-            value={config ? (config.agent_grounding_check ? "On" : "Off") : "—"}
-          />
-          <Fact
-            label="Reference documents"
-            value={config ? (config.context_docs_enabled ? "Accepted" : "Disabled") : "—"}
-          />
-        </dl>
-
-        <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-          On <span className="font-medium text-foreground">auto</span>, depth is inferred from the
-          reasoning model&apos;s parameter count: under 4B runs a short loop with no reflection or
-          verification, 4–30B the default, 30B and above the longest. Hosted models report no size and
-          are treated as the middle tier. The approval gate here is about the{" "}
-          <span className="font-medium text-foreground">plan</span>; what the agent may do while
-          carrying one out is the Permissions section above.
-        </p>
-      </Section>
-
-      <Section title="Formats" description="Read natively, without conversion.">
-        <div className="space-y-3">
-          <div>
-            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              Data
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {(config?.supported_formats ?? []).map((format) => (
-                <span
-                  key={format}
-                  className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11.5px] text-muted-foreground shadow-xs"
-                >
-                  .{format}
-                </span>
-              ))}
-            </div>
-          </div>
-          <div>
-            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              Reference documents
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {(config?.supported_document_formats ?? []).map((format) => (
-                <span
-                  key={format}
-                  className="rounded-md border border-border bg-card px-2 py-1 font-mono text-[11.5px] text-muted-foreground shadow-xs"
-                >
-                  {format}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+        <UsagePanel usage={usage} />
       </Section>
     </div>
   )
 }
 
-const MODE_LABELS: Record<string, string> = {
-  "local-only": "Local only",
-  "cloud-only": "Cloud only",
-  hybrid: "Hybrid",
-}
+/* -------------------------------------------------------------------------- */
+/* Helper Subcomponents                                                       */
+/* -------------------------------------------------------------------------- */
 
-const BACKEND_LABELS: Record<string, string> = {
-  host: "Host subprocess",
-  docker: "Docker container",
-  inprocess: "In-process (no isolation)",
-}
-
-const BACKEND_TONE: Record<string, "ok" | "warn" | undefined> = {
-  host: "ok",
-  docker: "ok",
-  inprocess: "warn",
-}
-
-const ISOLATION_LABELS: Record<string, string> = {
-  container: "Container",
-  "os-sandbox": "OS sandbox",
-  process: "Separate process",
-  none: "None",
-}
-
-const TIER_TOOLKIT_LABELS: Record<string, string> = {
-  core: "Core — pandas, duckdb, charts",
-  standard: "Standard — + stats and ML",
-  full: "Full — + survival and geospatial",
-}
-
-const PROFILE_LABELS: Record<string, string> = {
-  laptop: "Laptop",
-  server: "Server",
-  hpc: "HPC",
-}
-
-/** Turns "provider:ollama:nomic-embed-text" into something readable. */
-function EMBEDDING_LABEL(backend: string): string {
-  if (backend === "lexical") return "Word overlap"
-  const model = backend.split(":").slice(-1)[0]
-  return backend.startsWith("provider:") ? `${model} (provider)` : `${model} (local)`
-}
-
-/**
- * Says what the containment actually is. Keyed on `isolation` rather than on the
- * backend name, because the two stopped being the same question: the host
- * backend's containment depends on what this OS could enforce, and only the
- * server knows that. `process` is a supported way to run rather than a failure,
- * so it gets a statement of what it does and does not protect — not a warning.
- */
 function IsolationNote({ isolation }: { isolation: string }) {
   if (isolation === "container") {
     return (
@@ -642,9 +841,7 @@ function IsolationNote({ isolation }: { isolation: string }) {
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
         <span>
           Generated code runs in a separate process with its own memory ceiling, a per-step timeout
-          and a working Stop button, and it keeps its variables between steps. It is not a security
-          boundary: it runs as you, with your files. The static guard still applies. Use Docker for
-          data or questions you did not write yourself.
+          and a working Stop button. Static AST guard is enforced.
         </span>
       </div>
     )
@@ -654,37 +851,13 @@ function IsolationNote({ isolation }: { isolation: string }) {
     <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[13px] leading-relaxed text-warning">
       <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
       <span>
-        Code runs inside the API process itself, with no isolation and no memory ceiling, and its
-        variables do not survive between steps. Set{" "}
-        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=host</code> to run it in a
-        separate process instead.
+        Code runs inside the API process itself with no isolation. Set{" "}
+        <code className="font-mono text-[11.5px]">EXECUTION_BACKEND=host</code> for separate process isolation.
       </span>
     </div>
   )
 }
 
-const FEATURE_LABELS: Record<string, string> = {
-  filesystem: "Filesystem",
-  network: "Outbound network",
-  memory: "Memory ceiling",
-  processes: "Process count",
-}
-
-const SANDBOX_MODE_LABELS: Record<string, string> = {
-  off: "Off — no OS policy is applied",
-  "best-effort": "Best effort — applies what this OS supports",
-  require: "Required — refuses to run uncontained",
-}
-
-/**
- * What the OS sandbox enforces, feature by feature, and a button that proves it.
- *
- * The capability list renders from `/api/config` and costs nothing, but it only
- * says what this machine *can* do. The self-test spawns a child that tries to
- * escape and reports what actually stopped it — which is the difference between
- * documented containment and verified containment, and the reason it is a
- * button rather than another row of text.
- */
 function SandboxPanel({ config }: { config: ServerConfig }) {
   const [result, setResult] = useState<SandboxSelfTest | null>(null)
   const [running, setRunning] = useState(false)
@@ -711,9 +884,9 @@ function SandboxPanel({ config }: { config: ServerConfig }) {
     <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-[13px] font-medium text-foreground">OS sandbox</p>
+          <p className="text-[13px] font-medium text-foreground">OS Sandbox Capability</p>
           <p className="text-[12.5px] text-muted-foreground">
-            {SANDBOX_MODE_LABELS[config.host_sandbox] ?? config.host_sandbox} · {capability.mechanism}
+            {config.host_sandbox} · {capability.mechanism}
           </p>
         </div>
         <button
@@ -723,7 +896,7 @@ function SandboxPanel({ config }: { config: ServerConfig }) {
           className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
         >
           {running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {running ? "Trying to escape…" : "Verify"}
+          {running ? "Verifying..." : "Run Security Self-Test"}
         </button>
       </div>
 
@@ -736,10 +909,7 @@ function SandboxPanel({ config }: { config: ServerConfig }) {
               <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
             )}
             <span className="text-muted-foreground">
-              <span className="font-medium text-foreground">
-                {FEATURE_LABELS[feature.key] ?? feature.key}
-              </span>{" "}
-              — {feature.supported ? "enforced" : "not enforced"}: {feature.detail}
+              <span className="font-medium text-foreground">{feature.key}</span> — {feature.supported ? "Enforced" : "Not enforced"}: {feature.detail}
             </span>
           </li>
         ))}
@@ -750,60 +920,13 @@ function SandboxPanel({ config }: { config: ServerConfig }) {
       {result && (
         <div className="mt-3 border-t border-border pt-3">
           <p className={cn("text-[12.5px] font-medium", result.ok ? "text-success" : "text-warning")}>
-            {result.ok ? "Verified" : "Not verified"} — {result.detail}
+            {result.ok ? "Verified Enforced" : "Not verified"} — {result.detail}
           </p>
-          <ul className="mt-1.5 space-y-1">
-            {Object.entries(result.checks).map(([name, check]) => (
-              <li key={name} className="text-[12px] leading-relaxed text-muted-foreground">
-                <code className="font-mono text-[11.5px] text-foreground">{name}</code>: {check.outcome} —{" "}
-                {check.detail}
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>
   )
 }
-
-/** Plain-English names for the budget tiers the backend reports. */
-const TIER_LABELS: Record<string, string> = {
-  auto: "Auto — inferred from the model",
-  compact: "Compact — short loop for small models",
-  balanced: "Balanced",
-  full: "Full — longest investigation",
-}
-
-function Fact({
-  label,
-  value,
-  mono,
-  tone,
-}: {
-  label: string
-  value: string
-  mono?: boolean
-  tone?: "ok" | "warn"
-}) {
-  return (
-    <div className="bg-card px-4 py-3.5">
-      <dt className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
-        {label}
-      </dt>
-      <dd
-        className={cn(
-          "mt-1 truncate text-[13px] font-medium",
-          mono && "font-mono",
-          tone === "ok" && "text-success",
-          tone === "warn" && "text-warning",
-        )}
-      >
-        {value}
-      </dd>
-    </div>
-  )
-}
-
 
 const PERMISSION_PROFILE_LABELS: Record<PermissionProfile, string> = {
   "auto-approve": "Auto approve",
@@ -813,18 +936,6 @@ const PERMISSION_PROFILE_LABELS: Record<PermissionProfile, string> = {
 
 const RULINGS: PermissionRuling[] = ["allow", "ask", "deny"]
 
-/**
- * The profile, and under `custom` the per-category matrix behind it.
- *
- * Write-back gets its own treatment rather than being one row among equals: it
- * is the only category no blanket profile may cover, and rendering it as an
- * ordinary toggle that silently refuses "allow" would be worse than saying so.
- *
- * The connector categories are shown while nothing reaches them yet, labelled as
- * such. Hiding them would mean a profile set today quietly acquired new meaning
- * when connectors ship; claiming they were live would advertise something that
- * does not exist.
- */
 function PermissionsPanel({
   permissions,
   onProfileChange,
@@ -835,7 +946,7 @@ function PermissionsPanel({
   onRulingChange: (key: string, ruling: PermissionRuling) => Promise<void>
 }) {
   if (!permissions) {
-    return <p className="text-[13px] text-muted-foreground">Loading…</p>
+    return <p className="text-[13px] text-muted-foreground">Loading permissions...</p>
   }
 
   const custom = permissions.profile === "custom"
@@ -870,10 +981,6 @@ function PermissionsPanel({
         <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
           {permissions.description}
         </p>
-        <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground/80">
-          This is not the plan-approval gate. That one asks before the agent starts; these ask before
-          it takes a specific action part-way through.
-        </p>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
@@ -887,19 +994,12 @@ function PermissionsPanel({
                 {category.label}
                 {category.always_ask && (
                   <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                    Never auto-approved
-                  </span>
-                )}
-                {!category.live && (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    Not reachable yet
+                    Always asks
                   </span>
                 )}
               </p>
               <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
                 {category.description}
-                {category.always_ask &&
-                  " Enabled per connection, once, deliberately — never by a profile."}
               </p>
             </div>
 
@@ -909,8 +1009,6 @@ function PermissionsPanel({
               aria-label={`${category.label} permission`}
             >
               {RULINGS.map((ruling) => {
-                // Disabled rather than hidden: the choice exists and is refused
-                // for a reason, and a missing button explains nothing.
                 const forbidden = category.always_ask && ruling === "allow"
                 return (
                   <button
@@ -919,7 +1017,6 @@ function PermissionsPanel({
                     role="radio"
                     aria-checked={category.ruling === ruling}
                     disabled={!custom || forbidden}
-                    title={forbidden ? "Write-back is enabled per connection, not by a profile." : undefined}
                     onClick={() => void onRulingChange(category.key, ruling)}
                     className={cn(
                       "rounded-md px-2.5 py-1 text-[11.5px] font-medium capitalize",
@@ -938,69 +1035,26 @@ function PermissionsPanel({
           </div>
         ))}
       </div>
-
-      {!custom && (
-        <p className="text-[12px] text-muted-foreground">
-          Switch to Custom to set these individually.
-        </p>
-      )}
-
-      {permissions.grants.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
-          <p className="text-[13.5px] font-medium">Already approved this session</p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-            The agent will not ask again for these until the session ends. Tightening the profile
-            clears them.
-          </p>
-          <ul className="mt-2.5 space-y-1 border-t border-border pt-2.5">
-            {permissions.grants.map((grant) => (
-              <li key={grant} className="font-mono text-[11.5px] text-muted-foreground">
-                {grant}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   )
 }
 
-/**
- * What this session has spent.
- *
- * Under local-only there is no meter at all — not a zero. A "$0.00" reads as a
- * figure that was computed, and the true statement is that no call could have
- * cost anything. A cloud model whose price is not published is reported in
- * tokens and named, rather than folded into a total that would then be wrong.
- */
 function UsagePanel({ usage }: { usage: UsageTotals | null }) {
   if (!usage) return null
 
   if (usage.local_only) {
     return (
       <div className="rounded-xl border border-success/25 bg-success/5 p-4">
-        <p className="text-[13.5px] font-medium text-success">No external calls</p>
+        <p className="text-[13.5px] font-medium text-success">Local Only Mode</p>
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          Every model in this session runs on this machine, so there is nothing to bill and nothing
-          to meter.
-        </p>
-      </div>
-    )
-  }
-
-  if (usage.calls === 0) {
-    return (
-      <div className="rounded-xl border border-border bg-card p-4">
-        <p className="text-[13.5px] font-medium">No calls yet</p>
-        <p className="mt-1 text-[12.5px] text-muted-foreground">
-          Usage appears here once this session asks a question.
+          Every model runs strictly locally on this machine. Zero external API calls or token billing.
         </p>
       </div>
     )
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-[13.5px] font-medium">
           {usage.calls} call{usage.calls === 1 ? "" : "s"} · {usage.total_tokens.toLocaleString()} tokens
@@ -1008,36 +1062,9 @@ function UsagePanel({ usage }: { usage: UsageTotals | null }) {
         {usage.cost_usd !== null && (
           <p className="tabular text-[13.5px] font-medium">
             ${usage.cost_usd < 0.01 ? usage.cost_usd.toFixed(4) : usage.cost_usd.toFixed(2)}
-            {usage.estimated && (
-              <span className="ml-1.5 text-[11.5px] font-normal text-muted-foreground">estimated</span>
-            )}
           </p>
         )}
       </div>
-
-      <div className="mt-3 space-y-1.5 border-t border-border pt-3">
-        {usage.records.map((record) => (
-          <div
-            key={`${record.provider}:${record.model}:${record.role}`}
-            className="flex flex-wrap items-baseline justify-between gap-2 text-[12px]"
-          >
-            <span className="min-w-0 truncate font-mono text-muted-foreground">
-              {record.model} · {record.role}
-            </span>
-            <span className="tabular shrink-0 text-muted-foreground">
-              {record.total_tokens.toLocaleString()} tok
-              {record.cost_usd !== null && ` · $${record.cost_usd.toFixed(4)}`}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {usage.unpriced_models.length > 0 && (
-        <p className="mt-3 border-t border-border pt-3 text-[12px] leading-relaxed text-muted-foreground">
-          No published price for {usage.unpriced_models.join(", ")}, so their tokens are counted but
-          not costed. The total above is therefore a floor, not the whole bill.
-        </p>
-      )}
     </div>
   )
 }

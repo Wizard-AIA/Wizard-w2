@@ -27,6 +27,7 @@ from src.api.schemas import (
     ProvidersResponse,
     ServerConfig,
     SessionResponse,
+    UpdateConfigPayload,
     UsageResponse,
 )
 from src.config import settings
@@ -227,7 +228,229 @@ async def server_config() -> ServerConfig:
         performance_notes=performance_notes(),
         data_mode=settings.data_mode,
         data_schema_only=settings.DATA_SCHEMA_ONLY,
+        temperature=settings.TEMPERATURE,
+        max_tokens=settings.MAX_TOKENS,
+        subagent_enabled=settings.SUBAGENT_ENABLED,
+        subagent_max_iterations=settings.SUBAGENT_MAX_ITERATIONS,
+        agent_emit_script=settings.AGENT_EMIT_SCRIPT,
+        ollama_base_url=settings.OLLAMA_BASE_URL,
+        lmstudio_base_url=settings.LMSTUDIO_BASE_URL,
+        openai_base_url=settings.OPENAI_BASE_URL,
+        anthropic_base_url=settings.ANTHROPIC_BASE_URL,
+        gemini_base_url=settings.GEMINI_BASE_URL,
+        host_sandbox_network=settings.HOST_SANDBOX_NETWORK,
     )
+
+
+def _persist_env_file(updates: dict[str, str]) -> None:
+    """Safely updates or appends key-value pairs in the .env file."""
+    from pathlib import Path
+
+    env_paths = [
+        settings.BASE_DIR / "backend" / ".env",
+        settings.BASE_DIR / ".env",
+        Path.cwd() / "backend" / ".env",
+        Path.cwd() / ".env",
+    ]
+    target_path = next((p for p in env_paths if p.is_file()), env_paths[0])
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+    if target_path.exists():
+        try:
+            lines = target_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            lines = []
+
+    remaining_updates = dict(updates)
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            k, _ = stripped.split("=", 1)
+            k = k.strip()
+            if k in remaining_updates:
+                val = remaining_updates.pop(k)
+                new_lines.append(f"{k}={val}")
+                continue
+        new_lines.append(line)
+
+    for k, val in remaining_updates.items():
+        new_lines.append(f"{k}={val}")
+
+    try:
+        target_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Could not write .env update to disk", error=str(exc), path=str(target_path))
+
+
+@router.patch("/api/config", response_model=ServerConfig, dependencies=[Depends(require_api_key)])
+@router.post("/api/config", response_model=ServerConfig, dependencies=[Depends(require_api_key)])
+async def update_server_config(
+    payload: UpdateConfigPayload,
+    credentials: CredentialStore = Depends(get_credential_store),
+) -> ServerConfig:
+    """Mutates runtime configuration and persists updates to .env and credentials."""
+    env_updates: dict[str, str] = {}
+
+    if payload.execution_backend is not None:
+        settings.EXECUTION_BACKEND = payload.execution_backend
+        os.environ["EXECUTION_BACKEND"] = payload.execution_backend
+        env_updates["EXECUTION_BACKEND"] = payload.execution_backend
+
+    if payload.host_sandbox is not None:
+        settings.HOST_SANDBOX = payload.host_sandbox
+        os.environ["HOST_SANDBOX"] = payload.host_sandbox
+        env_updates["HOST_SANDBOX"] = payload.host_sandbox
+
+    if payload.host_sandbox_network is not None:
+        settings.HOST_SANDBOX_NETWORK = payload.host_sandbox_network
+        os.environ["HOST_SANDBOX_NETWORK"] = payload.host_sandbox_network
+        env_updates["HOST_SANDBOX_NETWORK"] = payload.host_sandbox_network
+
+    if payload.sandbox_tier is not None:
+        settings.SANDBOX_TIER = payload.sandbox_tier
+        os.environ["SANDBOX_TIER"] = payload.sandbox_tier
+        env_updates["SANDBOX_TIER"] = payload.sandbox_tier
+
+    if payload.sandbox_mem_limit is not None:
+        settings.SANDBOX_MEM_LIMIT = payload.sandbox_mem_limit
+        os.environ["SANDBOX_MEM_LIMIT"] = payload.sandbox_mem_limit
+        env_updates["SANDBOX_MEM_LIMIT"] = payload.sandbox_mem_limit
+
+    if payload.max_upload_mb is not None:
+        settings.MAX_UPLOAD_BYTES = payload.max_upload_mb * 1024 * 1024
+        os.environ["MAX_UPLOAD_BYTES"] = str(settings.MAX_UPLOAD_BYTES)
+        env_updates["MAX_UPLOAD_BYTES"] = str(settings.MAX_UPLOAD_BYTES)
+
+    if payload.plot_format is not None:
+        settings.PLOT_FORMAT = payload.plot_format
+        os.environ["PLOT_FORMAT"] = payload.plot_format
+        env_updates["PLOT_FORMAT"] = payload.plot_format
+
+    if payload.agent_tier is not None:
+        settings.AGENT_TIER = payload.agent_tier
+        os.environ["AGENT_TIER"] = payload.agent_tier
+        env_updates["AGENT_TIER"] = payload.agent_tier
+
+    if payload.agent_max_iterations is not None:
+        settings.AGENT_MAX_ITERATIONS = payload.agent_max_iterations
+        os.environ["AGENT_MAX_ITERATIONS"] = str(payload.agent_max_iterations)
+        env_updates["AGENT_MAX_ITERATIONS"] = str(payload.agent_max_iterations)
+
+    if payload.agent_turn_timeout is not None:
+        settings.AGENT_TURN_TIMEOUT = payload.agent_turn_timeout
+        os.environ["AGENT_TURN_TIMEOUT"] = str(payload.agent_turn_timeout)
+        env_updates["AGENT_TURN_TIMEOUT"] = str(payload.agent_turn_timeout)
+
+    if payload.agent_require_approval is not None:
+        settings.AGENT_REQUIRE_APPROVAL = payload.agent_require_approval
+        os.environ["AGENT_REQUIRE_APPROVAL"] = str(payload.agent_require_approval).lower()
+        env_updates["AGENT_REQUIRE_APPROVAL"] = str(payload.agent_require_approval).lower()
+
+    if payload.agent_verify is not None:
+        settings.AGENT_VERIFY = payload.agent_verify
+        os.environ["AGENT_VERIFY"] = str(payload.agent_verify).lower()
+        env_updates["AGENT_VERIFY"] = str(payload.agent_verify).lower()
+
+    if payload.agent_grounding_check is not None:
+        settings.AGENT_GROUNDING_CHECK = payload.agent_grounding_check
+        os.environ["AGENT_GROUNDING_CHECK"] = str(payload.agent_grounding_check).lower()
+        env_updates["AGENT_GROUNDING_CHECK"] = str(payload.agent_grounding_check).lower()
+
+    if payload.agent_emit_script is not None:
+        settings.AGENT_EMIT_SCRIPT = payload.agent_emit_script
+        os.environ["AGENT_EMIT_SCRIPT"] = str(payload.agent_emit_script).lower()
+        env_updates["AGENT_EMIT_SCRIPT"] = str(payload.agent_emit_script).lower()
+
+    if payload.subagent_enabled is not None:
+        settings.SUBAGENT_ENABLED = payload.subagent_enabled
+        os.environ["SUBAGENT_ENABLED"] = str(payload.subagent_enabled).lower()
+        env_updates["SUBAGENT_ENABLED"] = str(payload.subagent_enabled).lower()
+
+    if payload.subagent_max_iterations is not None:
+        settings.SUBAGENT_MAX_ITERATIONS = payload.subagent_max_iterations
+        os.environ["SUBAGENT_MAX_ITERATIONS"] = str(payload.subagent_max_iterations)
+        env_updates["SUBAGENT_MAX_ITERATIONS"] = str(payload.subagent_max_iterations)
+
+    if payload.temperature is not None:
+        settings.TEMPERATURE = payload.temperature
+        os.environ["TEMPERATURE"] = str(payload.temperature)
+        env_updates["TEMPERATURE"] = str(payload.temperature)
+
+    if payload.max_tokens is not None:
+        settings.MAX_TOKENS = payload.max_tokens
+        os.environ["MAX_TOKENS"] = str(payload.max_tokens)
+        env_updates["MAX_TOKENS"] = str(payload.max_tokens)
+
+    if payload.llm_num_thread is not None:
+        settings.LLM_NUM_THREAD = payload.llm_num_thread
+        os.environ["LLM_NUM_THREAD"] = str(payload.llm_num_thread)
+        env_updates["LLM_NUM_THREAD"] = str(payload.llm_num_thread)
+
+    if payload.llm_num_ctx is not None:
+        settings.LLM_NUM_CTX = payload.llm_num_ctx
+        os.environ["LLM_NUM_CTX"] = str(payload.llm_num_ctx)
+        env_updates["LLM_NUM_CTX"] = str(payload.llm_num_ctx)
+
+    if payload.llm_keep_alive is not None:
+        settings.LLM_KEEP_ALIVE = payload.llm_keep_alive
+        os.environ["LLM_KEEP_ALIVE"] = payload.llm_keep_alive
+        env_updates["LLM_KEEP_ALIVE"] = payload.llm_keep_alive
+
+    if payload.rag_enabled is not None:
+        settings.RAG_ENABLED = payload.rag_enabled
+        os.environ["RAG_ENABLED"] = str(payload.rag_enabled).lower()
+        env_updates["RAG_ENABLED"] = str(payload.rag_enabled).lower()
+
+    if payload.ollama_base_url is not None:
+        settings.OLLAMA_BASE_URL = payload.ollama_base_url
+        os.environ["OLLAMA_BASE_URL"] = payload.ollama_base_url
+        env_updates["OLLAMA_BASE_URL"] = payload.ollama_base_url
+
+    if payload.lmstudio_base_url is not None:
+        settings.LMSTUDIO_BASE_URL = payload.lmstudio_base_url
+        os.environ["LMSTUDIO_BASE_URL"] = payload.lmstudio_base_url
+        env_updates["LMSTUDIO_BASE_URL"] = payload.lmstudio_base_url
+
+    if payload.openai_base_url is not None:
+        settings.OPENAI_BASE_URL = payload.openai_base_url
+        os.environ["OPENAI_BASE_URL"] = payload.openai_base_url
+        env_updates["OPENAI_BASE_URL"] = payload.openai_base_url
+
+    if payload.openai_api_key is not None:
+        settings.OPENAI_API_KEY = payload.openai_api_key
+        os.environ["OPENAI_API_KEY"] = payload.openai_api_key
+        credentials.set_key("openai", payload.openai_api_key)
+        env_updates["OPENAI_API_KEY"] = payload.openai_api_key
+
+    if payload.anthropic_base_url is not None:
+        settings.ANTHROPIC_BASE_URL = payload.anthropic_base_url
+        os.environ["ANTHROPIC_BASE_URL"] = payload.anthropic_base_url
+        env_updates["ANTHROPIC_BASE_URL"] = payload.anthropic_base_url
+
+    if payload.anthropic_api_key is not None:
+        settings.ANTHROPIC_API_KEY = payload.anthropic_api_key
+        os.environ["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
+        credentials.set_key("anthropic", payload.anthropic_api_key)
+        env_updates["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
+
+    if payload.gemini_base_url is not None:
+        settings.GEMINI_BASE_URL = payload.gemini_base_url
+        os.environ["GEMINI_BASE_URL"] = payload.gemini_base_url
+        env_updates["GEMINI_BASE_URL"] = payload.gemini_base_url
+
+    if payload.gemini_api_key is not None:
+        settings.GEMINI_API_KEY = payload.gemini_api_key
+        os.environ["GEMINI_API_KEY"] = payload.gemini_api_key
+        credentials.set_key("gemini", payload.gemini_api_key)
+        env_updates["GEMINI_API_KEY"] = payload.gemini_api_key
+
+    if env_updates:
+        _persist_env_file(env_updates)
+
+    return await server_config()
 
 
 #: What schema-only withholds, in the words the UI shows. Kept beside the code

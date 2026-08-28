@@ -1,18 +1,17 @@
 "use client"
 
 import { AlertTriangle, Database, PanelRight, Plus, ShieldAlert, WifiOff } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
-import { ArtifactsPanel, type ArtifactTab } from "@/components/chat/artifacts-panel"
+import { ArtifactsPanel } from "@/components/chat/artifacts-panel"
 import { Composer } from "@/components/chat/composer"
 import { Message } from "@/components/chat/message"
 import { ModelPicker } from "@/components/chat/model-picker"
-import { api, clearStoredSessionId } from "@/lib/api"
-import type { AnalysisMode, Artifact, DatasetSummary, ServerConfig } from "@/lib/types"
-import { useChatStream } from "@/lib/use-chat-stream"
+import type { AnalysisMode, Artifact } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
+import { useWorkspace } from "@/lib/workspace-context"
 
 /*
   Openers are phrased as things an analyst would actually type, and each one
@@ -43,35 +42,29 @@ const OPENERS = [
 ] as const
 
 export function ChatShell() {
-  const [config, setConfig] = useState<ServerConfig | null>(null)
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([])
-  const [activeDataset, setActiveDataset] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
   const [mode, setMode] = useState<AnalysisMode>("auto")
-
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [panelTab, setPanelTab] = useState<ArtifactTab>("chart")
-  const [chartVersion, setChartVersion] = useState(0)
-  const [chartImage, setChartImage] = useState<string | null>(null)
-
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedToBottom = useRef(true)
   const { playSound } = useSound()
 
-  const onArtifact = useCallback((artifact: Artifact) => {
-    if (artifact.kind === "plot_html") {
-      setChartImage(null)
-      setChartVersion((value) => value + 1)
-      setPanelTab("chart")
-      setPanelOpen(true)
-    } else if (artifact.kind === "plot_png" && artifact.data) {
-      setChartImage(`data:image/png;base64,${artifact.data}`)
-      setChartVersion((value) => value + 1)
-      setPanelTab("chart")
-      setPanelOpen(true)
-    }
-  }, [])
+  const {
+    config,
+    datasets,
+    activeDataset,
+    activeSummary,
+    uploading,
+    uploadError,
+    panelOpen,
+    setPanelOpen,
+    panelTab,
+    setPanelTab,
+    chartVersion,
+    chartImage,
+    uploadDataset,
+    activateDataset,
+    newChat,
+    chat,
+  } = useWorkspace()
 
   const {
     messages,
@@ -81,24 +74,14 @@ export function ChatShell() {
     respondToApproval,
     clearSkillCandidate,
     cancel,
-    clear,
-  } = useChatStream({ onArtifact })
+  } = chat
 
-  const refreshSession = useCallback(async () => {
-    try {
-      const session = await api.session()
-      setDatasets(session.datasets)
-      setActiveDataset(session.active_dataset)
-    } catch {
-      setDatasets([])
-      setActiveDataset(null)
+  const onArtifact = useCallback((artifact: Artifact) => {
+    if (artifact.kind === "plot_html" || artifact.kind === "plot_png") {
+      setPanelTab("chart")
+      setPanelOpen(true)
     }
-  }, [])
-
-  useEffect(() => {
-    void api.config().then(setConfig).catch(() => setConfig(null))
-    void refreshSession()
-  }, [refreshSession])
+  }, [setPanelOpen, setPanelTab])
 
   // Follow the stream, but stop fighting the user if they scroll up to read.
   useEffect(() => {
@@ -114,33 +97,6 @@ export function ChatShell() {
     pinnedToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120
   }, [])
 
-  const handleUpload = useCallback(
-    async (file: File) => {
-      setUploading(true)
-      setUploadError(null)
-      try {
-        await api.upload(file)
-        await refreshSession()
-        setPanelTab("data")
-        setPanelOpen(true)
-        playSound("click")
-      } catch (exception) {
-        setUploadError(exception instanceof Error ? exception.message : "Upload failed.")
-      } finally {
-        setUploading(false)
-      }
-    },
-    [playSound, refreshSession],
-  )
-
-  const handleActivateDataset = useCallback(
-    async (name: string) => {
-      await api.activateDataset(name)
-      await refreshSession()
-    },
-    [refreshSession],
-  )
-
   const handleSend = useCallback(
     (content: string, sendMode: AnalysisMode) => {
       playSound("click")
@@ -149,26 +105,7 @@ export function ChatShell() {
     [playSound, sendMessage],
   )
 
-  const handleNewChat = useCallback(async () => {
-    playSound("click")
-    clear()
-    setChartVersion(0)
-    setChartImage(null)
-    setPanelOpen(false)
-    try {
-      await api.deleteSession()
-    } catch {
-      // The session may already be gone; a fresh id is minted on the next call.
-    }
-    clearStoredSessionId()
-    await refreshSession()
-  }, [clear, playSound, refreshSession])
-
   const hasData = Boolean(activeDataset)
-  const activeSummary = useMemo(
-    () => datasets.find((dataset) => dataset.name === activeDataset) ?? null,
-    [datasets, activeDataset],
-  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col text-foreground">
@@ -176,7 +113,7 @@ export function ChatShell() {
         <div className="flex min-w-0 items-center gap-1 pl-11 md:pl-0">
           <button
             type="button"
-            onClick={() => void handleNewChat()}
+            onClick={() => void newChat()}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:bg-muted hover:text-foreground"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -229,7 +166,7 @@ export function ChatShell() {
 
           <button
             type="button"
-            onClick={() => setPanelOpen((value) => !value)}
+            onClick={() => setPanelOpen(!panelOpen)}
             aria-label="Toggle workspace panel"
             aria-pressed={panelOpen}
             className={cn(
@@ -281,7 +218,7 @@ export function ChatShell() {
         <Composer
           onSend={handleSend}
           onStop={cancel}
-          onUpload={(file) => void handleUpload(file)}
+          onUpload={(file) => void uploadDataset(file)}
           isRunning={isRunning}
           isUploading={uploading}
           hasData={hasData}
@@ -300,7 +237,7 @@ export function ChatShell() {
         chartImage={chartImage}
         datasets={datasets}
         activeDataset={activeDataset}
-        onActivateDataset={(name) => void handleActivateDataset(name)}
+        onActivateDataset={(name) => void activateDataset(name)}
       />
     </div>
   )

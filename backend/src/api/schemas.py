@@ -116,6 +116,52 @@ class ServerConfig(BaseModel):
     host_ram_gb: float | None = None
     sandbox_mem_limit: str = ""
     max_sessions: int = 0
+    temperature: float = 0.0
+    max_tokens: int = 4096
+    subagent_enabled: bool = True
+    subagent_max_iterations: int = 3
+    agent_emit_script: bool = True
+    ollama_base_url: str = ""
+    lmstudio_base_url: str = ""
+    openai_base_url: str = ""
+    anthropic_base_url: str = ""
+    gemini_base_url: str = ""
+    host_sandbox_network: str = "deny"
+
+
+class UpdateConfigPayload(BaseModel):
+    """Payload to update runtime environment and loop configuration."""
+
+    execution_backend: Literal["host", "docker", "inprocess"] | None = None
+    host_sandbox: Literal["off", "best-effort", "require"] | None = None
+    host_sandbox_network: Literal["deny", "allow"] | None = None
+    sandbox_tier: Literal["core", "standard", "full"] | None = None
+    sandbox_mem_limit: str | None = None
+    max_upload_mb: int | None = None
+    plot_format: Literal["png", "html"] | None = None
+    agent_tier: Literal["auto", "compact", "balanced", "full"] | None = None
+    agent_max_iterations: int | None = None
+    agent_turn_timeout: float | None = None
+    agent_require_approval: bool | None = None
+    agent_verify: bool | None = None
+    agent_grounding_check: bool | None = None
+    agent_emit_script: bool | None = None
+    subagent_enabled: bool | None = None
+    subagent_max_iterations: int | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    llm_num_thread: int | None = None
+    llm_num_ctx: int | None = None
+    llm_keep_alive: str | None = None
+    rag_enabled: bool | None = None
+    ollama_base_url: str | None = None
+    lmstudio_base_url: str | None = None
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+    anthropic_base_url: str | None = None
+    anthropic_api_key: str | None = None
+    gemini_base_url: str | None = None
+    gemini_api_key: str | None = None
 
 
 class SessionResponse(BaseModel):

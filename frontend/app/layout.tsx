@@ -4,6 +4,7 @@ import type { Metadata, Viewport } from "next"
 import type React from "react"
 
 import { AppShell } from "@/components/app-shell"
+import { WorkspaceProvider } from "@/lib/workspace-context"
 
 import "./globals.css"
 
@@ -59,7 +60,9 @@ export default function RootLayout({
       <body className="font-sans antialiased" suppressHydrationWarning>
         {/* Ambient wash. Fixed and inert, behind every route. */}
         <div className="aurora" aria-hidden="true" />
-        <AppShell>{children}</AppShell>
+        <WorkspaceProvider>
+          <AppShell>{children}</AppShell>
+        </WorkspaceProvider>
       </body>
     </html>
   )

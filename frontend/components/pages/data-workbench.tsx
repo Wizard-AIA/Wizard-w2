@@ -7,9 +7,10 @@ import { ConnectionsPanel } from "@/components/connections-panel"
 import { DataGrid } from "@/components/data-grid"
 import { PageHeader } from "@/components/page-header"
 import { api } from "@/lib/api"
-import type { DataModeInfo, DatasetSummary, DocumentSummary, ServerConfig } from "@/lib/types"
+import type { DataModeInfo, DocumentSummary } from "@/lib/types"
 import { useSound } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
+import { useWorkspace } from "@/lib/workspace-context"
 
 function formatCount(value: number): string {
   return value.toLocaleString()
@@ -24,13 +25,20 @@ function formatCount(value: number): string {
  * missing, and which one is active.
  */
 export function DataWorkbench() {
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([])
+  const {
+    datasets,
+    activeDataset,
+    activateDataset,
+    deleteDataset,
+    uploadDataset,
+    uploading,
+    config,
+    refreshSession,
+  } = useWorkspace()
+
   const [documents, setDocuments] = useState<DocumentSummary[]>([])
-  const [activeDataset, setActiveDataset] = useState<string | null>(null)
-  const [config, setConfig] = useState<ServerConfig | null>(null)
   const [dataMode, setDataMode] = useState<DataModeInfo | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
+  const [selected, setSelected] = useState<string | null>(activeDataset)
   const [attachingDoc, setAttachingDoc] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -41,67 +49,59 @@ export function DataWorkbench() {
 
   const refresh = useCallback(async () => {
     try {
+      await refreshSession()
       const [session, mode] = await Promise.all([api.session(), api.dataMode().catch(() => null)])
-      setDatasets(session.datasets)
       setDocuments(session.documents ?? [])
-      setActiveDataset(session.active_dataset)
       if (mode) setDataMode(mode)
-      // Keep the viewer on whatever the user was looking at; fall back to active.
       setSelected((current) =>
         current && session.datasets.some((entry) => entry.name === current)
           ? current
           : session.active_dataset,
       )
     } catch {
-      setDatasets([])
-      setActiveDataset(null)
+      setDocuments([])
     }
-  }, [])
+  }, [refreshSession])
 
   useEffect(() => {
-    void api.config().then(setConfig).catch(() => setConfig(null))
     void refresh()
   }, [refresh])
 
   const upload = useCallback(
     async (file: File | undefined) => {
       if (!file) return
-      setUploading(true)
       setError(null)
       try {
-        await api.upload(file)
+        await uploadDataset(file)
         await refresh()
-        playSound("click")
       } catch (exception) {
         setError(exception instanceof Error ? exception.message : "Upload failed.")
-      } finally {
-        setUploading(false)
       }
     },
-    [playSound, refresh],
+    [refresh, uploadDataset],
   )
 
   const activate = useCallback(
     async (name: string) => {
       setBusy(name)
       try {
-        await api.activateDataset(name)
+        await activateDataset(name)
+        setSelected(name)
         await refresh()
-        playSound("click")
       } catch (exception) {
         setError(exception instanceof Error ? exception.message : "Could not switch dataset.")
       } finally {
         setBusy(null)
       }
     },
-    [playSound, refresh],
+    [activateDataset, refresh],
   )
 
   const remove = useCallback(
     async (name: string) => {
       setBusy(name)
       try {
-        await api.deleteDataset(name)
+        await deleteDataset(name)
         await refresh()
       } catch (exception) {
         setError(exception instanceof Error ? exception.message : "Could not remove dataset.")
@@ -109,7 +109,7 @@ export function DataWorkbench() {
         setBusy(null)
       }
     },
-    [refresh],
+    [deleteDataset, refresh],
   )
 
   const attachDocument = useCallback(

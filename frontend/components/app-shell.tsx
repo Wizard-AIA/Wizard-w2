@@ -1,25 +1,29 @@
 "use client"
 
 import {
+  Check,
   Database,
+  FileSpreadsheet,
   Lightbulb,
+  Loader2,
   Menu,
   MessagesSquare,
+  Plus,
   Settings2,
   SlidersHorizontal,
+  Upload,
   X,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { AnimatedOrb } from "@/components/animated-orb"
 import { DataModeControl } from "@/components/data-mode-control"
 import { SoundToggle } from "@/components/sound-toggle"
-import { api } from "@/lib/api"
-import type { ServerConfig } from "@/lib/types"
 import { preloadSounds } from "@/lib/use-sound"
 import { cn } from "@/lib/utils"
+import { useWorkspace } from "@/lib/workspace-context"
 
 const NAV = [
   { href: "/", label: "Chat", hint: "Ask, watch, verify", icon: MessagesSquare },
@@ -35,16 +39,25 @@ const NAV = [
  * The product has no marketing page — the first thing loaded is the workspace,
  * and the rail is how you move between its surfaces. It renders once in the
  * root layout so navigating between pages never rebuilds it, and the chat
- * WebSocket (owned further down the tree) is not disturbed by a route change.
+ * WebSocket (owned in WorkspaceProvider) is not disturbed by a route change.
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const [config, setConfig] = useState<ServerConfig | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  
+  const {
+    config,
+    datasets,
+    activeDataset,
+    activateDataset,
+    uploadDataset,
+    uploading,
+    chat,
+  } = useWorkspace()
 
   useEffect(() => {
     preloadSounds()
-    void api.config().then(setConfig).catch(() => setConfig(null))
   }, [])
 
   return (
@@ -89,27 +102,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-0.5 px-2.5 py-2">
+        <nav className="space-y-0.5 px-2.5 py-2 shrink-0">
           {NAV.map((item) => {
             const Icon = item.icon
             const active = pathname === item.href
+            const isChatRunning = item.href === "/" && chat.isRunning
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                // Closed here rather than in an effect on `pathname`: navigation
-                // is user-initiated, so this is the event, not a consequence to
-                // synchronise afterwards.
                 onClick={() => setMobileOpen(false)}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "group relative flex items-center gap-3 rounded-lg px-3 py-2.5",
+                  "group relative flex items-center gap-3 rounded-lg px-3 py-2",
                   "transition-colors duration-[var(--duration-fast)]",
                   active ? "bg-card text-foreground shadow-xs" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 )}
               >
-                {/* The active marker is a bar on the rail edge, not a fill —
-                    it survives against the translucent sidebar. */}
                 <span
                   className={cn(
                     "absolute -left-2.5 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand",
@@ -119,7 +128,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 />
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[13.5px] font-medium leading-tight">{item.label}</span>
+                  <span className="flex items-center justify-between">
+                    <span className="block text-[13.5px] font-medium leading-tight">{item.label}</span>
+                    {isChatRunning && (
+                      <span className="flex items-center gap-1 text-[10px] font-medium text-brand animate-pulse">
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        Live
+                      </span>
+                    )}
+                  </span>
                   <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
                     {item.hint}
                   </span>
@@ -129,9 +146,90 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
+        {/* Live Datasets Section in Sidebar */}
+        <div className="flex-1 min-h-0 flex flex-col border-t border-border/60 px-2.5 py-2.5 overflow-hidden">
+          <div className="flex items-center justify-between px-1.5 pb-1.5 shrink-0">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-1.5">
+              <FileSpreadsheet className="h-3 w-3 text-brand" />
+              Datasets ({datasets.length})
+            </span>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title="Upload new dataset"
+              className="flex items-center justify-center h-5 w-5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors disabled:opacity-50"
+            >
+              {uploading ? (
+                <Loader2 className="h-3 w-3 animate-spin text-brand" />
+              ) : (
+                <Plus className="h-3 w-3" />
+              )}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.parquet,.json,.jsonl,.tsv,.xlsx"
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  void uploadDataset(file)
+                  e.target.value = ""
+                }
+              }}
+            />
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+            {datasets.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="w-full mt-1 flex flex-col items-center justify-center p-3 rounded-lg border border-dashed border-border text-center hover:border-brand/40 hover:bg-accent/20 transition-all group"
+              >
+                <Upload className="h-4 w-4 text-muted-foreground group-hover:text-brand mb-1 transition-colors" />
+                <span className="text-[11.5px] font-medium text-muted-foreground group-hover:text-foreground">
+                  {uploading ? "Reading dataset..." : "Load dataset"}
+                </span>
+                <span className="text-[10px] text-muted-foreground/70">CSV, Parquet, JSON</span>
+              </button>
+            ) : (
+              datasets.map((dataset) => {
+                const isActive = dataset.name === activeDataset
+                return (
+                  <button
+                    key={dataset.name}
+                    type="button"
+                    onClick={() => void activateDataset(dataset.name)}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-all group text-[12px]",
+                      isActive
+                        ? "bg-card border border-brand/20 text-foreground shadow-2xs"
+                        : "hover:bg-accent/40 text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <span className={cn(
+                      "h-1.5 w-1.5 rounded-full shrink-0",
+                      isActive ? "bg-emerald-500 shadow-xs" : "bg-muted-foreground/40"
+                    )} />
+                    <span className="min-w-0 flex-1 truncate font-medium">{dataset.name}</span>
+                    {isActive ? (
+                      <Check className="h-3 w-3 text-brand shrink-0" />
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground/60 tabular shrink-0 font-mono">
+                        {dataset.rows.toLocaleString()}r
+                      </span>
+                    )}
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+
         <div className="shrink-0 border-t border-border px-3 py-3">
-          {/* Above the diagnostics rows, not among them: this one is a control,
-              and it is the only thing here the user can act on. */}
           <div className="mb-2.5">
             <DataModeControl />
           </div>

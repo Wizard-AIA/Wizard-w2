@@ -137,6 +137,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
+from src.config import settings  # noqa: E402
 from src.core.agent.consent import consent_broker  # noqa: E402
 from src.core.connectors.store import connection_store  # noqa: E402
 from src.core.credentials import credential_store  # noqa: E402
@@ -255,11 +256,12 @@ def _clean_database():
     claim about many sessions — so nothing else clears them, and an occurrence
     count carried forward makes the promotion threshold fire in a test that never
     asked a question twice.
-
-    Outstanding consent requests are released last. A test that ends while a run
-    is parked on one would otherwise leave a future nobody resolves, and the next
-    test to touch that session id would inherit it.
     """
+    settings.AGENT_REQUIRE_APPROVAL = False
+    settings.AGENT_MAX_ITERATIONS = 24
+    settings.AGENT_TIER = "auto"
+    settings.AGENT_VERIFY = True
+    settings.AGENT_GROUNDING_CHECK = True
     yield
     semantic_cache.clear()
     usage_ledger.clear()
@@ -267,19 +269,15 @@ def _clean_database():
     db_mgr.clear_skill_candidates()
     db_mgr.clear_skill_usage()
     skill_registry.clear_user_skills()
-    # The install index and the staging root live in the config directory, which
-    # `clear_user_skills` does not touch: it removes skill *files* by path, and
-    # neither of these is one. A record carried forward would offer an update for
-    # a skill the next test does not have, and a staged skill would show up in a
-    # pending list a test wrote nothing into.
     install_index.clear()
     skill_install.clear_pending()
-    # Cleared, not merely reloaded. Connections persist to disk on purpose --
-    # they are configuration, not session data -- so without this a connection
-    # saved by one test is still there for the next, which sees a name conflict
-    # rather than the empty store it was written against.
     connection_store.clear()
     consent_broker.reset()
+    settings.AGENT_REQUIRE_APPROVAL = False
+    settings.AGENT_MAX_ITERATIONS = 24
+    settings.AGENT_TIER = "auto"
+    settings.AGENT_VERIFY = True
+    settings.AGENT_GROUNDING_CHECK = True
 
 
 @pytest.fixture

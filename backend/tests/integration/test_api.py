@@ -561,3 +561,42 @@ def test_chat_response_carries_the_investigation_fields(client: TestClient, monk
         assert field in body, f"missing {field}"
     assert body["mode"] == "fast"
     assert body["iterations"] >= 1
+
+
+def test_patch_server_config(client: TestClient) -> None:
+    """PATCH /api/config mutates runtime configuration and returns the updated ServerConfig."""
+    from src.config import settings
+
+    orig_approval = settings.AGENT_REQUIRE_APPROVAL
+    orig_iter = settings.AGENT_MAX_ITERATIONS
+    try:
+        res = client.patch(
+            "/api/config",
+            json={
+                "agent_max_iterations": 18,
+                "agent_turn_timeout": 240.0,
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "execution_backend": "inprocess",
+                "plot_format": "html",
+                "agent_require_approval": True,
+                "agent_verify": True,
+                "agent_grounding_check": True,
+                "openai_base_url": "https://api.openai.com/v1",
+            },
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["agent_max_iterations"] == 18
+        assert data["agent_turn_timeout"] == 240.0
+        assert data["temperature"] == 0.2
+        assert data["max_tokens"] == 2048
+        assert data["execution_backend"] == "inprocess"
+        assert data["plot_format"] == "html"
+        assert data["agent_require_approval"] is True
+        assert data["agent_verify"] is True
+        assert data["agent_grounding_check"] is True
+        assert data["openai_base_url"] == "https://api.openai.com/v1"
+    finally:
+        settings.AGENT_REQUIRE_APPROVAL = orig_approval
+        settings.AGENT_MAX_ITERATIONS = orig_iter
