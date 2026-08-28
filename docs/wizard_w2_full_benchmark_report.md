@@ -8,12 +8,12 @@
 > used to re-grade every test case in this document. Corrections are inline below, not in a
 > separate erratum, since this document was never published before the audit.
 
-> **Report Date**: 8 August 2026  
-> **System Under Test**: Wizard w2 (Wizard-AIA)  
-> **Host Machine**: Windows 11 Laptop — Intel i7 (4P Cores / 8 Threads), 15.7 GB RAM, 192 GB Free Disk  
-> **Local LLM Runtime**: Ollama v0.9.x (CPU inference, `qwen2.5:3b` + `qwen2.5-coder:1.5b`)  
-> **Cloud LLM Runtime**: Google Gemini 2.5 Flash via OpenAI-compatible Gateway  
-> **Sandbox Backends Tested**: Docker Container Pool, Windows Job Objects, In-Process AST Guard  
+> **Report Date**: 8 August 2026
+> **System Under Test**: Wizard w2 (Wizard-AIA)
+> **Host Machine**: Windows 11 Laptop — Intel i7 (4P Cores / 8 Threads), 15.7 GB RAM, 192 GB Free Disk
+> **Local LLM Runtime**: Ollama v0.9.x (CPU inference, `qwen2.5:3b` + `qwen2.5-coder:1.5b`)
+> **Cloud LLM Runtime**: Google Gemini 2.5 Flash via OpenAI-compatible Gateway
+> **Sandbox Backends Tested**: Docker Container Pool, Windows Job Objects, In-Process AST Guard
 > **Test Dataset**: `dataset.csv` — 307 student records × 18 columns (academic grades, demographics, application ratings)
 
 ---
@@ -175,7 +175,7 @@ gantt
 | **Answer Synthesis** | ~13s (CPU) | ~57s (CPU grounding) | ~3s (API) |
 | **Total** | **~82s** | **~93s** | ⚡ **~11s** |
 
-> **Bottleneck in Local & Hybrid**: The local `qwen2.5:3b` Manager on CPU inference (4 cores, no GPU) accounts for ~30 seconds of planning time. The hybrid mode's answer synthesis also runs locally, adding latency.  
+> **Bottleneck in Local & Hybrid**: The local `qwen2.5:3b` Manager on CPU inference (4 cores, no GPU) accounts for ~30 seconds of planning time. The hybrid mode's answer synthesis also runs locally, adding latency.
 > **Cloud advantage**: Gemini 2.5 Flash responds in 2–4 seconds per LLM call, delivering **7.3× faster** end-to-end turns.
 
 ---

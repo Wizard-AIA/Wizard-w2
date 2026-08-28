@@ -38,4 +38,3 @@ jobs:
 
       - name: Run Adversarial Security Penetration Suite
         run: pytest backend/tests/security/ -v
-

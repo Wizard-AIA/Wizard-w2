@@ -38,4 +38,3 @@ jobs:
 
       - name: Run Full-Stack Lifecycle E2E Tests
         run: pytest backend/tests/integration/test_full_stack_lifecycle.py -v
-

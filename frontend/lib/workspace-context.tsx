@@ -23,7 +23,7 @@ interface WorkspaceContextValue {
   config: ServerConfig | null
   uploading: boolean
   uploadError: string | null
-  
+
   // Artifacts and chart panel
   panelOpen: boolean
   setPanelOpen: (open: boolean) => void
@@ -31,7 +31,7 @@ interface WorkspaceContextValue {
   setPanelTab: (tab: ArtifactTab) => void
   chartVersion: number
   chartImage: string | null
-  
+
   // Actions
   uploadDataset: (file: File, clean?: boolean) => Promise<void>
   activateDataset: (name: string) => Promise<void>
@@ -40,7 +40,7 @@ interface WorkspaceContextValue {
   refreshConfig: () => Promise<void>
   updateConfig: (payload: UpdateConfigPayload) => Promise<ServerConfig>
   newChat: () => Promise<void>
-  
+
   // Persistent chat stream
   chat: ReturnType<typeof useChatStream>
 }

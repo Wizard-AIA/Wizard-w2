@@ -38,4 +38,3 @@ jobs:
 
       - name: Run Concurrency Load Tests
         run: pytest backend/tests/stress/test_concurrency_load.py -v
-

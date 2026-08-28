@@ -45,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [mobileOpen, setMobileOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  
+
   const {
     config,
     datasets,
