@@ -18,7 +18,7 @@
 duckdb==1.5.5
 
 # Multithreaded dataframe execution for large group-bys and joins.
-polars==1.35.2
+polars==1.43.2
 
 # Statistics, inference and machine learning.
 statsmodels==0.14.6
@@ -36,7 +36,7 @@ lightgbm==4.7.0
 
 # Charting. plotly is what PLOT_FORMAT=html needs; without it the worker is
 # told to use matplotlib instead rather than to import something absent.
-plotly==6.9.0
+plotly==7.0.0
 seaborn==0.13.2
 pillow==12.3.0
 
