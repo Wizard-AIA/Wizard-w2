@@ -4,6 +4,24 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.3] - 2026-08-28
+
+### Added
+- **Universal 1-Command Installers for Linux, Windows & macOS:**
+  - `curl -fsSL https://wizardw2.vercel.app/install.sh | bash` for automated Linux installation (Ubuntu, Debian, Fedora, Arch, Alpine, RHEL) with dynamic kernel arch detection (`x86_64`, `aarch64`), HTTP/1.1 resilient downloads, and shell PATH injection.
+  - `irm https://wizardw2.vercel.app/install.ps1 | iex` for Windows 10/11 PowerShell with persistent User Environment registry updates.
+  - Scoop package manager manifest (`scoop install https://wizardw2.vercel.app/wizard.json`).
+  - Homebrew tap integration (`brew tap Wizard-AIA/wizard && brew install wizard`).
+- **Fixed 3-Column Documentation Architecture:**
+  - Redesigned documentation shell with pinned, independently scrollable sidebars (`Left Navigation` | `Middle Reading Content` | `Right Table of Contents`), preventing sidebars from detaching or scrolling offscreen during document navigation.
+- **Dedicated Blueprint Architecture Diagram Canvas:**
+  - High-contrast blueprint canvas with non-ligature monospace font grid and `System Architecture & Flow` validation badges for all ASCII and workflow diagrams.
+- **Global CLI Symlink Path Resolution:**
+  - Resolved `os.Executable()` symlink traversal in `cli/internal/repo/repo.go`, enabling `wizard` supervisor commands to execute from any arbitrary system directory outside the repository checkout.
+- **CodeGuard AST & Sandbox Hardening:**
+  - Expanded static security policy across 31 banned modules, 11 builtins, and 22 dunder reflection patterns.
+  - Graceful `LLMUnavailableError` handling for missing local/cloud provider SDKs.
+
 ## [v1.0.2] - 2026-08-26
 
 ### Added
