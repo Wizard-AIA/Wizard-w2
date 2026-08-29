@@ -36,9 +36,6 @@ httpx==0.28.1
 # Data stack. Ingestion, profiling and Feather transport into the runtime --
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
-# Held under 3.0 deliberately: pandas 3's new default StringDtype (replacing
-# object dtype for string columns) breaks dtype-based heuristics in
-# understanding.py/loader.py/redaction.py that assume `dtype == object`.
 pandas==3.0.5
 numpy==2.5.2
 pyarrow==25.0.1
