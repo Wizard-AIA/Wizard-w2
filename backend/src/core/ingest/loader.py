@@ -436,7 +436,7 @@ def safe_write_feather(df: pd.DataFrame, path: Path) -> bool:
     except Exception:
         coerced = df.copy()
         for column in coerced.columns:
-            if coerced[column].dtype == "object":
+            if pd.api.types.is_object_dtype(coerced[column]) or pd.api.types.is_string_dtype(coerced[column]):
                 try:
                     coerced[column] = coerced[column].astype(str)
                 except Exception:

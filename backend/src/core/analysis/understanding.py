@@ -91,10 +91,10 @@ def _looks_numeric(value: str) -> bool:
 
 
 def type_anomalies(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Object columns whose values are inconsistently typed -- some numeric-looking, some not."""
+    """Object / string columns whose values are inconsistently typed -- some numeric-looking, some not."""
     anomalies: list[dict[str, Any]] = []
     for column in df.columns:
-        if df[column].dtype != object:
+        if not (pd.api.types.is_object_dtype(df[column]) or pd.api.types.is_string_dtype(df[column])):
             continue
         values = df[column].dropna().astype(str)
         if values.empty:

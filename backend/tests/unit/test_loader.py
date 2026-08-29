@@ -254,7 +254,8 @@ def test_categorize_low_cardinality_converts_repetitive_columns() -> None:
 def test_categorize_skips_small_frames() -> None:
     df = pd.DataFrame({"kind": ["a", "b"] * 5})
     converted = categorize_low_cardinality(df.copy())
-    assert converted["kind"].dtype == object
+    assert not isinstance(converted["kind"].dtype, pd.CategoricalDtype)
+    assert converted["kind"].dtype == df["kind"].dtype
 
 
 def test_json_safe_records_strips_non_finite_values(missing_values_df: pd.DataFrame) -> None:
