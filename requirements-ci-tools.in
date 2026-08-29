@@ -10,7 +10,7 @@
 # Pinned deliberately -- unpinned, a release that adds or promotes a rule
 # fails master with no code change, which is what happened when UP042
 # (str+Enum -> StrEnum) started being reported.
-ruff==0.16.3
+ruff==0.16.4
 pytest-cov==7.1.0
 
 # Mutation testing for the whole backend -- see docs/analysis/mutation-testing.md. Not

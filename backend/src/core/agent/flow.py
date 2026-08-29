@@ -65,7 +65,7 @@ def _needs_cleaning(df: pd.DataFrame) -> bool:
 
     for column in list(df.columns)[:_CLEAN_CHECK_COLUMNS]:
         series = df[column]
-        if not pd.api.types.is_object_dtype(series):
+        if not (pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)):
             continue
         sample = series.dropna().head(_CLEAN_CHECK_ROWS)
         if sample.empty:

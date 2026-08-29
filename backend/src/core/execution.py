@@ -17,6 +17,7 @@ import base64
 import builtins
 import io
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -86,6 +87,9 @@ ISOLATION_BY_BACKEND = {"docker": "container", "host": "process", "inprocess": "
 
 def isolation_for(backend: str) -> str:
     return ISOLATION_BY_BACKEND.get(backend, "none")
+
+
+_local_exec_lock = threading.Lock()
 
 
 class CodeExecutor:
@@ -238,52 +242,53 @@ class CodeExecutor:
             "separate process instead."
         )
 
-        try:
-            plt.close("all")
-            sys.stdout = buffer
-            exec(code, namespace)  # noqa: S102 - guarded above; Docker is the real boundary
-            sys.stdout = original_stdout
-
-            image = None
-            if plt.get_fignums():
-                image_buffer = io.BytesIO()
-                plt.savefig(image_buffer, format="png", bbox_inches="tight", dpi=110)
-                image_buffer.seek(0)
-                image = base64.b64encode(image_buffer.read()).decode("utf-8")
+        with _local_exec_lock:
+            try:
                 plt.close("all")
+                sys.stdout = buffer
+                exec(code, namespace)  # noqa: S102 - guarded above; Docker is the real boundary
+                sys.stdout = original_stdout
 
-            output = buffer.getvalue().strip() or "Executed successfully."
-            if on_stdout and output:
-                on_stdout(output)
-            return ExecutionResult(
-                output=output,
-                code=code,
-                image=image,
-                ok=True,
-                sandboxed=False,
-                backend="inprocess",
-                isolation="none",
-                warnings=[warning],
-            )
-        except Exception as exc:
-            import traceback
+                image = None
+                if plt.get_fignums():
+                    image_buffer = io.BytesIO()
+                    plt.savefig(image_buffer, format="png", bbox_inches="tight", dpi=110)
+                    image_buffer.seek(0)
+                    image = base64.b64encode(image_buffer.read()).decode("utf-8")
+                    plt.close("all")
 
-            sys.stdout = original_stdout
-            detail = traceback.format_exc(limit=6)
-            logger.warning("Local execution failed", error=str(exc))
-            return ExecutionResult(
-                output=f"Error executing code:\n{detail}",
-                code=code,
-                ok=False,
-                retryable_error=True,
-                sandboxed=False,
-                backend="inprocess",
-                isolation="none",
-                warnings=[warning],
-            )
-        finally:
-            sys.stdout = original_stdout
-            plt.close("all")
+                output = buffer.getvalue().strip() or "Executed successfully."
+                if on_stdout and output:
+                    on_stdout(output)
+                return ExecutionResult(
+                    output=output,
+                    code=code,
+                    image=image,
+                    ok=True,
+                    sandboxed=False,
+                    backend="inprocess",
+                    isolation="none",
+                    warnings=[warning],
+                )
+            except Exception as exc:
+                import traceback
+
+                sys.stdout = original_stdout
+                detail = traceback.format_exc(limit=6)
+                logger.warning("Local execution failed", error=str(exc))
+                return ExecutionResult(
+                    output=f"Error executing code:\n{detail}",
+                    code=code,
+                    ok=False,
+                    retryable_error=True,
+                    sandboxed=False,
+                    backend="inprocess",
+                    isolation="none",
+                    warnings=[warning],
+                )
+            finally:
+                sys.stdout = original_stdout
+                plt.close("all")
 
     # ------------------------------------------------------------------ #
     # Runtime control. All of these address an *existing* runtime only --

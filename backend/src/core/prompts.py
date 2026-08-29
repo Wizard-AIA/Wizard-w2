@@ -52,7 +52,12 @@ def _categorical_insights(df: pd.DataFrame, columns: list[str], redact: bool = F
     candidates = [
         c
         for c in columns
-        if c in df.columns and (df[c].dtype == object or isinstance(df[c].dtype, pd.CategoricalDtype))
+        if c in df.columns
+        and (
+            pd.api.types.is_object_dtype(df[c])
+            or pd.api.types.is_string_dtype(df[c])
+            or isinstance(df[c].dtype, pd.CategoricalDtype)
+        )
     ]
     if not candidates:
         return "*No categorical columns in scope.*"
@@ -93,7 +98,7 @@ def _quality_warnings(df: pd.DataFrame, columns: list[str]) -> str:
             if column not in df.columns:
                 continue
             series = df[column]
-            if pd.api.types.is_object_dtype(series):
+            if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
                 try:
                     sample = series.dropna().head(5)
                     if not sample.empty and pd.to_datetime(sample, errors="coerce", format="mixed").notna().all():

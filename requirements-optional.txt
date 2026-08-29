@@ -10,12 +10,12 @@ redis>=8.1.0
 # Talk to an OpenAI-compatible endpoint instead of a local Ollama daemon
 # (API_PROVIDER=openai, gemini, custom_gateway, or lmstudio -- Gemini's own
 # API speaks this dialect through its /v1beta/openai compatibility route).
-langchain-openai>=1.5.2
+langchain-openai>=1.6.0
 
 # Anthropic's Messages API, which is not OpenAI-shaped and needs its own client.
 # Only required when a role is assigned to the `anthropic` provider; without it
 # that provider reports what to install rather than failing obscurely.
-langchain-anthropic>=1.5.6
+langchain-anthropic>=1.6.1
 
 # ---------------------------------------------------------------------------
 # Data source connectors
@@ -39,7 +39,7 @@ sqlalchemy>=2.0.52
 pymongo>=4.17.0
 
 # S3, MinIO, Cloudflare R2 and other S3-compatible object storage.
-boto3>=1.43.73
+boto3>=1.43.79
 
 # ---------------------------------------------------------------------------
 # Local embeddings

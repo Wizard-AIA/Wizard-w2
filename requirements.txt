@@ -24,7 +24,7 @@
 
 # Web layer
 fastapi==0.141.1
-uvicorn==0.52.3
+uvicorn==0.52.4
 python-multipart==0.0.32
 pydantic==2.13.4
 pydantic-settings==2.15.0
@@ -36,13 +36,10 @@ httpx==0.28.1
 # Data stack. Ingestion, profiling and Feather transport into the runtime --
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
-# Held under 3.0 deliberately: pandas 3's new default StringDtype (replacing
-# object dtype for string columns) breaks dtype-based heuristics in
-# understanding.py/loader.py/redaction.py that assume `dtype == object`.
-pandas==2.3.3
+pandas==3.0.5
 numpy==2.5.2
 pyarrow==25.0.1
-scipy==1.18.0
+scipy==1.18.1
 matplotlib==3.11.1
 tabulate==0.10.0
 # Required to ingest .xlsx/.xls uploads.
