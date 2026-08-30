@@ -29,7 +29,13 @@ class TestHeavyHypothesisFuzzing:
     """
 
     @hypothesis_settings(max_examples=5000, deadline=None)
-    @given(st.lists(st.floats(allow_nan=False, allow_infinity=False, min_value=-1e100, max_value=1e100), min_size=2, max_size=1000))
+    @given(
+        st.lists(
+            st.floats(allow_nan=False, allow_infinity=False, min_value=-1e100, max_value=1e100),
+            min_size=2,
+            max_size=1000,
+        )
+    )
     def test_quantile_monotonicity_invariant(self, data: list[float]):
         """
         test_quantile_monotonicity_invariant
