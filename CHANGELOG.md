@@ -4,6 +4,47 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.6] - 2026-08-30
+
+### Added
+- **Tri-Model System Architecture:** Formalized the architecture into three decoupled, first-class model roles: **Manager** (hypothesis generation, reasoning, synthesis), **Worker** (Python/SQL code generation, execution self-correction), and **Embeddings** (semantic chunk indexing, hybrid search, RAG retrieval). Each role can be independently configured across **Local** (air-gapped Ollama/LM Studio), **Hybrid** (selective schema redaction), and **Cloud** (frontier model APIs), with zero-disk deterministic Blake2b hashing fallback.
+- **User Choice for Local & Cloud Embeddings:**
+  - Added `--embedding-provider` and `--embedding-model` flags to `wizard init`.
+  - Updated `wizard init --pull-models` to automatically pull `nomic-embed-text` on Ollama by default, ensuring semantic vector search works out-of-the-box.
+  - Added `EMBEDDING_PROVIDER` and `EMBEDDING_MODEL` status diagnostics to `wizard status` / `wizard doctor`.
+  - Added dynamic embedding configuration in `GET /api/config` and `PATCH /api/config` with hot re-warming.
+  - Added an **Embeddings & Vector Model** card in the Frontend Settings Workbench with active backend status indicators.
+- **SRE Health Honesty & Kubernetes Probes:**
+  - Added dedicated `/health/live` (process liveness) and `/health/ready` (cluster readiness probing SQLite writeability, Redis reachability, and Docker socket health with HTTP 503 on degradation).
+  - Implemented single-flight cache stampede protection and atomic session execution locks to eliminate race conditions.
+  - Implemented online WAL checkpointing and automated background SQLite backup scheduler with retention pruning (`backups/`).
+  - Added Dead Letter Queue (DLQ) routing with exponential backoff for failed async analysis jobs.
+- **Dynamic Hybrid Vector & BM25 Search Engine:**
+  - Integrated `sqlite-vec` KNN cosine vector search with FTS5 BM25 keyword search using Reciprocal Rank Fusion (RRF).
+  - Integrated `CrossEncoderReranker` with FlashRank ONNX cross-attention scoring.
+  - Batched chunk vectorization (`encode_many`) to eliminate single-item HTTP round-trip overhead.
+- **Enterprise Distributed Observability & Metrics:**
+  - Full OpenTelemetry distributed tracing (`telemetry.py`) with W3C `traceparent` propagation across HTTP, WebSockets, background tasks, and supervisor daemons. Zero-overhead `DummyTracer` fallback when unconfigured.
+  - Added Prometheus metrics (`/metrics`) exposing rolling p50/p90/p95/p99 latency quantiles, Time-To-First-Token (TTFT), and token generation counters.
+  - Added `SessionEventBus` powered by Redis Pub/Sub with in-process `asyncio.Queue` fallback for horizontal multi-worker state synchronization.
+- **Stateful Resumable DAG Agent Architecture:**
+  - Implemented `ExecutionDAG`, `DAGNode`, and `DAGEdge` in `dag.py` with Kahn's algorithm cycle detection, topological dependency ordering, and JSON checkpoint serialization (`to_dict` / `from_dict`) for graceful crash recovery.
+- **Multi-Worker Scaling, Reverse Proxy & Server-Sent Events (SSE):**
+  - Added production `deploy/nginx.conf` with least-connection upstream balancing, IP rate limiting (`limit_req_zone`), WebSocket upgrades, and `proxy_buffering off`.
+  - Added `POST /api/chat/stream` SSE fallback for environments blocking bidirectional WebSockets or experiencing buffer shedding.
+  - Added `RedisJobQueue` with distributed Redis list leasing (`brpop`) and worker heartbeats.
+- **Sandbox Security Hardening & Continuous Verification:**
+  - Implemented `validate_container_config` enforcing read-only root filesystems (`read_only=True`), unprivileged non-root users (`user="1000:1000"`), and blocking `/var/run/docker.sock` mounts.
+  - Added automated canary rollout script (`scripts/canary_deploy.py`) and GitHub Actions workflow (`.github/workflows/canary.yml`) with automated rollback if error rate > 1.0% or p95 latency > 3.0s.
+  - Added CI benchmark drift detector (`scripts/check_benchmark_drift.py`) gating quality drops > 2%, and mutation testing harness (`scripts/run_mutation_tests.py`).
+  - Added cell-by-cell Markdown table numerical grounding check (`check_table_grounding`).
+  - Added in-process `SLMRouter` fast-tracking metadata and chitchat turns.
+
+### Fixed
+- Fixed silent 200 OK responses on degraded dependencies in `/health`.
+- Fixed WebSocket buffer overflows during heavy token streams by implementing a 256-frame bounded backpressure queue with client frame shedding.
+- Fixed unbounded memory growth in SQLite analysis logs via automatic date-partitioned pruning (`prune_old_analysis_data`).
+
 ## [v1.0.5] - 2026-08-28
 
 ### Fixed
@@ -121,7 +162,8 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
-[Unreleased]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.6...HEAD
+[v1.0.6]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.5...v1.0.6
 [v1.0.5]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.4...v1.0.5
 [v2.0.0-w2-planning]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.2.1...v2.0.0-w2-planning
 [v2.2.1]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.2.0...v2.2.1

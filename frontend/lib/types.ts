@@ -824,6 +824,7 @@ export interface MemoryPlan {
 export interface ServerConfig {
   app_name: string
   version: string
+  app_version?: string
   plot_format: "png" | "html"
   sandbox_available: boolean
   sandbox_enabled: boolean

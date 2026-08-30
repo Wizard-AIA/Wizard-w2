@@ -41,6 +41,7 @@ class ErrorDetail(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
+    app_version: str = "1.0.6"
     sandbox_available: bool
     execution_backend: str = "inprocess"
     model_provider: str
@@ -49,6 +50,7 @@ class HealthResponse(BaseModel):
 class HealthDetailResponse(BaseModel):
     status: str = "ok"
     version: str
+    app_version: str = "1.0.6"
     sandbox_available: bool
     execution_backend: str = "inprocess"
     model_provider: str
@@ -60,6 +62,7 @@ class ServerConfig(BaseModel):
 
     app_name: str
     version: str
+    app_version: str = "1.0.6"
     plot_format: Literal["png", "html"]
     sandbox_available: bool
     sandbox_enabled: bool
