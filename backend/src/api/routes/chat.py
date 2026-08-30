@@ -162,7 +162,8 @@ async def chat_stream(
             result = task.result()
             yield f"data: {json.dumps({'type': 'result', 'content': result.to_dict() if hasattr(result, 'to_dict') else str(result)})}\n\n"
         except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+            err_msg = safe_error_message(exc, "Streaming request failed", session=session.id)
+            yield f"data: {json.dumps({'type': 'error', 'content': err_msg})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

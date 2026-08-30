@@ -55,8 +55,9 @@ class TestChaosAndFaultResilience:
             reader = pa.RecordBatchStreamReader(pa.BufferReader(truncated))
             restored = reader.read_all()
             assert not restored.equals(table)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Truncated IPC buffer is expected to fail deserialization
+            assert isinstance(exc, (pa.ArrowInvalid, pa.ArrowIOError, Exception))
 
     @pytest.mark.parametrize(
         "code",

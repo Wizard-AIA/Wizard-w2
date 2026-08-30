@@ -42,8 +42,12 @@ class SessionEventBus:
                     try:
                         q.put_nowait(event)
                     except asyncio.QueueFull:
-                        pass
-                    except Exception:
+                        # Non-critical drop: subscriber queue is full
+                        logger.debug("Session bus subscriber queue is full; dropping event", session_id=session_id)
+                    except Exception as exc:
+                        logger.debug(
+                            "Session bus subscriber queue failed; removing", session_id=session_id, error=str(exc)
+                        )
                         dead.add(q)
                 for q in dead:
                     self._subscribers[session_id].discard(q)
