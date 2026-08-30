@@ -367,3 +367,13 @@ def test_an_approved_root_does_not_move_where_a_relative_path_lands() -> None:
 
     # The same grant still admits the path when it is written out in full.
     assert CodeGuard.scan("df.to_csv('/data/reports/out.csv')", extra_roots=("/workspace", "/data/reports")).ok
+
+
+def test_evaluates_assigned_constant_variable_paths() -> None:
+    code_allowed = "output_path = '/workspace/plot.html'\nfig.write_html(output_path)"
+    assert CodeGuard.scan(code_allowed).ok
+
+    code_blocked = "output_path = '/etc/cron.d/hack.html'\nfig.write_html(output_path)"
+    verdict = CodeGuard.scan(code_blocked)
+    assert not verdict.ok
+    assert "/etc/cron.d/hack.html" in verdict.paths

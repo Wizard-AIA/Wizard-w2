@@ -499,9 +499,9 @@ class ModelRegistry:
 
         preferred_defaults: dict[str, dict[str, list[str]]] = {
             "gemini": {
-                "manager": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
-                "worker": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
-                "vision": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
+                "manager": ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-2.5-flash", "gemini-flash-latest"],
+                "worker": ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-2.5-flash", "gemini-flash-latest"],
+                "vision": ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-2.5-flash", "gemini-flash-latest"],
             },
             "openai": {
                 "manager": ["gpt-4o-mini", "gpt-4o"],

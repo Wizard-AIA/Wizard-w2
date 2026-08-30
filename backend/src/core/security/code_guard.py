@@ -230,10 +230,17 @@ class CodeGuard:
             )
 
         roots = tuple(dict.fromkeys((*extra_roots, *ALLOWED_PATH_ROOTS)))
+        constants: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                val = cls._static_string_value(node.value, constants)
+                if val is not None:
+                    constants[node.targets[0].id] = val
+
         violations: list[str] = []
         paths: list[str] = []
         for node in ast.walk(tree):
-            found, offending = cls._inspect_node(node, roots)
+            found, offending = cls._inspect_node(node, roots, constants)
             violations.extend(found)
             paths.extend(offending)
 
@@ -243,7 +250,12 @@ class CodeGuard:
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def _inspect_node(cls, node: ast.AST, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> tuple[list[str], list[str]]:
+    def _inspect_node(
+        cls,
+        node: ast.AST,
+        roots: tuple[str, ...] = ALLOWED_PATH_ROOTS,
+        constants: dict[str, str] | None = None,
+    ) -> tuple[list[str], list[str]]:
         """Returns (violations, offending literal paths) for one node."""
         if isinstance(node, ast.Import):
             return [
@@ -269,12 +281,17 @@ class CodeGuard:
             return [], []
 
         if isinstance(node, ast.Call):
-            return cls._inspect_call(node, roots)
+            return cls._inspect_call(node, roots, constants)
 
         return [], []
 
     @classmethod
-    def _inspect_call(cls, node: ast.Call, roots: tuple[str, ...] = ALLOWED_PATH_ROOTS) -> tuple[list[str], list[str]]:
+    def _inspect_call(
+        cls,
+        node: ast.Call,
+        roots: tuple[str, ...] = ALLOWED_PATH_ROOTS,
+        constants: dict[str, str] | None = None,
+    ) -> tuple[list[str], list[str]]:
         violations: list[str] = []
         paths: list[str] = []
 
@@ -318,7 +335,7 @@ class CodeGuard:
             if arg_node is not None and not (
                 isinstance(arg_node, ast.Constant) and not isinstance(arg_node.value, str)
             ):
-                path_literal = cls._static_string_value(arg_node)
+                path_literal = cls._static_string_value(arg_node, constants)
                 if path_literal is None:
                     violations.append(
                         f"'{name}()' path argument must be a literal string; "
@@ -346,17 +363,13 @@ class CodeGuard:
         return None
 
     @classmethod
-    def _static_string_value(cls, node: ast.expr) -> str | None:
-        """Evaluates ``node`` to a string if it is built entirely from constants.
-
-        Handles a plain string literal, an f-string whose every field is
-        itself a constant (``f"/workspace/{'a'}"``), and `+` concatenations of
-        either. Returns ``None`` the moment any piece depends on something
-        computed at runtime -- a variable, a call, a non-constant f-string
-        field -- which the caller must treat as unverifiable, not as safe.
-        """
+    def _static_string_value(cls, node: ast.expr, constants: dict[str, str] | None = None) -> str | None:
+        """Evaluates ``node`` to a string if it is built entirely from constants."""
         if isinstance(node, ast.Constant):
             return node.value if isinstance(node.value, str) else None
+
+        if isinstance(node, ast.Name) and constants and node.id in constants:
+            return constants[node.id]
 
         if isinstance(node, ast.JoinedStr):
             parts: list[str] = []
@@ -370,16 +383,23 @@ class CodeGuard:
                     and isinstance(value.value, ast.Constant)
                     and isinstance(value.value.value, str)
                 ):
-                    # `{"ok"}` inside an f-string -- a constant field with no
-                    # conversion/format-spec to apply, so it is just its value.
                     parts.append(value.value.value)
+                elif (
+                    isinstance(value, ast.FormattedValue)
+                    and value.format_spec is None
+                    and value.conversion in (-1, ord("s"))
+                    and isinstance(value.value, ast.Name)
+                    and constants
+                    and value.value.id in constants
+                ):
+                    parts.append(constants[value.value.id])
                 else:
                     return None
             return "".join(parts)
 
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left = cls._static_string_value(node.left)
-            right = cls._static_string_value(node.right)
+            left = cls._static_string_value(node.left, constants)
+            right = cls._static_string_value(node.right, constants)
             return None if left is None or right is None else left + right
 
         return None
