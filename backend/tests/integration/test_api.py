@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from collections.abc import Iterator
 
 import pandas as pd
@@ -569,6 +570,9 @@ def test_patch_server_config(client: TestClient) -> None:
 
     orig_approval = settings.AGENT_REQUIRE_APPROVAL
     orig_iter = settings.AGENT_MAX_ITERATIONS
+    orig_tokens = settings.MAX_TOKENS
+    orig_temp = settings.TEMPERATURE
+    orig_env_tokens = os.environ.get("MAX_TOKENS")
     try:
         res = client.patch(
             "/api/config",
@@ -600,3 +604,9 @@ def test_patch_server_config(client: TestClient) -> None:
     finally:
         settings.AGENT_REQUIRE_APPROVAL = orig_approval
         settings.AGENT_MAX_ITERATIONS = orig_iter
+        settings.MAX_TOKENS = orig_tokens
+        settings.TEMPERATURE = orig_temp
+        if orig_env_tokens is not None:
+            os.environ["MAX_TOKENS"] = orig_env_tokens
+        else:
+            os.environ.pop("MAX_TOKENS", None)

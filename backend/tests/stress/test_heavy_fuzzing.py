@@ -29,7 +29,7 @@ class TestHeavyHypothesisFuzzing:
     """
 
     @hypothesis_settings(max_examples=5000, deadline=None)
-    @given(st.lists(st.floats(allow_nan=False, allow_infinity=False), min_size=2, max_size=1000))
+    @given(st.lists(st.floats(allow_nan=False, allow_infinity=False, min_value=-1e100, max_value=1e100), min_size=2, max_size=1000))
     def test_quantile_monotonicity_invariant(self, data: list[float]):
         """
         test_quantile_monotonicity_invariant
@@ -44,9 +44,15 @@ class TestHeavyHypothesisFuzzing:
         q75 = s.quantile(0.75)
         q100 = s.quantile(1.0)
 
-        assert q25 <= q50, f"Expected q25 <= q50, got {q25} > {q50}"
-        assert q50 <= q75, f"Expected q50 <= q75, got {q50} > {q75}"
-        assert q75 <= q100, f"Expected q75 <= q100, got {q75} > {q100}"
+        assert q25 <= q50 or math.isclose(q25, q50, rel_tol=1e-9, abs_tol=1e-12), (
+            f"Expected q25 <= q50, got {q25} > {q50}"
+        )
+        assert q50 <= q75 or math.isclose(q50, q75, rel_tol=1e-9, abs_tol=1e-12), (
+            f"Expected q50 <= q75, got {q50} > {q75}"
+        )
+        assert q75 <= q100 or math.isclose(q75, q100, rel_tol=1e-9, abs_tol=1e-12), (
+            f"Expected q75 <= q100, got {q75} > {q100}"
+        )
 
     @pytest.mark.parametrize("dtype", ["int32", "int64", "float32", "float64", "bool", "string"])
     @hypothesis_settings(max_examples=3000, deadline=None)

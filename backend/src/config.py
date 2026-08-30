@@ -394,7 +394,7 @@ class Settings(BaseSettings):
     # 1.5B model is four minutes for a decision worth sixty tokens. The per-call
     # budgets below are what each kind of call actually needs.
     # ------------------------------------------------------------------ #
-    MAX_TOKENS: int = 4096
+    MAX_TOKENS: int = 8192
     TEMPERATURE: float = 0.0
     #: Context window requested from Ollama. Derived from the host when unset --
     #: this is a *load-time* parameter, so it fixes the KV cache Ollama allocates

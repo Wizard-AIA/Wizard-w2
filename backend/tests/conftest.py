@@ -262,6 +262,8 @@ def _clean_database():
     settings.AGENT_TIER = "auto"
     settings.AGENT_VERIFY = True
     settings.AGENT_GROUNDING_CHECK = True
+    settings.MAX_TOKENS = 8192
+    os.environ.pop("MAX_TOKENS", None)
     yield
     semantic_cache.clear()
     usage_ledger.clear()
@@ -278,6 +280,8 @@ def _clean_database():
     settings.AGENT_TIER = "auto"
     settings.AGENT_VERIFY = True
     settings.AGENT_GROUNDING_CHECK = True
+    settings.MAX_TOKENS = 8192
+    os.environ.pop("MAX_TOKENS", None)
 
 
 @pytest.fixture
