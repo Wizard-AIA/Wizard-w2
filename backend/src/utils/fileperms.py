@@ -24,7 +24,7 @@ from src.utils.logging import logger
 
 try:
     import ctypes
-    from ctypes import wintypes
+    wintypes = ctypes.wintypes
 except ImportError:
     ctypes = None  # type: ignore[assignment]
     wintypes = None  # type: ignore[assignment]
