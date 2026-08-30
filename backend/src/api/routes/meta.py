@@ -311,6 +311,9 @@ async def server_config() -> ServerConfig:
         vision_enabled=settings.VISION_ENABLED,
         skills_enabled=settings.SKILLS_ENABLED,
         api_provider=settings.API_PROVIDER,
+        embedding_provider=settings.EMBEDDING_PROVIDER,
+        embedding_model=settings.EMBEDDING_REMOTE_MODEL,
+        embeddings_remote_enabled=settings.EMBEDDINGS_REMOTE_ENABLED,
     )
 
 
@@ -569,6 +572,26 @@ async def update_server_config(
         os.environ["GATEWAY_API_KEY"] = payload.gateway_api_key
         credentials.set_key("custom_gateway", payload.gateway_api_key)
         env_updates["GATEWAY_API_KEY"] = payload.gateway_api_key
+
+    if payload.embedding_provider is not None:
+        settings.EMBEDDING_PROVIDER = payload.embedding_provider
+        os.environ["EMBEDDING_PROVIDER"] = payload.embedding_provider
+        env_updates["EMBEDDING_PROVIDER"] = payload.embedding_provider
+
+    if payload.embedding_model is not None:
+        settings.EMBEDDING_REMOTE_MODEL = payload.embedding_model
+        os.environ["EMBEDDING_REMOTE_MODEL"] = payload.embedding_model
+        env_updates["EMBEDDING_REMOTE_MODEL"] = payload.embedding_model
+
+    if payload.embeddings_remote_enabled is not None:
+        settings.EMBEDDINGS_REMOTE_ENABLED = payload.embeddings_remote_enabled
+        os.environ["EMBEDDINGS_REMOTE_ENABLED"] = str(payload.embeddings_remote_enabled).lower()
+        env_updates["EMBEDDINGS_REMOTE_ENABLED"] = str(payload.embeddings_remote_enabled).lower()
+
+    if any(k in env_updates for k in ("EMBEDDING_PROVIDER", "EMBEDDING_REMOTE_MODEL", "EMBEDDINGS_REMOTE_ENABLED")):
+        embedding_service._remote = None
+        embedding_service._remote_checked = False
+        embedding_service.warm(block=False)
 
     if env_updates:
         _persist_env_file(env_updates)

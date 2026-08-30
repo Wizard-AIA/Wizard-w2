@@ -435,7 +435,14 @@ class EmbeddingService:
         for model in models:
             if "embedding" in (model.capabilities or []):
                 return model.name
-        return ""
+
+        # Standard defaults if nothing was explicitly discovered
+        defaults = {
+            "openai": "text-embedding-3-small",
+            "ollama": "nomic-embed-text",
+            "gemini": "text-embedding-004",
+        }
+        return defaults.get(provider, "")
 
     def _get_model(self):
         """The optional local sentence-transformers model, if it is installed."""

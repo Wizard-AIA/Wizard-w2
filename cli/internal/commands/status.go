@@ -59,8 +59,19 @@ func RunStatus(env *Env, args []string) int {
 	case !dataModeFound || dataMode == "":
 		dataMode = "(empty -- derives to local-only, or cloud-only if API_PROVIDER is already a cloud backend)"
 	}
-	fmt.Fprintf(env.Out, "\nAPI_PROVIDER: %s\n", provider)
-	fmt.Fprintf(env.Out, "DATA_MODE:    %s\n", dataMode)
+	fmt.Fprintf(env.Out, "\nAPI_PROVIDER:       %s\n", provider)
+	fmt.Fprintf(env.Out, "DATA_MODE:          %s\n", dataMode)
+
+	embProvider, embProvFound, _ := readEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER")
+	if !embProvFound || embProvider == "" {
+		embProvider = "(follows API_PROVIDER)"
+	}
+	embModel, embModelFound, _ := readEnvValue(env.BackendEnvPath(), "EMBEDDING_REMOTE_MODEL")
+	if !embModelFound || embModel == "" {
+		embModel = "(auto-discover or fallback)"
+	}
+	fmt.Fprintf(env.Out, "EMBEDDING_PROVIDER: %s\n", embProvider)
+	fmt.Fprintf(env.Out, "EMBEDDING_MODEL:    %s\n", embModel)
 
 	execBackend, found, err := readEnvValue(env.BackendEnvPath(), "EXECUTION_BACKEND")
 	switch {
