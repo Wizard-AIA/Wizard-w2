@@ -676,4 +676,3 @@ def test_data_mode_synchronization_with_active_session_and_config(client: TestCl
     finally:
         settings.DATA_MODE = orig_mode
         os.environ["DATA_MODE"] = orig_mode
-
