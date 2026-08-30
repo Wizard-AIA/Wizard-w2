@@ -22,10 +22,14 @@ from pathlib import Path
 from src.utils.logging import logger
 
 
-try:
-    import ctypes
-    wintypes = ctypes.wintypes
-except ImportError:
+if sys.platform == "win32":
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except (ImportError, AttributeError):
+        ctypes = None  # type: ignore[assignment]
+        wintypes = None  # type: ignore[assignment]
+else:
     ctypes = None  # type: ignore[assignment]
     wintypes = None  # type: ignore[assignment]
 
