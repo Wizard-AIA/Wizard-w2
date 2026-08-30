@@ -51,9 +51,28 @@ _TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("model_based", ("model", "regression", "classify", "classification")),
     ("inferential", ("correlate", "correlation", "relationship", "associated", "association")),
     ("diagnostic", ("why did", "why is", "root cause")),
-    ("exploratory", ("explore", "understand the", "overview", "summarize the data")),
+    (
+        "exploratory",
+        ("explore", "understand the", "overview", "summarize the data", "distribution", "histogram", "spread"),
+    ),
     ("evidence_synthesis", ("synthesize", "across all sources")),
-    ("descriptive", ("how many", "what is the", "total ", "average ", "count ", "sum of")),
+    (
+        "descriptive",
+        (
+            "how many",
+            "what is the",
+            "total ",
+            "average ",
+            "count ",
+            "sum of",
+            "describe",
+            "statistics",
+            "stats",
+            "plot",
+            "chart",
+            "show",
+        ),
+    ),
 )
 
 #: Phrases that name the column right after them as the outcome, not a position or a type guess --

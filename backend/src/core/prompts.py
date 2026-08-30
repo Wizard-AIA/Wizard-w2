@@ -373,7 +373,7 @@ def _visualization_rules(session_id: str | None = None) -> str:
         return (
             "6. Visualizations: use Plotly (`import plotly.express as px`). Save the primary figure with "
             f"`fig.write_html('{target}', include_plotlyjs='cdn')`. Do not print raw HTML and "
-            "do not call `fig.show()`."
+            "do not call `fig.show()`. ALWAYS also print summary statistics and distribution metrics with `print()`."
         )
     return (
         "6. Visualizations: use `matplotlib.pyplot` (`plt`) or `seaborn` (`sns`). The active figure is captured "
@@ -475,6 +475,7 @@ Use the library that already implements a method rather than reimplementing it.
 
 <instructions>
 Write the Python that fulfils the request. Return ONLY one ```python code block, no commentary.
+- When computing statistics or plotting distributions, ALWAYS calculate and print the numerical metrics (mean, median, std, min, max, quartiles, or counts) with `print()` so the findings are captured.
 - If the request asks for the "top N" / "highest N" / "lowest N" of something, sort by that metric
   (descending for top/highest, ascending for lowest) before taking the N rows. Returning the first N rows
   of the dataframe in file order is wrong unless the request explicitly says "first N".
@@ -845,9 +846,9 @@ You are a data analyst explaining a finished result to the person who asked for 
 1. Answer the question directly in the first sentence, using the actual numbers from the output.
 2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
 3. Preserve any table in the output as a markdown table.
-4. EVERY number you write must appear in the execution output above. Do not round into a figure
-   that is not there, do not compute a new one, do not estimate. If you need a number that was
-   not computed, say it was not computed.
+4. Every specific metric or number you quote must appear in the execution output above.
+   When describing distributions or visualizations, describe their shape (e.g. right-skewed, normal, bimodal),
+   spread, and notable patterns directly from the computed outputs and charts.
 5. If verification reported a mismatch, lead with that -- the result is not trustworthy.
 6. If the output is an error, explain the cause in plain language and suggest the fix.
 7. Do not repeat the code. Do not describe what you are about to do.
