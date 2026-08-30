@@ -4,6 +4,16 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.7] - 2026-08-30
+
+### Fixed
+- **Markdown Table Block Parsing:** Fixed a parsing bug where tables preceded by paragraphs were swallowed into plain text. Table header detection (`| Column | ...`) and row boundaries now parse accurately and render into interactive, styled data tables with zebra striping and tabular numbers.
+- **Gemini Free Tier Model Prioritization:** Updated default model suggestions to prioritize high-capacity Flash models (`gemini-2.5-flash` and `gemini-3.7-flash`) over quota-exhausted preview models (`gemini-3.1-pro`), ensuring zero-friction out-of-the-box performance for Google AI Studio keys.
+- **LLM Error Sanitization:** Added intelligent exception sanitization that parses HTTP 429 quota/rate-limit and 401 authentication errors into clean, actionable advice with retry timers instead of raw JSON exception tracebacks.
+- **WebSocket Session Auto-Minting:** WebSocket connection handshakes with stale or expired session tokens now self-heal by automatically minting fresh sessions, preventing infinite reconnect loops on browser refresh.
+- **Sandbox Capability Diagnostics:** Refined macOS capability diagnostics to cleanly report OS-level security constraints (Apple Silicon seatbelt deprecation and `RLIMIT_AS` memory capping behavior) with clear recommendations for Docker kernel sandboxing.
+- **Default Execution Runtime:** Defaulted execution backend to `host` with auto-approve permissions for seamless autonomous data analysis out of the box.
+
 ## [v1.0.6] - 2026-08-30
 
 ### Added
