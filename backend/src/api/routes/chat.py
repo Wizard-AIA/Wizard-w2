@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from src.api.deps import (
     SESSION_HEADER,
@@ -123,27 +125,103 @@ async def chat(
             store.release(x_idempotency_key)
 
 
-class WebSocketEmitter:
-    """Serialises orchestrator events onto a socket.
+@router.post("/api/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    session: Session = Depends(require_dataset),
+    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
+):
+    """Server-Sent Events alternative to WebSocket for proxy-hostile environments."""
+    async def event_generator():
+        collector = EventCollector()
+        # Run orchestrator in background task
+        task = asyncio.create_task(
+            orchestrator.run(
+                session=session,
+                instruction=body.message,
+                mode=body.mode,
+                emitter=collector,
+                approved_plan=body.approved_plan,
+            )
+        )
+        # Stream events as they arrive
+        seen = 0
+        while not task.done():
+            await asyncio.sleep(0.05)
+            events = collector.events[seen:]
+            seen += len(events)
+            for evt in events:
+                yield f"data: {json.dumps(evt.to_dict())}\n\n"
+        # Final events
+        events = collector.events[seen:]
+        for evt in events:
+            yield f"data: {json.dumps(evt.to_dict())}\n\n"
+        # Send result
+        try:
+            result = task.result()
+            yield f"data: {json.dumps({'type': 'result', 'content': result.to_dict() if hasattr(result, 'to_dict') else str(result)})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
 
-    Send failures are swallowed: a client that navigated away must not surface as
-    an orchestrator exception mid-run.
-    """
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+class WebSocketEmitter:
+    """Streams orchestrator events to the client over a WebSocket with backpressure control."""
+
+    _HIGH_WATERMARK = 256
+    _DROPPABLE = frozenset({"status", "progress"})  # non-critical frame types
 
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
         self.closed = False
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self._HIGH_WATERMARK)
+        self._sender_task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Start the background sender coroutine."""
+        self._sender_task = asyncio.create_task(self._drain())
+
+    async def stop(self) -> None:
+        """Signal the sender to flush and stop."""
+        self.closed = True
+        if self._sender_task:
+            await self._queue.put(None)  # sentinel
+            await self._sender_task
+
+    async def _drain(self) -> None:
+        """Background loop: pull frames from the queue and send them."""
+        while True:
+            frame = await self._queue.get()
+            if frame is None:
+                break
+            try:
+                await self.websocket.send_json(frame.to_dict())
+            except (WebSocketDisconnect, RuntimeError):
+                self.closed = True
+                break
+            except Exception as exc:
+                self.closed = True
+                logger.debug("Dropping event, socket unusable", error=str(exc))
+                break
 
     async def __call__(self, event: Event) -> None:
         if self.closed:
             return
         try:
-            await self.websocket.send_json(event.to_dict())
-        except (WebSocketDisconnect, RuntimeError):
-            self.closed = True
-        except Exception as exc:
-            self.closed = True
-            logger.debug("Dropping event, socket unusable", error=str(exc))
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            # Drop non-critical frames under backpressure
+            event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
+            if event_type in self._DROPPABLE:
+                return  # silently drop
+            # For critical frames, make room by discarding oldest droppable
+            # or block briefly
+            try:
+                await asyncio.wait_for(self._queue.put(event), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass  # drop if still full after 1s
 
 
 @router.websocket("/ws/chat")
@@ -223,6 +301,7 @@ async def websocket_chat(
     session = resolved if resolved is not None else session_manager.create()
 
     emitter = WebSocketEmitter(websocket)
+    await emitter.start()
     current_run: asyncio.Task | None = None
     last_code: str | None = None
 
@@ -397,6 +476,6 @@ async def websocket_chat(
         consent_broker.abandon(session.id)
         if current_run and not current_run.done():
             current_run.cancel()
-        emitter.closed = True
+        await emitter.stop()
         ws_gate.release(client_host)
         ws_ip_gate.release(client_addr)

@@ -254,13 +254,19 @@ def load_document(path: Path, name: str) -> ContextDocument:
         raise UnsupportedDocumentError(f"'{name}' parsed successfully but contains no readable text.")
 
     document = ContextDocument(name=name, text=text, source_format=suffix.lstrip("."))
-    for index, body in enumerate(chunk_text(text)):
-        embedding = None
-        try:
-            embedding = embedding_service.encode(body)
-        except Exception as exc:  # pragma: no cover - encoder degrades on its own
-            logger.debug("Chunk embedding failed; lexical fallback will be used", error=str(exc))
-        document.chunks.append(DocumentChunk(document=name, index=index, text=body, embedding=embedding))
+    chunks_text = list(chunk_text(text))
+    embeddings: list[list[float] | None] = [None] * len(chunks_text)
+    try:
+        embeddings = embedding_service.encode_many(chunks_text)
+    except Exception as exc:
+        logger.debug("Batch embedding failed; falling back to per-chunk encoding", error=str(exc))
+        for i, body in enumerate(chunks_text):
+            try:
+                embeddings[i] = embedding_service.encode(body)
+            except Exception:
+                pass  # lexical fallback will be used
+    for index, (body, emb) in enumerate(zip(chunks_text, embeddings)):
+        document.chunks.append(DocumentChunk(document=name, index=index, text=body, embedding=emb))
 
     logger.info("Context document loaded", document=name, chars=len(text), chunks=len(document.chunks))
     return document

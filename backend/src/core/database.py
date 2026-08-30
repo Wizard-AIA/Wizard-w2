@@ -239,6 +239,7 @@ class DatabaseManager:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._write_lock = threading.Lock()
+        self._has_vec = False
         self._init_db()
 
     # ------------------------------------------------------------------ #
@@ -261,6 +262,17 @@ class DatabaseManager:
                 conn.execute("PRAGMA foreign_keys=ON")
             except sqlite3.Error as exc:  # pragma: no cover - pragma support varies
                 logger.warning("Failed to apply SQLite pragmas", error=str(exc))
+            
+            # Attempt to load sqlite-vec for native vector search
+            try:
+                conn.enable_load_extension(True)
+                import sqlite_vec
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+                self._has_vec = True
+            except (ImportError, Exception):
+                self._has_vec = False
+                
             self._local.conn = conn
         return conn
 
@@ -317,6 +329,13 @@ class DatabaseManager:
 
                 for statement in INDEX_STATEMENTS:
                     conn.execute(statement)
+
+                if self._has_vec:
+                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_semantic_cache USING vec0(embedding float[384], +cache_key TEXT)")
+                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_trajectories USING vec0(embedding float[384], +session_id TEXT)")
+                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[384], +session_id TEXT)")
+                
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_trajectories USING fts5(question, code, content='trajectories', content_rowid='rowid')")
             logger.info("SQLite database initialized", path=self.db_path)
         except Exception as e:
             logger.error("Failed to initialize SQLite database", error=str(e))
@@ -449,6 +468,23 @@ class DatabaseManager:
                 conn.execute("DELETE FROM semantic_cache")
         except Exception as e:
             logger.error("Failed to clear semantic cache", error=str(e))
+
+    def clear_cache_by_session(self, session_id: str) -> None:
+        """Remove cache entries for a specific session."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute("SELECT columns FROM schema_registry WHERE session_id = ?", (session_id,)).fetchall()
+                if not rows:
+                    return
+                active_columns = []
+                for row in rows:
+                    if row["columns"]:
+                        active_columns.extend(json.loads(row["columns"]))
+                schema_hash = self._schema_hash(active_columns)
+            with self._write() as conn:
+                conn.execute("DELETE FROM semantic_cache WHERE schema_hash = ?", (schema_hash,))
+        except Exception as e:
+            logger.error("Failed to clear semantic cache by session", error=str(e))
 
     # ------------------------------------------------------------------ #
     # Trajectories (failure -> fix memory)
@@ -1212,6 +1248,30 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to delete schema registry entry", error=str(e))
 
+    def vector_search(self, table: str, query_embedding: list[float], k: int = 10) -> list[tuple[int, float]]:
+        """KNN vector search using sqlite-vec, returns (rowid, distance) pairs."""
+        if not self._has_vec:
+            return []  # caller falls back to in-memory ranking
+        import struct
+        blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+        with self._read() as conn:
+            rows = conn.execute(
+                f"SELECT rowid, distance FROM vec_{table} WHERE embedding MATCH ? AND k = ?",
+                (blob, k),
+            ).fetchall()
+        return [(r["rowid"], r["distance"]) for r in rows]
+
+    def fts_search(self, table: str, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search using FTS5 BM25 ranking."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    f"SELECT rowid, rank FROM fts_{table} WHERE fts_{table} MATCH ? ORDER BY rank LIMIT ?",
+                    (query, limit),
+                ).fetchall()
+            return [{"rowid": r["rowid"], "score": -r["rank"]} for r in rows]
+        except Exception:
+            return []
 
 # Singleton instance
 db_mgr = DatabaseManager()
