@@ -82,7 +82,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://localhost:8000/health", timeout=4).status == 200 else 1)
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://localhost:8000/health/ready", timeout=4).status == 200 else 1)
       interval: 30s
       timeout: 5s
       retries: 3

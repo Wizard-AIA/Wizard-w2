@@ -6,12 +6,14 @@ import asyncio
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import JSONResponse
 
 from src.api.deps import get_credential_store, get_session, require_api_key
 from src.api.schemas import (
     DataModeRequest,
     DataModeResponse,
     DatasetPolicyRequest,
+    HealthDetailResponse,
     HealthResponse,
     ModelDownloadRequest,
     ModelDownloadsResponse,
@@ -33,6 +35,7 @@ from src.api.schemas import (
 from src.config import settings
 from src.core.credentials import CredentialStore
 from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
+from src.core.database import db_mgr
 from src.core.embeddings import embedding_service
 from src.core.execution import isolation_for
 from src.core.infra.cache import get_cache
@@ -56,16 +59,74 @@ router = APIRouter(tags=["meta"])
 API_VERSION = "4.0.0"
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+@router.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@router.get("/health/ready", response_model=HealthDetailResponse)
+async def health_ready() -> JSONResponse:
     backend = runtime_backend.active_backend()
-    return HealthResponse(
-        status="ok",
-        version=API_VERSION,
-        sandbox_available=backend == "docker",
-        execution_backend=backend,
-        model_provider=settings.API_PROVIDER,
+    sandbox_available = backend == "docker"
+    checks: dict[str, str] = {}
+    is_ready = True
+
+    try:
+        with db_mgr._read() as conn:
+            conn.execute("SELECT 1")
+        checks["sqlite"] = "ok"
+    except Exception as e:
+        checks["sqlite"] = str(e)
+        is_ready = False
+
+    if settings.REDIS_URL:
+        try:
+            cache = get_cache()
+            if hasattr(cache, "_client"):
+                if cache._client.ping():
+                    checks["redis"] = "ok"
+                else:
+                    checks["redis"] = "ping failed"
+                    is_ready = False
+            else:
+                checks["redis"] = "ok"
+        except Exception as e:
+            checks["redis"] = str(e)
+            is_ready = False
+
+    if sandbox_available:
+        try:
+            import httpx
+            async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")) as client:
+                resp = await client.get("http://localhost/_ping", timeout=2.0)
+                if resp.status_code == 200:
+                    checks["docker"] = "ok"
+                else:
+                    checks["docker"] = f"status {resp.status_code}"
+                    is_ready = False
+        except Exception as e:
+            checks["docker"] = str(e)
+            is_ready = False
+
+    status_code = 200 if is_ready else 503
+    status = "ok" if is_ready else "degraded"
+    
+    return JSONResponse(
+        status_code=status_code,
+        content=HealthDetailResponse(
+            status=status,
+            version=API_VERSION,
+            sandbox_available=sandbox_available,
+            execution_backend=backend,
+            model_provider=settings.API_PROVIDER,
+            checks=checks
+        ).model_dump()
     )
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health() -> JSONResponse:
+    return await health_ready()
 
 
 def performance_notes() -> list[str]:

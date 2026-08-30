@@ -4,6 +4,8 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -173,6 +175,18 @@ SCHEMA_STATEMENTS = (
         run TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS dead_letter_jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        payload TEXT,
+        error TEXT NOT NULL,
+        stack_trace TEXT,
+        retry_count INTEGER DEFAULT 0,
+        failed_at TEXT DEFAULT (datetime('now')),
+        replayed_at TEXT
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -221,7 +235,8 @@ class DatabaseManager:
         # Ensure parent directory exists
         from pathlib import Path
 
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._db_path = Path(self.db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._write_lock = threading.Lock()
         self._init_db()
@@ -305,6 +320,67 @@ class DatabaseManager:
             logger.info("SQLite database initialized", path=self.db_path)
         except Exception as e:
             logger.error("Failed to initialize SQLite database", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Backup and WAL Checkpoint
+    # ------------------------------------------------------------------ #
+    def backup(self, dest_path: Path | None = None) -> Path:
+        """Create a hot, non-blocking backup of the database using the online backup API."""
+        import sqlite3 as _sqlite3
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = dest_path or self._db_path.parent / "backups" / f"wizard_{ts}.db"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src_conn = self._connection()
+        dst_conn = _sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dst_conn, pages=256, sleep=0.01)
+        finally:
+            dst_conn.close()
+        logger.info("database_backup_completed", dest=str(dest), size_bytes=dest.stat().st_size)
+        return dest
+
+    def checkpoint(self) -> None:
+        """Force a WAL checkpoint to truncate the WAL file."""
+        with self._write() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        logger.info("wal_checkpoint_completed")
+
+    def prune_backups(self, max_count: int = 7) -> int:
+        """Remove old backup files, retaining the most recent *max_count*."""
+        backup_dir = self._db_path.parent / "backups"
+        if not backup_dir.exists():
+            return 0
+        backups = sorted(backup_dir.glob("wizard_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = 0
+        for old in backups[max_count:]:
+            old.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.info("backup_pruning_completed", removed=removed, retained=min(len(backups), max_count))
+        return removed
+
+    # ------------------------------------------------------------------ #
+    # Dead-Letter Queue
+    # ------------------------------------------------------------------ #
+    def save_dead_letter(self, job_id: str, kind: str, payload: str | None, error: str, stack_trace: str | None, retry_count: int) -> None:
+        with self._write() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO dead_letter_jobs (id, kind, payload, error, stack_trace, retry_count) VALUES (?, ?, ?, ?, ?, ?)",
+                (job_id, kind, payload, error, stack_trace, retry_count),
+            )
+
+    def get_dead_letters(self, limit: int = 50) -> list[dict]:
+        with self._read() as conn:
+            rows = conn.execute("SELECT * FROM dead_letter_jobs WHERE replayed_at IS NULL ORDER BY failed_at DESC LIMIT ?", (limit,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_dlq_replayed(self, job_id: str) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE dead_letter_jobs SET replayed_at = datetime('now') WHERE id = ?", (job_id,))
+
+    def delete_dead_letter(self, job_id: str) -> None:
+        with self._write() as conn:
+            conn.execute("DELETE FROM dead_letter_jobs WHERE id = ?", (job_id,))
 
     # ------------------------------------------------------------------ #
     # Vector serialization

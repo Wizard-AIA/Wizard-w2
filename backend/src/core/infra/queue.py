@@ -20,6 +20,7 @@ this process, which keeps the local-first promise intact.
 from __future__ import annotations
 
 import asyncio
+import random
 import threading
 import time
 import uuid
@@ -54,6 +55,8 @@ class Job:
     started_at: float | None = None
     finished_at: float | None = None
     session_id: str | None = None
+    max_retries: int = 3
+    retry_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -106,27 +109,52 @@ class JobQueue:
                 job.started_at = time.time()
                 self._persist(job)
                 logger.info("Job started", job_id=job.id, kind=kind)
-                try:
-                    job.result = await handler(job)
-                    job.status = JobStatus.SUCCEEDED
-                    job.progress = 1.0
-                except asyncio.CancelledError:
-                    job.status = JobStatus.CANCELLED
-                    job.error = "Cancelled"
-                    self._persist(job)
-                    raise
-                except Exception as exc:
-                    job.status = JobStatus.FAILED
-                    job.error = str(exc)
-                    logger.error("Job failed", job_id=job.id, kind=kind, error=str(exc))
-                finally:
-                    job.finished_at = time.time()
-                    self._persist(job)
-                    self._tasks.pop(job.id, None)
+                while True:
+                    try:
+                        job.result = await handler(job)
+                        job.status = JobStatus.SUCCEEDED
+                        job.progress = 1.0
+                        break
+                    except asyncio.CancelledError:
+                        job.status = JobStatus.CANCELLED
+                        job.error = "Cancelled"
+                        self._persist(job)
+                        raise
+                    except Exception as exc:
+                        job.retry_count += 1
+                        if job.retry_count <= job.max_retries:
+                            delay = (2 ** job.retry_count) + random.uniform(0, 0.5)
+                            logger.warning("job_retry", job_id=job.id, kind=kind, retry=job.retry_count, delay_s=round(delay, 2), error=str(exc))
+                            await asyncio.sleep(delay)
+                            continue
+                        job.status = JobStatus.FAILED
+                        job.error = str(exc)
+                        logger.error("job_failed_permanently", job_id=job.id, kind=kind, error=str(exc))
+                        self._route_to_dlq(job, exc)
+                        break
+                job.finished_at = time.time()
+                self._persist(job)
+                self._tasks.pop(job.id, None)
 
         task = asyncio.ensure_future(runner())
         self._tasks[job.id] = task
         return job
+
+    def _route_to_dlq(self, job: Job, exc: Exception) -> None:
+        """Persist a terminally failed job to the dead-letter queue."""
+        import traceback
+        from src.core.database import db_mgr
+        try:
+            db_mgr.save_dead_letter(
+                job_id=job.id,
+                kind=job.kind if hasattr(job, 'kind') else "unknown",
+                payload=None,
+                error=str(exc),
+                stack_trace=traceback.format_exc(),
+                retry_count=job.retry_count,
+            )
+        except Exception as dlq_exc:
+            logger.error("dlq_persist_failed", job_id=job.id, error=str(dlq_exc))
 
     async def run_now(self, kind: str, handler: JobHandler, session_id: str | None = None) -> Job:
         """Runs a job to completion while still respecting the concurrency cap."""

@@ -149,6 +149,17 @@ MODES = ("auto", "fast", "deep", "planning")
 
 
 @dataclass
+class IterationCheckpoint:
+    """Snapshot of a verified iteration's state for quality rollback."""
+    iteration: int
+    code: str
+    output: str
+    confidence: float
+    verified: bool
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass
 class RunState:
     """Everything one analysis turn needs to carry."""
 
@@ -165,6 +176,8 @@ class RunState:
     answer: str = ""
     image: str | None = None
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    checkpoints: list[IterationCheckpoint] = field(default_factory=list)
+    best_checkpoint: IterationCheckpoint | None = None
 
     error: str | None = None
     retry_count: int = 0
@@ -1842,6 +1855,17 @@ class AnalysisOrchestrator:
                     truncated=len(result.output) > budget.observation_chars,
                     chars=len(result.output),
                 )
+
+                # Save iteration checkpoint after successful execution
+                checkpoint = IterationCheckpoint(
+                    iteration=state.iterations_used,
+                    code=state.code,
+                    output=state.output,
+                    confidence=0.0,
+                    verified=False,
+                )
+                state.checkpoints.append(checkpoint)
+
                 return
 
             state.failed_code = state.code
@@ -2119,13 +2143,31 @@ class AnalysisOrchestrator:
                 status, detail = "inconclusive", "The verification step could not be executed."
             elif MISMATCH_MARKER in output:
                 status, detail = "mismatch", output
-                state.warnings.append(
-                    "Independent verification disagreed with the analysis. The result below is not trustworthy."
-                )
+                if state.best_checkpoint:
+                    logger.warning(
+                        "quality_rollback",
+                        from_iteration=state.iterations_used,
+                        to_iteration=state.best_checkpoint.iteration,
+                        reason="verification_mismatch",
+                    )
+                    state.code = state.best_checkpoint.code
+                    state.output = state.best_checkpoint.output
+                    state.warnings.append(
+                        "Independent verification disagreed with the analysis. The result below is not trustworthy. "
+                        f"Rolled back from iteration {state.iterations_used} to verified "
+                        f"iteration {state.best_checkpoint.iteration}."
+                    )
+                else:
+                    state.warnings.append(
+                        "Independent verification disagreed with the analysis. The result below is not trustworthy."
+                    )
                 session.cache_verification(verification_key, (status, detail))
             elif VERIFIED_MARKER in output:
                 status, detail = "verified", output
                 session.cache_verification(verification_key, (status, detail))
+                if state.checkpoints:
+                    state.checkpoints[-1].verified = True
+                    state.best_checkpoint = state.checkpoints[-1]
             else:
                 status, detail = "inconclusive", output
 
@@ -2253,6 +2295,23 @@ class AnalysisOrchestrator:
                     message=finding.message,
                     suggested_reaction=finding.suggested_reaction,
                 )
+            critical_findings = [f for f in findings if f.severity == "error"]
+            if critical_findings and state.best_checkpoint:
+                logger.warning(
+                    "quality_rollback",
+                    from_iteration=state.iterations_used,
+                    to_iteration=state.best_checkpoint.iteration,
+                    reason="critic_error",
+                    findings=[f.category for f in critical_findings],
+                )
+                state.code = state.best_checkpoint.code
+                state.output = state.best_checkpoint.output
+                state.warnings.append(
+                    f"Rolled back from iteration {state.iterations_used} to verified "
+                    f"iteration {state.best_checkpoint.iteration} due to critical analytical flaws: "
+                    f"{', '.join(f.category for f in critical_findings)}."
+                )
+
             state.tool_calls.append({"tool": "critic", "count": len(findings)})
         except Exception as exc:
             logger.error("Could not run critic", error=str(exc))

@@ -46,6 +46,15 @@ class HealthResponse(BaseModel):
     model_provider: str
 
 
+class HealthDetailResponse(BaseModel):
+    status: str = "ok"
+    version: str
+    sandbox_available: bool
+    execution_backend: str = "inprocess"
+    model_provider: str
+    checks: dict[str, str]
+
+
 class ServerConfig(BaseModel):
     """Capabilities the client uses to decide what UI to show."""
 
