@@ -206,7 +206,8 @@ class SandboxSession(DaemonClient):
             info.mode = 0o644
             archive.addfile(info, io.BytesIO(payload))
         stream.seek(0)
-        self.container.put_archive(os.path.dirname(path), stream)
+        if self.container is not None:
+            self.container.put_archive(os.path.dirname(path), stream)
 
     # ------------------------------------------------------------------ #
     def interrupt(self) -> bool:

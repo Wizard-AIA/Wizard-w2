@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import JSONResponse
 
 from src.api.deps import get_credential_store, get_session, require_api_key
 from src.api.schemas import (
     DataModeRequest,
     DataModeResponse,
     DatasetPolicyRequest,
+    HealthDetailResponse,
     HealthResponse,
     ModelDownloadRequest,
     ModelDownloadsResponse,
     ModelDownloadState,
+    ModelInfoResponse,
     ModelListResponse,
     ModelSelection,
     PermissionCategoryResponse,
@@ -33,6 +37,7 @@ from src.api.schemas import (
 from src.config import settings
 from src.core.credentials import CredentialStore
 from src.core.data_mode import allowed_providers, check_provider, describe_mode, disabled_tools
+from src.core.database import db_mgr
 from src.core.embeddings import embedding_service
 from src.core.execution import isolation_for
 from src.core.infra.cache import get_cache
@@ -56,16 +61,85 @@ router = APIRouter(tags=["meta"])
 API_VERSION = "4.0.0"
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+@router.get("/metrics")
+async def metrics_endpoint():
+    from starlette.responses import PlainTextResponse
+
+    from src.core.infra.metrics import metrics
+
+    return PlainTextResponse(content=metrics.generate_prometheus_text(), media_type="text/plain; version=0.0.4")
+
+
+@router.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@router.get("/health/ready", response_model=HealthDetailResponse)
+async def health_ready() -> JSONResponse:
     backend = runtime_backend.active_backend()
-    return HealthResponse(
-        status="ok",
-        version=API_VERSION,
-        sandbox_available=backend == "docker",
-        execution_backend=backend,
-        model_provider=settings.API_PROVIDER,
+    sandbox_available = backend == "docker"
+    checks: dict[str, str] = {}
+    is_ready = True
+
+    try:
+        with db_mgr._read() as conn:
+            conn.execute("SELECT 1")
+        checks["sqlite"] = "ok"
+    except Exception as e:
+        checks["sqlite"] = str(e)
+        is_ready = False
+
+    if settings.REDIS_URL:
+        try:
+            cache = get_cache()
+            if hasattr(cache, "_client"):
+                if cache._client.ping():
+                    checks["redis"] = "ok"
+                else:
+                    checks["redis"] = "ping failed"
+                    is_ready = False
+            else:
+                checks["redis"] = "ok"
+        except Exception as e:
+            checks["redis"] = str(e)
+            is_ready = False
+
+    if sandbox_available:
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")) as client:
+                resp = await client.get("http://localhost/_ping", timeout=2.0)
+                if resp.status_code == 200:
+                    checks["docker"] = "ok"
+                else:
+                    checks["docker"] = f"status {resp.status_code}"
+                    is_ready = False
+        except Exception as e:
+            checks["docker"] = str(e)
+            is_ready = False
+
+    status_code = 200 if is_ready else 503
+    status = "ok" if is_ready else "degraded"
+
+    return JSONResponse(
+        status_code=status_code,
+        content=HealthDetailResponse(
+            status=status,
+            version=API_VERSION,
+            app_version="1.0.6",
+            sandbox_available=sandbox_available,
+            execution_backend=backend,
+            model_provider=settings.API_PROVIDER,
+            checks=checks,
+        ).model_dump(),
     )
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health() -> JSONResponse:
+    return await health_ready()
 
 
 def performance_notes() -> list[str]:
@@ -185,10 +259,11 @@ async def server_config() -> ServerConfig:
     return ServerConfig(
         app_name=settings.APP_NAME,
         version=API_VERSION,
+        app_version="1.0.6",
         plot_format=settings.PLOT_FORMAT,
         sandbox_available=backend == "docker",
         sandbox_enabled=settings.SANDBOX_ENABLED,
-        execution_backend=backend,
+        execution_backend=cast(Any, backend),
         execution_backend_setting=settings.EXECUTION_BACKEND,
         execution_isolation=isolation_for(backend),
         host_sandbox=settings.HOST_SANDBOX,
@@ -244,6 +319,9 @@ async def server_config() -> ServerConfig:
         vision_enabled=settings.VISION_ENABLED,
         skills_enabled=settings.SKILLS_ENABLED,
         api_provider=settings.API_PROVIDER,
+        embedding_provider=settings.EMBEDDING_PROVIDER,
+        embedding_model=settings.EMBEDDING_REMOTE_MODEL,
+        embeddings_remote_enabled=settings.EMBEDDINGS_REMOTE_ENABLED,
     )
 
 
@@ -427,7 +505,7 @@ async def update_server_config(
     if payload.openai_api_key is not None:
         settings.OPENAI_API_KEY = payload.openai_api_key
         os.environ["OPENAI_API_KEY"] = payload.openai_api_key
-        credentials.set_key("openai", payload.openai_api_key)
+        credentials.set("openai", payload.openai_api_key)
         env_updates["OPENAI_API_KEY"] = payload.openai_api_key
 
     if payload.anthropic_base_url is not None:
@@ -438,7 +516,7 @@ async def update_server_config(
     if payload.anthropic_api_key is not None:
         settings.ANTHROPIC_API_KEY = payload.anthropic_api_key
         os.environ["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
-        credentials.set_key("anthropic", payload.anthropic_api_key)
+        credentials.set("anthropic", payload.anthropic_api_key)
         env_updates["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
 
     if payload.api_provider is not None:
@@ -489,7 +567,7 @@ async def update_server_config(
     if payload.gemini_api_key is not None:
         settings.GEMINI_API_KEY = payload.gemini_api_key
         os.environ["GEMINI_API_KEY"] = payload.gemini_api_key
-        credentials.set_key("gemini", payload.gemini_api_key)
+        credentials.set("gemini", payload.gemini_api_key)
         env_updates["GEMINI_API_KEY"] = payload.gemini_api_key
 
     if payload.gateway_api_url is not None:
@@ -500,8 +578,28 @@ async def update_server_config(
     if payload.gateway_api_key is not None:
         settings.GATEWAY_API_KEY = payload.gateway_api_key
         os.environ["GATEWAY_API_KEY"] = payload.gateway_api_key
-        credentials.set_key("custom_gateway", payload.gateway_api_key)
+        credentials.set("custom_gateway", payload.gateway_api_key)
         env_updates["GATEWAY_API_KEY"] = payload.gateway_api_key
+
+    if payload.embedding_provider is not None:
+        settings.EMBEDDING_PROVIDER = payload.embedding_provider
+        os.environ["EMBEDDING_PROVIDER"] = payload.embedding_provider
+        env_updates["EMBEDDING_PROVIDER"] = payload.embedding_provider
+
+    if payload.embedding_model is not None:
+        settings.EMBEDDING_REMOTE_MODEL = payload.embedding_model
+        os.environ["EMBEDDING_REMOTE_MODEL"] = payload.embedding_model
+        env_updates["EMBEDDING_REMOTE_MODEL"] = payload.embedding_model
+
+    if payload.embeddings_remote_enabled is not None:
+        settings.EMBEDDINGS_REMOTE_ENABLED = payload.embeddings_remote_enabled
+        os.environ["EMBEDDINGS_REMOTE_ENABLED"] = str(payload.embeddings_remote_enabled).lower()
+        env_updates["EMBEDDINGS_REMOTE_ENABLED"] = str(payload.embeddings_remote_enabled).lower()
+
+    if any(k in env_updates for k in ("EMBEDDING_PROVIDER", "EMBEDDING_REMOTE_MODEL", "EMBEDDINGS_REMOTE_ENABLED")):
+        embedding_service._remote = None
+        embedding_service._remote_checked = False
+        embedding_service.warm(block=False)
 
     if env_updates:
         _persist_env_file(env_updates)
@@ -710,7 +808,7 @@ async def list_models(
 
     return ModelListResponse(
         provider=resolved,
-        models=[model.to_dict() for model in models],
+        models=[ModelInfoResponse(**model.to_dict()) for model in models],
         suggested=suggested,
         selected={
             # Falls back to what discovery resolved, not to the configured

@@ -88,9 +88,12 @@ def _set_entry_native(path: Path, sid: str) -> bool:
             ("Trustee", _TrusteeW),
         ]
 
+    windll = getattr(ctypes, "WinDLL", None)
+    if windll is None:
+        return False
     try:
-        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = windll("advapi32", use_last_error=True)
+        kernel32 = windll("kernel32", use_last_error=True)
     except OSError:
         return False
 
@@ -140,8 +143,11 @@ def _reset_native(path: Path) -> None:
     UNPROTECTED_DACL_SECURITY_INFORMATION = 0x20000000
     DACL_SECURITY_INFORMATION = 0x4
     SE_FILE_OBJECT = 1
+    windll = getattr(ctypes, "WinDLL", None)
+    if windll is None:
+        return
     try:
-        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32 = windll("advapi32", use_last_error=True)
         advapi32.SetNamedSecurityInfoW(
             str(path),
             SE_FILE_OBJECT,

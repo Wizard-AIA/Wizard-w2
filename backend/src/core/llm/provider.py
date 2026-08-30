@@ -513,14 +513,15 @@ class LLMProvider:
                 model=spec.model,
                 base_url=spec.base_url or "<default>",
             )
-            return ChatOpenAI(
-                model=spec.model,
-                base_url=spec.base_url or None,
-                api_key=spec.api_key or "not-required",
-                temperature=spec.temperature,
-                max_tokens=spec.max_tokens,
-                timeout=settings.LLM_REQUEST_TIMEOUT,
-            )
+            openai_kwargs: dict[str, Any] = {
+                "model": spec.model,
+                "base_url": spec.base_url or None,
+                "api_key": spec.api_key or "not-required",
+                "temperature": spec.temperature,
+                "max_tokens": spec.max_tokens,
+                "timeout": settings.LLM_REQUEST_TIMEOUT,
+            }
+            return ChatOpenAI(**openai_kwargs)
         except LLMUnavailableError:
             # A missing optional package names what to install; swallowing it here
             # would replace that with a generic "no client available".

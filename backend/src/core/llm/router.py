@@ -12,6 +12,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
+from src.core.llm.slm_router import SLMRouter
+
 
 class TaskTier(StrEnum):
     LIGHTWEIGHT = "lightweight"
@@ -94,6 +96,14 @@ def classify_task_complexity(instruction: str, context: dict[str, Any] | None = 
     failed attempt, or a multi-table session increases the required tier, while
     an explicit lightweight metadata request can still remain cheap.
     """
+    metadata = context or {}
+    # Use SLMRouter to fast-track lightweight queries
+    slm = SLMRouter()
+    intent, tier = slm.route(instruction)
+
+    if intent in ("metadata", "chitchat") and not metadata.get("previous_error") and not metadata.get("multi_step"):
+        return TaskTier.LIGHTWEIGHT
+
     text = " ".join((instruction or "").lower().split())
     metadata = context or {}
 

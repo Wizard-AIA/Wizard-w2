@@ -4,6 +4,8 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -173,6 +175,18 @@ SCHEMA_STATEMENTS = (
         run TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS dead_letter_jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        payload TEXT,
+        error TEXT NOT NULL,
+        stack_trace TEXT,
+        retry_count INTEGER DEFAULT 0,
+        failed_at TEXT DEFAULT (datetime('now')),
+        replayed_at TEXT
+    )
+    """,
 )
 
 INDEX_STATEMENTS = (
@@ -194,6 +208,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_evidence_edges_session ON evidence_edges(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_runs_message ON analysis_runs(message_id)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_runs_session ON analysis_runs(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_time ON analysis_state(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_time ON analysis_runs(created_at)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -221,9 +237,11 @@ class DatabaseManager:
         # Ensure parent directory exists
         from pathlib import Path
 
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._db_path = Path(self.db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._write_lock = threading.Lock()
+        self._has_vec = False
         self._init_db()
 
     # ------------------------------------------------------------------ #
@@ -246,6 +264,18 @@ class DatabaseManager:
                 conn.execute("PRAGMA foreign_keys=ON")
             except sqlite3.Error as exc:  # pragma: no cover - pragma support varies
                 logger.warning("Failed to apply SQLite pragmas", error=str(exc))
+
+            # Attempt to load sqlite-vec for native vector search
+            try:
+                conn.enable_load_extension(True)
+                import sqlite_vec
+
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+                self._has_vec = True
+            except (ImportError, Exception):
+                self._has_vec = False
+
             self._local.conn = conn
         return conn
 
@@ -302,9 +332,90 @@ class DatabaseManager:
 
                 for statement in INDEX_STATEMENTS:
                     conn.execute(statement)
+
+                if self._has_vec:
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_semantic_cache USING vec0(embedding float[384], +cache_key TEXT)"
+                    )
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_trajectories USING vec0(embedding float[384], +session_id TEXT)"
+                    )
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[384], +session_id TEXT)"
+                    )
+
+                conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS fts_trajectories USING fts5(question, code, content='trajectories', content_rowid='rowid')"
+                )
             logger.info("SQLite database initialized", path=self.db_path)
         except Exception as e:
             logger.error("Failed to initialize SQLite database", error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Backup and WAL Checkpoint
+    # ------------------------------------------------------------------ #
+    def backup(self, dest_path: Path | None = None) -> Path:
+        """Create a hot, non-blocking backup of the database using the online backup API."""
+        import sqlite3 as _sqlite3
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = dest_path or self._db_path.parent / "backups" / f"wizard_{ts}.db"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src_conn = self._connection()
+        dst_conn = _sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dst_conn, pages=256, sleep=0.01)
+        finally:
+            dst_conn.close()
+        logger.info("database_backup_completed", dest=str(dest), size_bytes=dest.stat().st_size)
+        return dest
+
+    def checkpoint(self) -> None:
+        """Force a WAL checkpoint to truncate the WAL file."""
+        with self._write() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        logger.info("wal_checkpoint_completed")
+
+    def prune_backups(self, max_count: int = 7) -> int:
+        """Remove old backup files, retaining the most recent *max_count*."""
+        backup_dir = self._db_path.parent / "backups"
+        if not backup_dir.exists():
+            return 0
+        backups = sorted(backup_dir.glob("wizard_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = 0
+        for old in backups[max_count:]:
+            old.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.info("backup_pruning_completed", removed=removed, retained=min(len(backups), max_count))
+        return removed
+
+    # ------------------------------------------------------------------ #
+    # Dead-Letter Queue
+    # ------------------------------------------------------------------ #
+    def save_dead_letter(
+        self, job_id: str, kind: str, payload: str | None, error: str, stack_trace: str | None, retry_count: int
+    ) -> None:
+        with self._write() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO dead_letter_jobs (id, kind, payload, error, stack_trace, retry_count) VALUES (?, ?, ?, ?, ?, ?)",
+                (job_id, kind, payload, error, stack_trace, retry_count),
+            )
+
+    def get_dead_letters(self, limit: int = 50) -> list[dict]:
+        with self._read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM dead_letter_jobs WHERE replayed_at IS NULL ORDER BY failed_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_dlq_replayed(self, job_id: str) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE dead_letter_jobs SET replayed_at = datetime('now') WHERE id = ?", (job_id,))
+
+    def delete_dead_letter(self, job_id: str) -> None:
+        with self._write() as conn:
+            conn.execute("DELETE FROM dead_letter_jobs WHERE id = ?", (job_id,))
 
     # ------------------------------------------------------------------ #
     # Vector serialization
@@ -373,6 +484,25 @@ class DatabaseManager:
                 conn.execute("DELETE FROM semantic_cache")
         except Exception as e:
             logger.error("Failed to clear semantic cache", error=str(e))
+
+    def clear_cache_by_session(self, session_id: str) -> None:
+        """Remove cache entries for a specific session."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT columns FROM schema_registry WHERE session_id = ?", (session_id,)
+                ).fetchall()
+                if not rows:
+                    return
+                active_columns = []
+                for row in rows:
+                    if row["columns"]:
+                        active_columns.extend(json.loads(row["columns"]))
+                schema_hash = self._schema_hash(active_columns)
+            with self._write() as conn:
+                conn.execute("DELETE FROM semantic_cache WHERE schema_hash = ?", (schema_hash,))
+        except Exception as e:
+            logger.error("Failed to clear semantic cache by session", error=str(e))
 
     # ------------------------------------------------------------------ #
     # Trajectories (failure -> fix memory)
@@ -1065,6 +1195,25 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Failed to prune analysis runs", error=str(e))
 
+    def prune_old_analysis_data(self, days: int = 7) -> dict[str, int]:
+        """Prunes historical analytical states, plan revisions, evidence graphs, and runs older than `days`."""
+        cutoff = time.time() - (days * 86400)
+        deleted: dict[str, int] = {}
+        try:
+            with self._write() as conn:
+                for table, col in [
+                    ("analysis_state", "timestamp"),
+                    ("plan_revisions", "timestamp"),
+                    ("evidence_nodes", "at"),
+                    ("analysis_runs", "created_at"),
+                ]:
+                    cur = conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,))
+                    deleted[table] = int(cur.rowcount or 0)
+            logger.info("Pruned old analysis data", days=days, deleted=deleted)
+        except Exception as e:
+            logger.error("Failed to prune old analysis data", error=str(e))
+        return deleted
+
     # ------------------------------------------------------------------ #
     # Schema Registry
     # ------------------------------------------------------------------ #
@@ -1135,6 +1284,32 @@ class DatabaseManager:
             logger.info("Deleted schema from registry", filename=filename)
         except Exception as e:
             logger.error("Failed to delete schema registry entry", error=str(e))
+
+    def vector_search(self, table: str, query_embedding: list[float], k: int = 10) -> list[tuple[int, float]]:
+        """KNN vector search using sqlite-vec, returns (rowid, distance) pairs."""
+        if not self._has_vec:
+            return []  # caller falls back to in-memory ranking
+        import struct
+
+        blob = struct.pack(f"{len(query_embedding)}f", *query_embedding)
+        with self._read() as conn:
+            rows = conn.execute(
+                f"SELECT rowid, distance FROM vec_{table} WHERE embedding MATCH ? AND k = ?",
+                (blob, k),
+            ).fetchall()
+        return [(r["rowid"], r["distance"]) for r in rows]
+
+    def fts_search(self, table: str, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search using FTS5 BM25 ranking."""
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    f"SELECT rowid, rank FROM fts_{table} WHERE fts_{table} MATCH ? ORDER BY rank LIMIT ?",
+                    (query, limit),
+                ).fetchall()
+            return [{"rowid": r["rowid"], "score": -r["rank"]} for r in rows]
+        except Exception:
+            return []
 
 
 # Singleton instance

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 
 #: A number as it appears in prose or in output: 1,234.56  -3.2e4  99%  $12.00
@@ -207,6 +208,95 @@ def check_grounding(answer: str, executed_output: str, instruction: str = "") ->
         report.ungrounded.append(token)
 
     return report
+
+
+def check_table_grounding(answer_text: str, dataframes: list[Any]) -> dict[str, Any]:
+    """Extracts Markdown tables from answer_text and checks grounding against dataframes."""
+
+    unmatched: list[str] = []
+    result: dict[str, Any] = {
+        "tables_found": 0,
+        "grounded": True,
+        "unmatched_cells": unmatched,
+        "grounding_ratio": 1.0,
+    }
+
+    if not answer_text.strip():
+        return result
+
+    tables = []
+    lines = answer_text.split("\n")
+    current_table = []
+
+    for line in lines:
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            current_table.append(line.strip())
+        else:
+            if current_table:
+                tables.append(current_table)
+                current_table = []
+    if current_table:
+        tables.append(current_table)
+
+    if not tables:
+        return result
+
+    result["tables_found"] = len(tables)
+
+    import pandas as pd
+
+    all_values = []
+    for df in dataframes:
+        if isinstance(df, pd.DataFrame):
+            all_values.extend([str(c) for c in df.columns])
+            for _, row in df.iterrows():
+                all_values.extend([str(v) for v in row.values])
+        elif isinstance(df, pd.Series):
+            all_values.append(str(df.name))
+            all_values.extend([str(v) for v in df.values])
+        else:
+            all_values.append(str(df))
+
+    normalized_values = {v.strip().lower() for v in all_values}
+
+    total_cells = 0
+    matched_cells = 0
+
+    for table in tables:
+        for row in table:
+            if set(row.replace("|", "").replace(" ", "").replace("-", "").replace(":", "")) == set():
+                continue
+
+            cells = [cell.strip() for cell in row.split("|")[1:-1]]
+            for cell in cells:
+                if not cell:
+                    continue
+                total_cells += 1
+                cell_normalized = cell.lower()
+
+                if cell_normalized in normalized_values:
+                    matched_cells += 1
+                else:
+                    cell_num = _as_float(cell)
+                    if cell_num is not None:
+                        matched = False
+                        for val in normalized_values:
+                            val_num = _as_float(val)
+                            if val_num is not None and _matches(cell, val_num):
+                                matched = True
+                                break
+                        if matched:
+                            matched_cells += 1
+                        else:
+                            unmatched.append(cell)
+                    else:
+                        unmatched.append(cell)
+
+    if total_cells > 0:
+        result["grounding_ratio"] = matched_cells / total_cells
+        result["grounded"] = result["grounding_ratio"] == 1.0
+
+    return result
 
 
 # ---------------------------------------------------------------------- #

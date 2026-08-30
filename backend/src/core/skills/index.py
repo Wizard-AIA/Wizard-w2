@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -146,7 +147,7 @@ class InstallIndex:
             self._cache = records
         return True
 
-    def overlay(self, skills: list[Any]) -> None:
+    def overlay(self, skills: Sequence[Any]) -> None:
         """Stamps provenance onto skills that were installed from somewhere.
 
         Called by the registry after a scan. Mutates in place because a

@@ -41,9 +41,20 @@ class ErrorDetail(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
+    app_version: str = "1.0.6"
     sandbox_available: bool
     execution_backend: str = "inprocess"
     model_provider: str
+
+
+class HealthDetailResponse(BaseModel):
+    status: str = "ok"
+    version: str
+    app_version: str = "1.0.6"
+    sandbox_available: bool
+    execution_backend: str = "inprocess"
+    model_provider: str
+    checks: dict[str, str]
 
 
 class ServerConfig(BaseModel):
@@ -51,6 +62,7 @@ class ServerConfig(BaseModel):
 
     app_name: str
     version: str
+    app_version: str = "1.0.6"
     plot_format: Literal["png", "html"]
     sandbox_available: bool
     sandbox_enabled: bool
@@ -132,6 +144,9 @@ class ServerConfig(BaseModel):
     vision_enabled: bool = False
     skills_enabled: bool = True
     api_provider: str = "ollama"
+    embedding_provider: str = ""
+    embedding_model: str = ""
+    embeddings_remote_enabled: bool = True
 
 
 class UpdateConfigPayload(BaseModel):
@@ -167,6 +182,9 @@ class UpdateConfigPayload(BaseModel):
     llm_num_ctx: int | None = None
     llm_keep_alive: str | None = None
     rag_enabled: bool | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    embeddings_remote_enabled: bool | None = None
     ollama_base_url: str | None = None
     lmstudio_base_url: str | None = None
     openai_base_url: str | None = None

@@ -24,14 +24,16 @@ var validDataModes = map[string]bool{
 // whatever backend/.env already has," never "clear it," matching
 // .env.example's own "the app runs with none of them set" guarantee.
 type providerConfig struct {
-	provider     string
-	dataMode     string
-	baseURL      string
-	anthropicKey string
-	openaiKey    string
-	geminiKey    string
-	gatewayURL   string
-	gatewayKey   string
+	provider          string
+	dataMode          string
+	baseURL           string
+	embeddingProvider string
+	embeddingModel    string
+	anthropicKey      string
+	openaiKey         string
+	geminiKey         string
+	gatewayURL        string
+	gatewayKey        string
 }
 
 // applyProviderConfig writes only the fields the caller actually set, using
@@ -44,6 +46,8 @@ func applyProviderConfig(env *Env, cfg providerConfig) error {
 	sets := [][2]string{
 		{"API_PROVIDER", cfg.provider},
 		{"DATA_MODE", cfg.dataMode},
+		{"EMBEDDING_PROVIDER", cfg.embeddingProvider},
+		{"EMBEDDING_REMOTE_MODEL", cfg.embeddingModel},
 		{"ANTHROPIC_API_KEY", cfg.anthropicKey},
 		{"OPENAI_API_KEY", cfg.openaiKey},
 		{"GEMINI_API_KEY", cfg.geminiKey},

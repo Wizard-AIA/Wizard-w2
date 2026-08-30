@@ -225,14 +225,18 @@ async def preview_data(
         raise HTTPException(status_code=404, detail="Requested dataset is not loaded in this session.")
 
     df = handle.df
+    total_rows = len(df)
+    start = (page - 1) * per_page
     if sort_by:
         if sort_by not in df.columns:
             raise HTTPException(status_code=400, detail=f"Unknown column '{sort_by}'.")
-        df = df.sort_values(by=sort_by, ascending=sort_order == "asc", kind="stable")
-
-    total_rows = len(df)
-    start = (page - 1) * per_page
-    subset = df.iloc[start : start + per_page]
+        # Memory optimization: sort only the target column index, avoiding full DataFrame copy
+        sorted_idx = (
+            df[sort_by].sort_values(ascending=sort_order == "asc", kind="stable").index[start : start + per_page]
+        )
+        subset = df.loc[sorted_idx]
+    else:
+        subset = df.iloc[start : start + per_page]
 
     return PreviewResponse(
         page=page,

@@ -146,6 +146,7 @@ class ContextRetriever:
         query: str,
         df: pd.DataFrame,
         max_columns: int | None = None,
+        plan: str | None = None,
     ) -> tuple[list[str], bool]:
         """Returns (columns_to_describe, was_truncated).
 
@@ -160,20 +161,22 @@ class ContextRetriever:
 
         query_tokens = tokenize(query)
 
-        explicit = [c for c in all_columns if mentions_column(query, c)]
-        remaining = [c for c in all_columns if c not in explicit]
+        explicit = {c for c in all_columns if mentions_column(query, c)}
+        if plan:
+            plan_mentions = {c for c in all_columns if mentions_column(plan, c)}
+            explicit = explicit | plan_mentions
+
+        explicit_list = list(explicit)
+        remaining = [c for c in all_columns if c not in explicit_list]
 
         scored: list[tuple[float, str]] = []
         for column in remaining:
             score = lexical_overlap(query_tokens, str(column))
-            # Numeric columns are more often the subject of analysis.
-            if pd.api.types.is_numeric_dtype(df[column].dtype):
-                score += 0.05
             scored.append((score, str(column)))
         scored.sort(key=lambda item: item[0], reverse=True)
 
-        slots = max(0, limit - len(explicit))
-        selected = explicit + [name for _, name in scored[:slots]]
+        slots = max(0, limit - len(explicit_list))
+        selected = explicit_list + [name for _, name in scored[:slots]]
         # Preserve the frame's original column order for readability.
         ordered = [c for c in all_columns if c in set(selected)]
         return ordered, True

@@ -37,6 +37,7 @@ from src.core.agent.consent import consent_broker
 from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor, isolation_for
+from src.core.infra.session_bus import session_bus
 from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.llm.usage import usage_ledger
@@ -527,6 +528,17 @@ class Session:
     def history(self, limit: int | None = None) -> list[dict[str, Any]]:
         return db_mgr.get_chat_messages(self.id, limit=limit or settings.SESSION_HISTORY_TURNS * 2)
 
+    @staticmethod
+    def _compact_text(text: str, budget: int = 450) -> str:
+        if len(text) <= budget:
+            return text
+        truncated = text[:budget]
+        for boundary in ("\n\n", "\n", ". ", ", ", " "):
+            idx = truncated.rfind(boundary)
+            if idx > budget * 0.5:
+                return text[:idx].strip() + " [...]"
+        return truncated + " [...]"
+
     def history_prompt(self, limit: int | None = None) -> str:
         """Renders recent turns for prompt injection. Empty when there is no history."""
         messages = self.history(limit)
@@ -536,9 +548,8 @@ class Session:
         for message in messages:
             speaker = "User" if message["role"] == "user" else "Assistant"
             text = (message["content"] or "").strip()
-            if len(text) > 400:
-                text = text[:400] + "..."
             if text:
+                text = self._compact_text(text)
                 lines.append(f"{speaker}: {text}")
         if not lines:
             return ""
@@ -609,6 +620,7 @@ class Session:
 
     def dispose(self):
         """Releases the container and forgets persisted rows for this session."""
+        session_bus.publish(self.id, {"type": "session_disposed", "session_id": self.id})
         # A pending consent question (`ConsentBroker._pending`) is keyed by
         # session id, not held on the `Session` -- a TTL reap or a capacity
         # eviction of a session with an approval still outstanding (the
@@ -647,6 +659,7 @@ class SessionManager:
             self._sessions[session.id] = session
         logger.info("Session created", session=session.id, active=len(self._sessions))
         self._enforce_capacity()
+        session_bus.publish(session.id, {"type": "session_created", "session_id": session.id})
         return session
 
     def get(self, session_id: str | None) -> Session | None:

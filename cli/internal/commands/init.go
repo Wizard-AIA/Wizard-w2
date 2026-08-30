@@ -25,6 +25,8 @@ func RunInit(env *Env, args []string) int {
 	pullModels := fs.Bool("pull-models", false, "Also `ollama pull` a small default manager/worker pair if Ollama is present and no model is pinned.")
 	managerModel := fs.String("manager-model", "qwen3:8b", "Model to pull for the manager role with --pull-models.")
 	workerModel := fs.String("worker-model", "qwen2.5-coder:7b", "Model to pull for the worker role with --pull-models.")
+	embeddingProvider := fs.String("embedding-provider", "", "Pin EMBEDDING_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty follows --provider.")
+	embeddingModel := fs.String("embedding-model", "", "Model to use for embeddings (e.g. nomic-embed-text, bge-m3, text-embedding-3-small).")
 	provider := fs.String("provider", "", "Pin API_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty leaves backend/.env's existing/default value.")
 	dataMode := fs.String("data-mode", "", "Pin DATA_MODE: local-only | hybrid | cloud-only. Empty leaves it to derive -- see backend/.env.example.")
 	baseURL := fs.String("base-url", "", "Point --provider at a proxy: writes ANTHROPIC_BASE_URL/OPENAI_BASE_URL/GEMINI_BASE_URL/LMSTUDIO_BASE_URL/OLLAMA_BASE_URL depending on --provider.")
@@ -106,6 +108,7 @@ func RunInit(env *Env, args []string) int {
 
 	cfg := providerConfig{
 		provider: *provider, dataMode: *dataMode, baseURL: *baseURL,
+		embeddingProvider: *embeddingProvider, embeddingModel: *embeddingModel,
 		anthropicKey: *anthropicKey, openaiKey: *openaiKey, geminiKey: *geminiKey,
 		gatewayURL: *gatewayURL, gatewayKey: *gatewayKey,
 	}
@@ -130,25 +133,25 @@ func RunInit(env *Env, args []string) int {
 			return 1
 		}
 		fmt.Fprintln(env.Out, "\nPulling default models via Ollama...")
-		if !pullDefaultModels(env, resolvedManager, resolvedWorker) {
+		if !pullDefaultModels(env, resolvedManager, resolvedWorker, *embeddingModel, *provider, *embeddingProvider) {
 			return 1
 		}
 	case ollama.Found && !pureCloud:
-		fmt.Fprintln(env.Out, "\nOllama detected. Run `wizard init --pull-models` to also fetch a default manager/worker model pair.")
+		fmt.Fprintln(env.Out, "\nOllama detected. Run `wizard init --pull-models` to also fetch default manager, worker, and embedding models.")
 	}
 
 	fmt.Fprintln(env.Out, "\nDone. Run `wizard start` to launch the backend and frontend.")
 	return 0
 }
 
-// pullDefaultModels pulls manager/worker into whichever role does not
-// already have a model pinned in backend/.env (MODEL_NAME/WORKER_MODEL_NAME
+// pullDefaultModels pulls manager/worker/embedding into whichever role does not
+// already have a model pinned in backend/.env (MODEL_NAME/WORKER_MODEL_NAME/EMBEDDING_REMOTE_MODEL
 // -- see backend/src/config.py), so a configured checkout does not
 // re-download a default it will not use. It reports whether every requested
 // pull succeeded; the caller turns that into `wizard init`'s exit code, since
 // a silently skipped or failed pull under --pull-models must not look like a
 // completed one.
-func pullDefaultModels(env *Env, managerModel, workerModel string) bool {
+func pullDefaultModels(env *Env, managerModel, workerModel, embeddingModel, provider, embeddingProvider string) bool {
 	type modelPull struct {
 		role   string
 		envKey string
@@ -157,6 +160,14 @@ func pullDefaultModels(env *Env, managerModel, workerModel string) bool {
 	pulls := []modelPull{
 		{"manager", "MODEL_NAME", managerModel},
 		{"worker", "WORKER_MODEL_NAME", workerModel},
+	}
+	// Also pull embedding model if using Ollama
+	if (embeddingProvider == "" || embeddingProvider == "ollama") && (provider == "" || provider == "ollama") {
+		emb := embeddingModel
+		if emb == "" {
+			emb = "nomic-embed-text"
+		}
+		pulls = append(pulls, modelPull{"embedding", "EMBEDDING_REMOTE_MODEL", emb})
 	}
 
 	ok := true

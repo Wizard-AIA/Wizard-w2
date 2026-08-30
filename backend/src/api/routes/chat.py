@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from src.api.deps import (
     SESSION_HEADER,
@@ -30,6 +32,7 @@ from src.config import settings
 from src.core.agent.consent import ConsentBroker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import AnalysisOrchestrator
+from src.core.infra.idempotency import get_idempotency_store
 from src.core.session import Session, session_manager
 from src.utils.errors import safe_error_message
 from src.utils.logging import logger
@@ -37,11 +40,14 @@ from src.utils.logging import logger
 
 router = APIRouter(tags=["chat"])
 
+_session_locks: dict[str, asyncio.Lock] = {}
+
 
 @router.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(
     request: ChatRequest,
     response: Response,
+    x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
     session: Session = Depends(require_dataset),
     orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
 ) -> ChatResponse:
@@ -49,63 +55,174 @@ async def chat(
 
     Use the WebSocket for token streaming; this exists for scripts and integrations.
     """
-    session.append_message("user", request.message)
-    collector = EventCollector()
+    store = get_idempotency_store()
 
-    result = await orchestrator.run(
-        session=session,
-        instruction=request.message,
-        mode=request.mode,
-        emitter=collector,
-        approved_plan=request.approved_plan,
-    )
+    if x_idempotency_key:
+        cached = store.get_cached(x_idempotency_key)
+        if cached:
+            response.headers[SESSION_HEADER] = session.id
+            return cached
 
-    response.headers[SESSION_HEADER] = session.id
-    payload = result.to_dict()
-    return ChatResponse(
-        response=payload["response"],
-        code=payload["code"],
-        thought=payload["thought"],
-        plan=payload["plan"],
-        image=payload["image"],
-        status=payload["status"],
-        artifacts=payload["artifacts"],
-        warnings=payload["warnings"],
-        approval=payload["approval"],
-        downloads=payload["downloads"],
-        elapsed_ms=payload["elapsed_ms"],
-        findings=payload["findings"],
-        assumptions=payload["assumptions"],
-        iterations=payload["iterations"],
-        tier=payload["tier"],
-        mode=payload["mode"],
-        verification=payload["verification"],
-        grounding=payload["grounding"],
-        skills_used=payload["skills_used"],
-    )
+        idemp_lock = store.acquire_lock(x_idempotency_key)
+        if idemp_lock.locked():
+            raise HTTPException(status_code=409, detail="Request already in progress")
+        await idemp_lock.acquire()
+
+    if session.id not in _session_locks:
+        _session_locks[session.id] = asyncio.Lock()
+    session_lock = _session_locks[session.id]
+
+    if session_lock.locked():
+        if x_idempotency_key:
+            store.release(x_idempotency_key)
+        raise HTTPException(status_code=409, detail="Analysis already in progress for this session")
+
+    await session_lock.acquire()
+
+    try:
+        session.append_message("user", request.message)
+        collector = EventCollector()
+
+        result = await orchestrator.run(
+            session=session,
+            instruction=request.message,
+            mode=request.mode,
+            emitter=collector,
+            approved_plan=request.approved_plan,
+        )
+
+        response.headers[SESSION_HEADER] = session.id
+        payload = result.to_dict()
+        chat_response = ChatResponse(
+            response=payload["response"],
+            code=payload["code"],
+            thought=payload["thought"],
+            plan=payload["plan"],
+            image=payload["image"],
+            status=payload["status"],
+            artifacts=payload["artifacts"],
+            warnings=payload["warnings"],
+            approval=payload["approval"],
+            downloads=payload["downloads"],
+            elapsed_ms=payload["elapsed_ms"],
+            findings=payload["findings"],
+            assumptions=payload["assumptions"],
+            iterations=payload["iterations"],
+            tier=payload["tier"],
+            mode=payload["mode"],
+            verification=payload["verification"],
+            grounding=payload["grounding"],
+            skills_used=payload["skills_used"],
+        )
+
+        if x_idempotency_key:
+            store.store_result(x_idempotency_key, chat_response)
+
+        return chat_response
+    finally:
+        session_lock.release()
+        if x_idempotency_key:
+            store.release(x_idempotency_key)
+
+
+@router.post("/api/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    session: Session = Depends(require_dataset),
+    orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
+):
+    """Server-Sent Events alternative to WebSocket for proxy-hostile environments."""
+
+    async def event_generator():
+        collector = EventCollector()
+        # Run orchestrator in background task
+        task = asyncio.create_task(
+            orchestrator.run(
+                session=session,
+                instruction=body.message,
+                mode=body.mode,
+                emitter=collector,
+                approved_plan=body.approved_plan,
+            )
+        )
+        # Stream events as they arrive
+        seen = 0
+        while not task.done():
+            await asyncio.sleep(0.05)
+            events = collector.events[seen:]
+            seen += len(events)
+            for evt in events:
+                yield f"data: {json.dumps(evt.to_dict())}\n\n"
+        # Final events
+        events = collector.events[seen:]
+        for evt in events:
+            yield f"data: {json.dumps(evt.to_dict())}\n\n"
+        # Send result
+        try:
+            result = task.result()
+            yield f"data: {json.dumps({'type': 'result', 'content': result.to_dict() if hasattr(result, 'to_dict') else str(result)})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 class WebSocketEmitter:
-    """Serialises orchestrator events onto a socket.
+    """Streams orchestrator events to the client over a WebSocket with backpressure control."""
 
-    Send failures are swallowed: a client that navigated away must not surface as
-    an orchestrator exception mid-run.
-    """
+    _HIGH_WATERMARK = 256
+    _DROPPABLE = frozenset({"status", "progress"})  # non-critical frame types
 
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
         self.closed = False
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self._HIGH_WATERMARK)
+        self._sender_task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Start the background sender coroutine."""
+        self._sender_task = asyncio.create_task(self._drain())
+
+    async def stop(self) -> None:
+        """Signal the sender to flush and stop."""
+        self.closed = True
+        if self._sender_task:
+            await self._queue.put(None)  # sentinel
+            await self._sender_task
+
+    async def _drain(self) -> None:
+        """Background loop: pull frames from the queue and send them."""
+        while True:
+            frame = await self._queue.get()
+            if frame is None:
+                break
+            try:
+                await self.websocket.send_json(frame.to_dict())
+            except (WebSocketDisconnect, RuntimeError):
+                self.closed = True
+                break
+            except Exception as exc:
+                self.closed = True
+                logger.debug("Dropping event, socket unusable", error=str(exc))
+                break
 
     async def __call__(self, event: Event) -> None:
         if self.closed:
             return
         try:
-            await self.websocket.send_json(event.to_dict())
-        except (WebSocketDisconnect, RuntimeError):
-            self.closed = True
-        except Exception as exc:
-            self.closed = True
-            logger.debug("Dropping event, socket unusable", error=str(exc))
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            # Drop non-critical frames under backpressure
+            event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
+            if event_type in self._DROPPABLE:
+                return  # silently drop
+            # For critical frames, make room by discarding oldest droppable
+            # or block briefly
+            try:
+                await asyncio.wait_for(self._queue.put(event), timeout=1.0)
+            except TimeoutError:
+                pass  # drop if still full after 1s
 
 
 @router.websocket("/ws/chat")
@@ -134,6 +251,14 @@ async def websocket_chat(
     could not interrupt anything, and a mid-run consent question could never be
     answered by the only client able to answer it.
     """
+    # Validate Origin header to prevent cross-site WebSocket hijacking
+    origin = websocket.headers.get("origin", "")
+    if origin and settings.CORS_ALLOW_ORIGINS:
+        allowed_origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",")]
+        if origin not in allowed_origins:
+            await websocket.close(code=4003, reason="Origin not allowed")
+            return
+
     # Resolved once here, before accept(): the composite (IP, session) key
     # gates fairness among sessions sharing an address (NAT, reverse proxy);
     # the raw IP additionally gates the address itself, since a session id is
@@ -177,6 +302,7 @@ async def websocket_chat(
     session = resolved if resolved is not None else session_manager.create()
 
     emitter = WebSocketEmitter(websocket)
+    await emitter.start()
     current_run: asyncio.Task | None = None
     last_code: str | None = None
 
@@ -351,6 +477,6 @@ async def websocket_chat(
         consent_broker.abandon(session.id)
         if current_run and not current_run.done():
             current_run.cancel()
-        emitter.closed = True
+        await emitter.stop()
         ws_gate.release(client_host)
         ws_ip_gate.release(client_addr)

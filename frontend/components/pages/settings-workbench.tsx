@@ -77,6 +77,9 @@ export function SettingsWorkbench() {
       llm_num_ctx: cfg.llm_num_ctx ?? 0,
       llm_keep_alive: cfg.llm_keep_alive || "30m",
       rag_enabled: cfg.rag_enabled ?? false,
+      embedding_provider: cfg.embedding_provider || "",
+      embedding_model: cfg.embedding_model || "",
+      embeddings_remote_enabled: cfg.embeddings_remote_enabled ?? true,
       ollama_base_url: cfg.ollama_base_url || "http://localhost:11434",
       lmstudio_base_url: cfg.lmstudio_base_url || "http://localhost:1234",
       openai_base_url: cfg.openai_base_url || "https://api.openai.com/v1",
@@ -663,6 +666,57 @@ export function SettingsWorkbench() {
                 className="h-4 w-4 rounded text-brand focus:ring-brand"
               />
             </label>
+
+            {/* Embedding Provider & Model Controls */}
+            <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="block text-[13px] font-medium text-foreground">Embedding & Vector Model</span>
+                  <span className="block text-[11.5px] text-muted-foreground">
+                    Choose local (Ollama/LM Studio), cloud (OpenAI/Gemini/Gateway), or offline fallback
+                  </span>
+                </div>
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-medium bg-muted text-muted-foreground border border-border">
+                  {config?.embeddings_backend ? `Active: ${config.embeddings_backend}` : "Active: auto"}
+                </span>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 pt-1">
+                <div>
+                  <label className="text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground block mb-1">
+                    Embedding Provider
+                  </label>
+                  <select
+                    value={form.embedding_provider || ""}
+                    onChange={(e) => setForm({ ...form, embedding_provider: e.target.value })}
+                    className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-[13px] text-foreground focus:outline-hidden focus:ring-1 focus:ring-brand"
+                  >
+                    <option value="">(Auto: Follow LLM Provider)</option>
+                    <option value="ollama">Local: Ollama</option>
+                    <option value="lmstudio">Local: LM Studio</option>
+                    <option value="openai">Cloud: OpenAI</option>
+                    <option value="gemini">Cloud: Google Gemini</option>
+                    <option value="custom_gateway">Custom Gateway</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground block mb-1">
+                    Embedding Model ID
+                  </label>
+                  <input
+                    type="text"
+                    value={form.embedding_model || ""}
+                    onChange={(e) => setForm({ ...form, embedding_model: e.target.value })}
+                    placeholder="e.g. nomic-embed-text or text-embedding-3-small"
+                    className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-[13px] text-foreground focus:outline-hidden focus:ring-1 focus:ring-brand"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Leave empty to use automatic defaults (<code>nomic-embed-text</code> on Ollama, <code>text-embedding-3-small</code> on OpenAI). If no model server is reachable, Wizard automatically falls back to instant zero-disk deterministic hashing.
+              </p>
+            </div>
 
             {/* Skills System */}
             <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors">

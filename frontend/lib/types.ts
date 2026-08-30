@@ -824,6 +824,7 @@ export interface MemoryPlan {
 export interface ServerConfig {
   app_name: string
   version: string
+  app_version?: string
   plot_format: "png" | "html"
   sandbox_available: boolean
   sandbox_enabled: boolean
@@ -902,6 +903,9 @@ export interface ServerConfig {
   vision_enabled?: boolean
   skills_enabled?: boolean
   api_provider?: string
+  embedding_provider?: string
+  embedding_model?: string
+  embeddings_remote_enabled?: boolean
 }
 
 export interface UpdateConfigPayload {
@@ -935,6 +939,9 @@ export interface UpdateConfigPayload {
   llm_num_ctx?: number
   llm_keep_alive?: string
   rag_enabled?: boolean
+  embedding_provider?: string
+  embedding_model?: string
+  embeddings_remote_enabled?: boolean
   ollama_base_url?: string
   lmstudio_base_url?: string
   openai_base_url?: string
