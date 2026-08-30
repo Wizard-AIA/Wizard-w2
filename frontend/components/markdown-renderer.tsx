@@ -1,6 +1,7 @@
 "use client"
 
 import { Check, Copy } from "lucide-react"
+import katex from "katex"
 import { Fragment, useMemo, useState, type ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
@@ -33,6 +34,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
 type Block =
   | { type: "code"; language: string; content: string }
+  | { type: "math"; content: string }
   | { type: "table"; header: string[]; rows: string[][] }
   | { type: "heading"; level: number; content: string }
   | { type: "list"; ordered: boolean; items: string[] }
@@ -60,6 +62,29 @@ function parseBlocks(source: string): Block[] {
       }
       index += 1
       blocks.push({ type: "code", language, content: body.join("\n") })
+      continue
+    }
+
+    if (line.trim().startsWith("$$")) {
+      const body: string[] = []
+      const firstLine = line.trim().slice(2).trim()
+      if (firstLine.endsWith("$$") && firstLine.length > 2) {
+        blocks.push({ type: "math", content: firstLine.slice(0, -2).trim() })
+        index += 1
+        continue
+      }
+      if (firstLine) body.push(firstLine)
+      index += 1
+      while (index < lines.length && !lines[index].trim().endsWith("$$")) {
+        body.push(lines[index])
+        index += 1
+      }
+      if (index < lines.length) {
+        const lastLine = lines[index].trim().replace(/\$\$$/, "").trim()
+        if (lastLine) body.push(lastLine)
+        index += 1
+      }
+      blocks.push({ type: "math", content: body.join("\n") })
       continue
     }
 
@@ -169,6 +194,13 @@ function Block({ block }: { block: Block }) {
     case "code":
       return <CodeBlock language={block.language} content={block.content} />
 
+    case "math":
+      return (
+        <div className="my-3 overflow-x-auto py-2 text-center">
+          <MathSpan math={block.content} display />
+        </div>
+      )
+
     case "table":
       return (
         <div className="overflow-x-auto rounded-xl border border-border shadow-xs">
@@ -274,14 +306,20 @@ function CodeBlock({ language, content }: { language: string; content: string })
   )
 }
 
-/** Renders inline emphasis, code spans and links. */
+/** Renders inline emphasis, math formulas, code spans and links. */
 function Inline({ text }: { text: string }): ReactNode {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g
+  const pattern = /(\$\$[^\$]+\$\$|\$[^\$\n]+\$|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g
   const parts = text.split(pattern).filter((part) => part !== undefined && part !== "")
 
   return (
     <>
       {parts.map((part, index) => {
+        if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
+          return <MathSpan key={index} math={part.slice(2, -2)} display />
+        }
+        if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
+          return <MathSpan key={index} math={part.slice(1, -1)} />
+        }
         if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) {
           return (
             <code
@@ -326,5 +364,25 @@ function Inline({ text }: { text: string }): ReactNode {
         return <Fragment key={index}>{part}</Fragment>
       })}
     </>
+  )
+}
+
+function MathSpan({ math, display = false }: { math: string; display?: boolean }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(math.trim(), {
+        throwOnError: false,
+        displayMode: display,
+      })
+    } catch {
+      return math
+    }
+  }, [math, display])
+
+  return (
+    <span
+      className={cn(display ? "my-1 block w-full text-center" : "inline-block align-baseline")}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }

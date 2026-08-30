@@ -124,9 +124,40 @@ SCALED_NUMBER = re.compile(
 )
 
 
+#: Scientific notation in LaTeX, text, or math formats:
+#: 4.3650 \times 10^{-94}, 1.23 * 10^-5, 1.23 \cdot 10^{4}
+LATEX_SCIENTIFIC = re.compile(
+    r"(-?\d[\d,]*(?:\.\d+)?)\s*(?:\\times|\\cdot|\*|x|·)\s*10\^\{?([-+]?\d+)\}?",
+    re.IGNORECASE,
+)
+
+#: Inequality prefixes for statistical p-value thresholds: < 0.0001, <= 0.05, p < 0.001
+INEQUALITY_PREFIX = re.compile(r"(?:<|<=|≤|\\le|\\lt|p\s*<|p-value\s*<)\s*$", re.IGNORECASE)
+STANDARD_THRESHOLDS = frozenset({"0.05", "0.01", "0.001", "0.0001", "0.00001"})
+
+
 def extract_numbers(text: str) -> list[str]:
     """Every numeric literal in ``text``, in order of appearance."""
     return [match.group(0) for match in NUMBER.finditer(text or "")]
+
+
+def _extract_all_floats(text: str) -> list[float]:
+    """Extracts all float values including LaTeX scientific notation."""
+    floats: list[float] = []
+    sci_spans: list[tuple[int, int]] = []
+    for m in LATEX_SCIENTIFIC.finditer(text or ""):
+        sci_spans.append((m.start(), m.end()))
+        try:
+            floats.append(float(f"{m.group(1).replace(',', '')}e{m.group(2)}"))
+        except ValueError:
+            pass
+    for m in NUMBER.finditer(text or ""):
+        if any(s <= m.start() and m.end() <= e for s, e in sci_spans):
+            continue
+        v = _as_float(m.group(0))
+        if v is not None:
+            floats.append(v)
+    return floats
 
 
 def _scale_at(text: str, position: int) -> float:
@@ -181,18 +212,44 @@ def check_grounding(answer: str, executed_output: str, instruction: str = "") ->
     """Verifies each number in ``answer`` traces to output or to the question.
 
     A number counts as grounded when it appears in the executed output exactly,
-    when some output value rounds to it, or when the user put it in the question
+    when some output value rounds to it, when formatted in LaTeX scientific
+    notation matching calculated values, when expressing a bounding inequality
+    for zero/near-zero p-values (< 0.0001), or when the user put it in the question
     themselves ("show me the top 20" legitimises a 20 in the reply).
     """
     report = GroundingReport()
     if not answer.strip():
         return report
 
-    observed = [v for v in (_as_float(t) for t in extract_numbers(executed_output)) if v is not None]
+    observed = _extract_all_floats(executed_output)
     asked = {n for n in (_normalise(t) for t in extract_numbers(instruction)) if n}
 
     seen: set[str] = set()
+    sci_spans: list[tuple[int, int]] = []
+
+    # First pass: check LaTeX scientific notation as single numbers
+    for match in LATEX_SCIENTIFIC.finditer(answer):
+        sci_spans.append((match.start(), match.end()))
+        token = match.group(0)
+        try:
+            val = float(f"{match.group(1).replace(',', '')}e{match.group(2)}")
+        except ValueError:
+            continue
+        normalised = f"{val:.4e}"
+        if normalised in seen:
+            continue
+        seen.add(normalised)
+        report.checked += 1
+        if any(abs(val - obs) <= max(1e-12, abs(obs) * 0.01) for obs in observed):
+            report.grounded += 1
+            report.grounded_values.append(token)
+        else:
+            report.ungrounded.append(token)
+
+    # Second pass: standard numbers not enclosed in scientific spans
     for match in NUMBER.finditer(answer):
+        if any(s <= match.start() and match.end() <= e for s, e in sci_spans):
+            continue
         token = match.group(0)
         normalised = _normalise(token)
         if normalised is None or normalised in TRIVIAL or normalised in seen:
@@ -205,6 +262,16 @@ def check_grounding(answer: str, executed_output: str, instruction: str = "") ->
             report.grounded += 1
             report.grounded_values.append(token)
             continue
+
+        # Check inequality threshold bounds (e.g. p < 0.0001 against 0.0000)
+        prefix = answer[: match.start()]
+        if INEQUALITY_PREFIX.search(prefix):
+            val = _as_float(token)
+            if val is not None and (normalised in STANDARD_THRESHOLDS or any(obs <= val for obs in observed)):
+                report.grounded += 1
+                report.grounded_values.append(token)
+                continue
+
         report.ungrounded.append(token)
 
     return report

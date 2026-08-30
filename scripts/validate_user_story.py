@@ -9,10 +9,10 @@ Executes a complete 3-turn data analysis lifecycle against the running backend:
 
 import asyncio
 import json
-import os
-import sys
-import websockets
+
 import httpx
+import websockets
+
 
 BACKEND_URL = "http://localhost:8000"
 WS_URL = "ws://localhost:8000/ws/chat"
@@ -70,14 +70,11 @@ async def run_user_story():
         for i, turn in enumerate(turns, 1):
             print("\n" + "=" * 70, flush=True)
             print(f"🚀 EXECUTING {turn['name']}", flush=True)
-            print(f"📝 Prompt: \"{turn['instruction']}\"", flush=True)
+            print(f'📝 Prompt: "{turn["instruction"]}"', flush=True)
             print("=" * 70, flush=True)
 
             # Send prompt with content and mode
-            await ws.send(json.dumps({
-                "content": turn["instruction"],
-                "mode": "auto"
-            }))
+            await ws.send(json.dumps({"content": turn["instruction"], "mode": "auto"}))
 
             # Collect stream events
             code_generated = []
@@ -115,14 +112,13 @@ async def run_user_story():
                         turn_finished = True
                     elif etype == "done":
                         turn_finished = True
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     print("  ⚠️ [Timeout] Turn took longer than 90s", flush=True)
                     turn_finished = True
 
             full_code = "".join(code_generated).strip()
             full_obs = "".join(execution_outputs).strip()
             full_answer = "".join(answer_chunks).strip()
-            full_reasoning = "".join(reasoning_chunks).strip()
 
             print("\n--- TURN SUMMARY ---", flush=True)
             print(f"Code Generated Length: {len(full_code)} chars", flush=True)

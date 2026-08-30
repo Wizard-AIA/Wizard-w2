@@ -161,3 +161,21 @@ def test_dropped_and_renamed_columns_are_reported() -> None:
 
 def test_a_clean_load_produces_no_caveats() -> None:
     assert assumptions_from_profile({"truncated": False, "rows": 10}) == []
+
+
+def test_latex_scientific_notation_grounding() -> None:
+    answer = "The F-statistic p-value is $4.3650 \\times 10^{-94}$."
+    output = "F-statistic p-value: 4.3650e-94"
+    report = check_grounding(answer, output)
+    assert report.ok, f"Unexpected ungrounded: {report.ungrounded}"
+    assert report.checked == 1
+    assert report.grounded == 1
+
+
+def test_inequality_pvalue_threshold_grounding() -> None:
+    answer = "The OLS p-value is < 0.0001."
+    output = "p-value: 0.0000"
+    report = check_grounding(answer, output)
+    assert report.ok, f"Unexpected ungrounded: {report.ungrounded}"
+    assert report.checked == 1
+    assert report.grounded == 1
