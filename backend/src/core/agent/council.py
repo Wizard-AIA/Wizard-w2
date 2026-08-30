@@ -91,8 +91,10 @@ class StatisticianAgent(SpecialistAgent):
 
         if feedback:
             tip = await self._ask(
-                "You are a statistical reviewer. In one sentence, state the single most important "
-                f"caveat for this analysis.\n\nPlan: {plan[:800]}\n\nOutput: {result[:800]}",
+                "<role>\nYou are a Senior Biostatistician and Quantitative Methodology Reviewer.</role>\n"
+                "<task>\nIn exactly one actionable sentence, state the single most critical statistical caveat, assumption violation, or methodological limitation for this analysis.\n</task>\n"
+                f"<plan>\n{plan[:800]}\n</plan>\n"
+                f"<output>\n{result[:800]}\n</output>",
                 role=LLMRole.MANAGER,
                 models=models,
             )

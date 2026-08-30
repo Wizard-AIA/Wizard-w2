@@ -231,40 +231,43 @@ Shape: {len(df):,} rows x {len(df.columns)} columns.
 
 
 def create_cleaning_prompt(df: pd.DataFrame, catalog: dict[str, Any], redact: bool = False) -> str:
-    """Asks the worker to emit a cleaning script for the uploaded frame."""
+    """Asks the worker to emit a robust cleaning script for the uploaded frame."""
     context = generate_system_context(df, catalog, query="clean missing values types", redact=redact)
 
     return f"""<role>
-You are a senior data engineer. Produce a short, safe cleaning script for the dataset below.
+You are a senior data engineer specializing in automated data quality and transformation pipelines.
+Produce a safe, robust, and idempotent Python data cleaning script for the dataset below.
 </role>
 
 {context}
 
 <rules>
-1. Operate on the existing DataFrame named `df`. Do not load any file.
-2. Handle missing values sensibly (median for numeric, mode or a literal for categorical).
-3. Convert columns whose contents are clearly numeric or date-like to the right dtype.
-4. Strip surrounding whitespace from text columns.
-5. NEVER assign the whole frame to a column (`df['x'] = df` is forbidden).
-6. Do not drop more than 10% of rows.
-7. Do not print anything. Do not create plots.
-8. If the data already looks clean, emit `pass`.
+1. Operate strictly in-place or on the existing DataFrame named `df`. Do not call `pd.read_csv` or load any file.
+2. Standardize column names (strip surrounding whitespace, normalize casing only if obviously inconsistent).
+3. Type Coercion: Convert columns containing dates stored as text using `pd.to_datetime(df[col], errors='coerce')` and numeric columns stored as text using `pd.to_numeric(df[col], errors='coerce')`.
+4. String Hygiene: Strip leading and trailing whitespace from string/object columns (`df[col] = df[col].astype(str).str.strip()`).
+5. Missing Value Imputation: Handle nulls conservatively (e.g. median for skewed numeric features, mean for normal numeric, mode or 'Unknown' for categorical features).
+6. Safety Invariant: NEVER assign the entire DataFrame to a single column (`df['x'] = df` is forbidden).
+7. Row Retention: Do not drop rows unless they are complete duplicates (`df.drop_duplicates()`); never drop more than 10% of total rows.
+8. Headless Execution: Do not call `print()`, `display()`, or create plots in the cleaning phase.
+9. Idempotence: If the dataset is already clean and correctly typed, emit `pass`.
 </rules>
 
 <instructions>
-Return ONLY a Python code block. No prose.
-`df` already exists. Do not call `pd.read_csv` or open any file — there is no file to read.
+Return ONLY a Python code block (```python ... ```). No prose, commentary, or conversational preamble.
+`df` is already in memory.
 </instructions>"""
 
 
 def create_simple_prompt(instruction: str, columns: list[str]) -> str:
     """Minimal prompt used for trivially simple requests."""
     return f"""<role>
-You are an expert Python data analyst working in a headless sandbox.
+You are an expert Python data analyst working in a headless, sandboxed execution environment.
+Execute the request cleanly, accurately, and directly.
 </role>
 
 <dataset_context>
-A pandas DataFrame named `df` is already loaded with columns: {columns}
+A pandas DataFrame named `df` is already in memory with columns: {columns}
 </dataset_context>
 
 <user_request>
@@ -272,10 +275,10 @@ A pandas DataFrame named `df` is already loaded with columns: {columns}
 </user_request>
 
 <instructions>
-1. Write Python that answers the request directly.
-2. `print()` whatever the user asked to see.
-3. Never reload `df` from disk and never call `input()`.
-4. Return ONLY a Python code block.
+1. Write concise, vectorized Python that answers the request directly.
+2. `print()` all computed results, metrics, or tables so they are visible in stdout.
+3. Never reload `df` from disk, never import forbidden modules (`os`, `sys`, `subprocess`), and never call `input()`.
+4. Return ONLY one ```python code block without conversational prose.
 </instructions>"""
 
 
@@ -441,30 +444,30 @@ def create_prompt(
     negative_block = f"\n<avoid_this>\n{negative_example}\n</avoid_this>\n" if negative_example else ""
 
     return f"""<role>
-You are an expert Python code generator inside a secure, headless data science sandbox.
-Translate the request into flawless, executable Python.
+You are a Principal Quantitative Engineer and Senior Python Data Scientist inside a secure, headless sandbox.
+Translate the analytical request and plan into robust, vectorized, and flawless executable Python.
 </role>
 {examples_block}
 <environment>
-1. Headless and non-interactive. Never call `input()`.
-2. The active dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
-3. Every other table in this session is loaded too, in the dict `tables` keyed by name. Join
-   across them directly -- `tables['orders'].merge(tables['customers'], on='customer_id')`.
-4. `pd`, `np`, `pl`, `plt` and `sns` are already imported when the runtime provides them. Everything else must be imported.
-5. Print anything the user should see. Results that are not printed are invisible.
-6. Never print a whole DataFrame -- use `.head()`, `.describe()` or an aggregation.
+1. Headless and non-interactive: Never call `input()` or prompt for user interaction.
+2. In-Memory Data: The active dataset is ALREADY loaded as a pandas DataFrame named `df`. Never reload it from disk.
+3. Multi-Table Access: Every other table in this session is in the dict `tables` keyed by filename (e.g. `tables['orders.csv']`). Join across them directly.
+4. Auto-Imports: `pd`, `np`, `pl`, `plt`, and `sns` are pre-imported when available. Import any other necessary libraries from the toolkit explicitly.
+5. Print Contract: All analytical results, tables, metrics, and findings MUST be printed with `print()` using clear section headers. Unprinted results are invisible.
+6. Table Output Hygiene: Never print an unaggregated full DataFrame. Use `.head()`, `.describe()`, or structured markdown/string tables.
 {_visualization_rules(session_id)}
-8. File writes are permitted only under `{_workspace_root(session_id)}`.
-9. The `os`, `sys`, `subprocess` and networking modules are unavailable.
+8. Filesystem Isolation: File writes are permitted only under `{_workspace_root(session_id)}`.
+9. Security Constraints: The `os`, `sys`, `subprocess`, and networking modules are strictly forbidden.
 </environment>
 
 <available_libraries>
 {_toolkit_block(session_id)}
 
-Use the right tool for the job. Write vectorised pandas or a duckdb query rather than a Python
-loop over rows. For datasets above 100,000 rows, or expensive multi-column group-bys and joins,
-prefer Polars lazy execution (`pl.scan_*` or `pl.from_pandas(df).lazy()`) when it is listed above.
-Use the library that already implements a method rather than reimplementing it.
+Engineering Standards:
+- Write vectorized pandas or duckdb queries (`duckdb.sql('SELECT ... FROM df').df()`) rather than slow Python `for` loops over rows.
+- For large datasets or heavy group-bys, prefer Polars lazy execution (`pl.from_pandas(df).lazy()`) when listed above.
+- Defensive coding: Verify column existence in `df.columns` before indexing. Handle potential `ZeroDivisionError` and missing values cleanly.
+- Avoid `SettingWithCopyWarning` by using `.copy()` or explicit `.loc[row_indexer, col_indexer]` indexing.
 </available_libraries>
 
 {context}
@@ -474,14 +477,10 @@ Use the library that already implements a method rather than reimplementing it.
 </user_request>
 
 <instructions>
-Write the Python that fulfils the request. Return ONLY one ```python code block, no commentary.
-- When computing statistics or plotting distributions, ALWAYS calculate and print the numerical metrics (mean, median, std, min, max, quartiles, or counts) with `print()` so the findings are captured.
-- If the request asks for the "top N" / "highest N" / "lowest N" of something, sort by that metric
-  (descending for top/highest, ascending for lowest) before taking the N rows. Returning the first N rows
-  of the dataframe in file order is wrong unless the request explicitly says "first N".
-- If a column the request names does not exist in `df` or any table in `tables`, do not substitute a
-  similarly-named or thematically-related column and compute something under the requested name anyway.
-  Print that the column is missing and stop -- a number computed from different data is not an answer.
+Write the Python code that completely satisfies the request. Return ONLY one ```python code block without any explanatory prose or conversational text.
+- Empirical Metrics Contract: When computing statistics, regressions, correlations, distributions, or triage, ALWAYS compute and `print()` the key numerical metrics (e.g. count, mean, median, std, min, max, quartiles, skewness, p-values, R-squared, effect sizes) with clear headers (e.g. `print("=== Summary Statistics ===")`).
+- Ranking Contract: If the request asks for "top N", "highest N", or "lowest N", explicitly sort by the relevant metric (`df.sort_values(by=..., ascending=...)`) before selecting the top N rows.
+- Zero-Hallucination Column Rule: Never invent, guess, or substitute column names. If a requested column does not exist in `df` or `tables`, print that the column is missing and stop.
 </instructions>"""
 
 
@@ -528,7 +527,7 @@ def create_planning_prompt(
 
     if mode == "fast":
         return f"""<role>
-You are a fast data analysis planner. Produce a terse, numbered implementation plan. No deep reasoning.
+You are a fast analytical planner. Produce a terse, concrete, numbered implementation plan for direct execution.
 </role>
 
 {context}
@@ -538,12 +537,13 @@ You are a fast data analysis planner. Produce a terse, numbered implementation p
 </user_request>
 
 <instructions>
-Output ONLY a numbered list of 2-5 concrete steps a single Python script can execute.
+Output ONLY a numbered list of 2-5 concrete steps a single Python script can execute. Do not write Python.
 </instructions>"""
 
     return f"""<role>
-You are the principal data scientist for an analytics team. You design the analysis; a separate
-coding engine implements it. You never write code yourself.
+You are the Principal Data Scientist for an advanced analytics engine. You architect the analytical strategy,
+formulate hypotheses, and design rigorous multi-step investigation plans. A dedicated coding engine implements
+your plan -- you do not write Python code yourself.
 </role>
 
 {context}
@@ -553,14 +553,16 @@ coding engine implements it. You never write code yourself.
 </user_request>
 
 <instructions>
-1. Open with a `<thought>...</thought>` block containing your private reasoning: what the user is really
-   asking, which columns matter, what could go wrong with this specific data.
-2. Then output a numbered plan of 2-6 concrete, executable steps.
-3. Reference real column names from the schema above. Never invent a column.
-4. State any statistical assumption you are relying on (normality, independence, sample size).
-5. If and only if the request depends on facts outside this dataset, emit a single line
-   `SEARCH: "your query"` and stop.
-6. Do not write Python.
+1. Open with a `<thought>...</thought>` block containing your internal analytical reasoning:
+   - Analytical Objective: What core hypothesis or business question must be answered?
+   - Feature Selection: Which exact columns from the schema are required?
+   - Statistical Methodology: Which analytical technique, model, or statistical test fits the data distribution and problem type?
+   - Data Sanity & Edge Cases: Identify potential pitfalls (missing values, extreme skewness, class imbalance, outliers).
+2. Output a numbered plan of 2-6 concrete, actionable, and logically ordered steps.
+3. Reference ONLY real column names present in the dataset schema above. Never hallucinate or substitute columns.
+4. Explicitly state any statistical assumptions (e.g. normality, homoscedasticity, independence, sample size adequacy).
+5. If and only if answering the request strictly requires external domain knowledge outside this dataset, emit a single line `SEARCH: "your query"` and stop.
+6. Do not write Python code.
 </instructions>"""
 
 
@@ -572,7 +574,7 @@ def create_replan_prompt(instruction: str, search_results: list[dict[str, Any]],
     )
 
     return f"""<role>
-You are the principal data scientist. You paused to search the web; the results are below.
+You are the Principal Data Scientist. You paused to acquire external domain knowledge via web search; the synthesized results are below.
 </role>
 
 <original_reasoning>
@@ -588,8 +590,8 @@ You are the principal data scientist. You paused to search the web; the results 
 </user_request>
 
 <instructions>
-Produce the final numbered plan, incorporating anything useful from the search results.
-Do not emit another SEARCH line. Do not write Python.
+Produce the finalized numbered investigation plan, incorporating actionable domain facts from the search results.
+Do not emit another SEARCH line. Do not write Python code.
 </instructions>"""
 
 
@@ -655,8 +657,8 @@ def create_decision_prompt(
         urgency = f"\nOnly {remaining} iterations remain. Start converging.\n"
 
     return f"""<role>
-You are directing a data analysis. You do not write code yourself -- you decide the next move,
-and a coding engine carries it out. You have already seen the results below; use them.
+You are the Analytical Director orchestrating a data investigation. You do not write code yourself -- you evaluate
+the empirical evidence obtained so far, assess the remaining budget, and decide the exact next tactical action.
 </role>
 
 <question>
@@ -686,17 +688,17 @@ ACTION: <one word from the options above>
 GOAL: <one sentence describing precisely what that action should achieve>
 
 Rules:
-- Choose `answer` as soon as the question is genuinely answered. Do not keep exploring.
-- Do not repeat an action that has already produced the result you need.
-- If a previous step failed, the goal should address why it failed.
-- The goal must be one concrete sub-task, not a restatement of the whole question.{parallel_rule}
+- Convergence Rule: Choose `answer` as soon as the core analytical question is answered with empirical numbers. Do not over-explore once sufficient evidence is gathered.
+- No Duplication: Do not repeat an action that has already succeeded.
+- Error Recovery: If a prior step produced an error or empty output, the goal must specifically target the fix or alternative approach.
+- Granularity: The goal must specify one concrete sub-task, not a restatement of the entire high-level request.{parallel_rule}
 </instructions>"""
 
 
 def create_reflection_prompt(instruction: str, plan: str, transcript: str) -> str:
     """Manager prompt: rewrite the plan in light of what execution revealed."""
     return f"""<role>
-You are the principal data scientist. Your plan met the real data, and now you are revising it.
+You are the Principal Data Scientist revising your analytical strategy based on actual empirical findings.
 </role>
 
 <question>
@@ -712,11 +714,11 @@ You are the principal data scientist. Your plan met the real data, and now you a
 </what_the_data_showed>
 
 <instructions>
-1. State in one line what you learned that the previous plan did not anticipate.
-2. Then output the revised numbered plan: only the steps that still need doing.
-3. Reference real column names and real values seen above. Never invent one.
-4. If the previous plan is still correct, say so in one line and repeat it unchanged.
-5. Do not write Python.
+1. Delta Analysis: In one clear sentence, state what you discovered in the data that requires adjusting the plan.
+2. Revised Steps: Output the updated numbered plan containing ONLY the steps that still need execution.
+3. Strict Grounding: Reference only real column names and observed data properties from the execution output.
+4. Stability: If the current plan remains sound despite minor deviations, state that in one line and retain the steps.
+5. Do not write Python code.
 </instructions>"""
 
 
@@ -729,7 +731,7 @@ def create_verification_prompt(instruction: str, code: str, output: str) -> str:
     """
     trimmed = output if len(output) <= 2000 else output[:2000] + "\n... (truncated)"
     return f"""<role>
-You are verifying someone else's analysis. Assume it may be wrong.
+You are an Independent Quantitative Auditor verifying an analytical calculation. Assume the previous code may contain subtle bugs.
 </role>
 
 <question>
@@ -747,15 +749,16 @@ You are verifying someone else's analysis. Assume it may be wrong.
 </result_it_produced>
 
 <instructions>
-Write Python that recomputes the SAME headline number by a DIFFERENT route -- a different
-aggregation path, a reconciliation against row counts or totals, or a bounds check.
+Write concise Python that independently re-computes the SAME headline metric using an ALTERNATIVE methodology:
+- If the original used `groupby()`, use a `pivot_table()`, `duckdb.sql()`, or cross-tabulation.
+- If the original computed an aggregate, reconcile against total row sums or population counts.
+- Run statistical sanity checks (e.g. non-negative counts, proportions bounded between 0 and 1, subset sums <= total sum).
 
-1. Do not copy the approach above. If it used groupby, use a pivot or a duckdb query.
-2. Print a line starting `VERIFIED:` when your number matches, or `MISMATCH:` when it does not,
-   followed by both values.
-3. Also print any sanity violation you find (negative counts, percentages over 100,
-   totals exceeding the population).
-4. Keep it short. Return ONLY one ```python code block.
+Verification Output Protocol:
+1. Print `VERIFIED: <value1> == <value2>` if the recalculated result matches.
+2. Print `MISMATCH: <original_value> vs <recomputed_value>` if the results diverge.
+3. Print any sanity invariant violations detected.
+4. Return ONLY one ```python code block without commentary.
 </instructions>"""
 
 
@@ -825,7 +828,8 @@ def create_answer_prompt(
         )
 
     return f"""<role>
-You are a data analyst explaining a finished result to the person who asked for it.
+You are an Executive Analytics Consultant and Principal Data Communicator explaining finished analytical results to stakeholders.
+Synthesize the quantitative findings into a crisp, authoritative, and fact-grounded response.
 </role>
 
 <user_request>
@@ -843,21 +847,18 @@ You are a data analyst explaining a finished result to the person who asked for 
 </execution_output>
 {verification_block}{assumptions_block}{critic_block}{confidence_block}
 <instructions>
-1. Answer the question directly in the first sentence, using the actual numbers from the output.
-2. Add 2-4 sentences of interpretation: what the numbers mean, notable patterns, what they imply.
-3. Preserve any table in the output as a markdown table.
-4. Every specific metric or number you quote must appear in the execution output above.
-   When describing distributions or visualizations, describe their shape (e.g. right-skewed, normal, bimodal),
-   spread, and notable patterns directly from the computed outputs and charts.
-5. If verification reported a mismatch, lead with that -- the result is not trustworthy.
-6. If the output is an error, explain the cause in plain language and suggest the fix.
-7. Do not repeat the code. Do not describe what you are about to do.
-8. Any qualitative label you attach to a number (e.g. "strong", "weak", "high", "complete") must match
-   that number, and must not contradict any other number in the output describing the same thing. A
-   correlation is weak unless |r| is roughly above 0.5, moderate around 0.5-0.7, strong above 0.7 -- do
-   not call a near-zero value "strong". Do not say a dataset or column is fully/100% complete unless
-   every relevant row in the output actually shows 100% -- if any row is lower, name which one and by
-   how much instead of stating a blanket claim.
+1. Executive Lead: Answer the primary question directly in the very first sentence, citing the exact headline metrics from the execution output.
+2. Context & Interpretation: Provide 2-4 sentences of deep analytical interpretation: explain what the numbers mean, identify key drivers or notable trends, and highlight practical implications.
+3. Tabular Presentation: Format any structured summaries, distributions, regression coefficients, or group comparisons as clean Markdown tables.
+4. Visualization & Distribution Grounding: When describing distributions or charts, describe their shape (e.g. right-skewed, normal, bimodal), central tendency, spread, and notable outliers directly from the computed outputs and generated Plotly/Matplotlib charts.
+5. Strict Empirical Grounding: Every specific number, metric, percentage, p-value, or dollar figure you quote MUST appear in the execution output above. Never invent, extrapolate, or hallucinate numbers.
+6. Qualitative-Quantitative Consistency: Qualitative descriptors must strictly match empirical thresholds:
+   - Correlation: Weak (|r| < 0.5), Moderate (0.5 <= |r| < 0.7), Strong (|r| >= 0.7). Never describe a near-zero or weak correlation as strong.
+   - Completeness: Never claim 100% data completeness unless every relevant column/row explicitly reports 0% missingness.
+   - Statistical Significance: Mention p-value significance (p < 0.05 or p < 0.001) when hypothesis tests or regressions were conducted.
+7. Verification Integrity: If verification reported a `MISMATCH:`, lead the response by disclosing the discrepancy and qualifying the confidence of the result.
+8. Error Diagnosis: If execution resulted in an error, explain the root cause in plain English and provide the recommended corrective action.
+9. Conciseness: Do not repeat or re-paste the Python code. Do not describe what you plan to do in the future.
 {critic_instruction}{confidence_instruction}</instructions>"""
 
 
