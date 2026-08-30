@@ -78,6 +78,11 @@ def _probe_sandbox_exec() -> tuple[bool, str]:
         return False, f"sandbox-exec could not be run ({exc})"
     if result.returncode != 0:
         detail = (result.stderr or b"").decode("utf-8", "replace").strip()
+        if sys.platform == "darwin":
+            return (
+                False,
+                "sandbox-exec profiles are restricted on this macOS version (use Docker for kernel isolation)",
+            )
         return (
             False,
             f"sandbox-exec cannot enforce profiles on this macOS kernel ({detail or 'exit code ' + str(result.returncode)})",
@@ -115,6 +120,8 @@ def _probe_rlimit_as() -> tuple[bool, str]:
     if result.returncode != 0:
         stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
         detail = stderr.splitlines()[-1] if stderr else f"exit code {result.returncode}"
+        if sys.platform == "darwin" and "current limit exceeds maximum limit" in detail:
+            return False, "RLIMIT_AS virtual memory limiting is not supported on macOS Darwin"
         return False, f"RLIMIT_AS was refused on this host ({detail})"
     return True, "RLIMIT_AS"
 
