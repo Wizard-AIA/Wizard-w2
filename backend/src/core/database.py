@@ -208,6 +208,8 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_evidence_edges_session ON evidence_edges(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_runs_message ON analysis_runs(message_id)",
     "CREATE INDEX IF NOT EXISTS idx_analysis_runs_session ON analysis_runs(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_state_time ON analysis_state(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_analysis_runs_time ON analysis_runs(created_at)",
 )
 
 # Columns added after the initial release, applied idempotently on boot.
@@ -1176,6 +1178,25 @@ class DatabaseManager:
                 )
         except Exception as e:
             logger.error("Failed to prune analysis runs", error=str(e))
+
+    def prune_old_analysis_data(self, days: int = 7) -> dict[str, int]:
+        """Prunes historical analytical states, plan revisions, evidence graphs, and runs older than `days`."""
+        cutoff = time.time() - (days * 86400)
+        deleted: dict[str, int] = {}
+        try:
+            with self._write() as conn:
+                for table, col in [
+                    ("analysis_state", "timestamp"),
+                    ("plan_revisions", "timestamp"),
+                    ("evidence_nodes", "at"),
+                    ("analysis_runs", "created_at"),
+                ]:
+                    cur = conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,))
+                    deleted[table] = int(cur.rowcount or 0)
+            logger.info("Pruned old analysis data", days=days, deleted=deleted)
+        except Exception as e:
+            logger.error("Failed to prune old analysis data", error=str(e))
+        return deleted
 
     # ------------------------------------------------------------------ #
     # Schema Registry

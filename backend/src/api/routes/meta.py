@@ -58,6 +58,12 @@ router = APIRouter(tags=["meta"])
 
 API_VERSION = "4.0.0"
 
+@router.get("/metrics")
+async def metrics_endpoint():
+    from src.core.infra.metrics import metrics
+    from starlette.responses import PlainTextResponse
+    return PlainTextResponse(content=metrics.generate_prometheus_text(), media_type="text/plain; version=0.0.4")
+
 
 @router.get("/health/live")
 async def health_live() -> dict[str, str]:

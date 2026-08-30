@@ -57,38 +57,66 @@ def trace_agent(agent_name: str):
 
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                start_time = time.time()
-                logger.info(f"Agent Started: {agent_name}", status="started")
-                try:
-                    result = await func(*args, **kwargs)
-                    duration = time.time() - start_time
-                    logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
-                    return result
-                except Exception as e:
-                    duration = time.time() - start_time
-                    logger.error(
-                        f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
-                    )
-                    raise
+                from src.core.infra.telemetry import get_tracer
+                tracer = get_tracer("wizard.agent")
+                
+                with tracer.start_as_current_span(agent_name) as span:
+                    span.set_attribute("function_name", func.__name__)
+                    session_id = kwargs.get("session_id")
+                    if session_id:
+                        span.set_attribute("session_id", session_id)
+                        
+                    start_time = time.time()
+                    logger.info(f"Agent Started: {agent_name}", status="started")
+                    try:
+                        result = await func(*args, **kwargs)
+                        duration = time.time() - start_time
+                        span.set_attribute("status", "success")
+                        span.set_attribute("duration_sec", round(duration, 3))
+                        logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
+                        return result
+                    except Exception as e:
+                        duration = time.time() - start_time
+                        span.set_attribute("status", "error")
+                        span.set_attribute("duration_sec", round(duration, 3))
+                        span.record_exception(e)
+                        logger.error(
+                            f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
+                        )
+                        raise
 
             return async_wrapper
         else:
 
             @wraps(func)
             def wrapper(*args, **kwargs):
-                start_time = time.time()
-                logger.info(f"Agent Started: {agent_name}", status="started")
-                try:
-                    result = func(*args, **kwargs)
-                    duration = time.time() - start_time
-                    logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
-                    return result
-                except Exception as e:
-                    duration = time.time() - start_time
-                    logger.error(
-                        f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
-                    )
-                    raise
+                from src.core.infra.telemetry import get_tracer
+                tracer = get_tracer("wizard.agent")
+                
+                with tracer.start_as_current_span(agent_name) as span:
+                    span.set_attribute("function_name", func.__name__)
+                    session_id = kwargs.get("session_id")
+                    if session_id:
+                        span.set_attribute("session_id", session_id)
+                        
+                    start_time = time.time()
+                    logger.info(f"Agent Started: {agent_name}", status="started")
+                    try:
+                        result = func(*args, **kwargs)
+                        duration = time.time() - start_time
+                        span.set_attribute("status", "success")
+                        span.set_attribute("duration_sec", round(duration, 3))
+                        logger.info(f"Agent Finished: {agent_name}", status="success", duration_sec=round(duration, 3))
+                        return result
+                    except Exception as e:
+                        duration = time.time() - start_time
+                        span.set_attribute("status", "error")
+                        span.set_attribute("duration_sec", round(duration, 3))
+                        span.record_exception(e)
+                        logger.error(
+                            f"Agent Failed: {agent_name}", status="error", error=str(e), duration_sec=round(duration, 3)
+                        )
+                        raise
 
             return wrapper
 

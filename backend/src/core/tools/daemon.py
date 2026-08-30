@@ -526,6 +526,10 @@ class DaemonClient:
             sock.sendall(struct.pack(">I", len(raw)) + raw)
 
             stdout_parts: list[str] = []
+            truncated = False
+            total_stdout_len = 0
+            MAX_STDOUT_LEN = 50000
+
             while True:
                 header = self._recv_exactly(sock, 4)
                 if header is None:
@@ -538,7 +542,15 @@ class DaemonClient:
                 message = json.loads(body.decode("utf-8"))
                 if message.get("status") == "stdout":
                     chunk = message.get("content", "")
-                    stdout_parts.append(chunk)
+                    if not truncated:
+                        if total_stdout_len + len(chunk) > MAX_STDOUT_LEN:
+                            allowed = max(0, MAX_STDOUT_LEN - total_stdout_len)
+                            stdout_parts.append(chunk[:allowed])
+                            stdout_parts.append("\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]")
+                            truncated = True
+                        else:
+                            stdout_parts.append(chunk)
+                            total_stdout_len += len(chunk)
                     if on_stdout and chunk.strip():
                         on_stdout(chunk)
                     continue

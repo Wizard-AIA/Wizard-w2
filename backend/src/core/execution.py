@@ -168,6 +168,8 @@ class CodeExecutor:
         runtime = runtime_backend.get_runtime(self.session_id)
         if runtime is not None:
             output, image = runtime.run_code(prepared, on_stdout)
+            if len(output) > 50000:
+                output = output[:50000] + "\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]"
             failed = output.startswith("Error executing code:")
             return ExecutionResult(
                 output=output,
@@ -258,6 +260,8 @@ class CodeExecutor:
                     plt.close("all")
 
                 output = buffer.getvalue().strip() or "Executed successfully."
+                if len(output) > 50000:
+                    output = output[:50000] + "\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]"
                 if on_stdout and output:
                     on_stdout(output)
                 return ExecutionResult(

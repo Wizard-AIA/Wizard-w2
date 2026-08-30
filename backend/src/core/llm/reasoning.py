@@ -107,14 +107,28 @@ class ReasoningStream:
     UI as content only to be retracted when the rest of the tag arrives.
     """
 
-    __slots__ = ("_inside", "_pending")
+    __slots__ = ("_inside", "_pending", "_start_time", "_first_token_emitted", "_provider", "_model")
 
-    def __init__(self) -> None:
+    def __init__(self, provider: str = "unknown", model: str = "unknown") -> None:
         self._pending = ""
         self._inside = False
+        import time
+        self._start_time = time.monotonic()
+        self._first_token_emitted = False
+        self._provider = provider
+        self._model = model
 
     def feed(self, delta: str) -> list[tuple[bool, str]]:
         """Consumes a delta, returning ``(is_reasoning, text)`` chunks."""
+        out = self._feed_inner(delta)
+        if out and not self._first_token_emitted:
+            import time
+            from src.core.infra.metrics import metrics
+            self._first_token_emitted = True
+            metrics.record_ttft(self._provider, self._model, time.monotonic() - self._start_time)
+        return out
+
+    def _feed_inner(self, delta: str) -> list[tuple[bool, str]]:
         self._pending += delta
         out: list[tuple[bool, str]] = []
 
@@ -158,7 +172,13 @@ class ReasoningStream:
         if not self._pending:
             return []
         remainder, self._pending = self._pending, ""
-        return [(self._inside, remainder)]
+        out = [(self._inside, remainder)]
+        if out and not self._first_token_emitted:
+            import time
+            from src.core.infra.metrics import metrics
+            self._first_token_emitted = True
+            metrics.record_ttft(self._provider, self._model, time.monotonic() - self._start_time)
+        return out
 
     def _drain(self, out: list[tuple[bool, str]]) -> None:
         """Emits everything that cannot still turn out to be part of a tag.

@@ -890,7 +890,9 @@ class AnalysisOrchestrator:
         asked for, and that block was previously streamed to the UI as the plan.
         """
         buffer: list[str] = []
-        splitter = ReasoningStream()
+        provider = session.models.manager_provider or getattr(settings, "API_PROVIDER", "unknown")
+        model = self._manager_model(state, session) or getattr(settings, "MODEL_NAME", "unknown")
+        splitter = ReasoningStream(provider=provider, model=model)
 
         async def emit_chunks(chunks: list[tuple[bool, str]]):
             for is_reasoning, text in chunks:
@@ -2432,7 +2434,9 @@ class AnalysisOrchestrator:
         )
 
         chunks: list[str] = []
-        splitter = ReasoningStream()
+        provider = session.models.manager_provider or getattr(settings, "API_PROVIDER", "unknown")
+        model = self._manager_model(state, session) or getattr(settings, "MODEL_NAME", "unknown")
+        splitter = ReasoningStream(provider=provider, model=model)
 
         async def emit_chunks(pieces: list[tuple[bool, str]]):
             for is_reasoning, text in pieces:

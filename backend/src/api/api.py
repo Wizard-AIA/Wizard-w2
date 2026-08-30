@@ -118,6 +118,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+try:
+    from src.core.infra.telemetry import setup_telemetry
+    setup_telemetry(app)
+except Exception as e:
+    logger.warning("Failed to setup telemetry", error=str(e))
+
 
 async def _reject_oversized_body(request: Request, limit: int) -> bool:
     """Reads the body in bounded chunks, caching it for the route handler.
