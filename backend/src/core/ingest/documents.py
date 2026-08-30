@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from src.config import settings
 from src.core.embeddings import embedding_service
 from src.utils.logging import logger
@@ -255,9 +257,9 @@ def load_document(path: Path, name: str) -> ContextDocument:
 
     document = ContextDocument(name=name, text=text, source_format=suffix.lstrip("."))
     chunks_text = list(chunk_text(text))
-    embeddings: list[list[float] | None] = [None] * len(chunks_text)
+    embeddings: list[Any] = [None] * len(chunks_text)
     try:
-        embeddings = embedding_service.encode_many(chunks_text)
+        embeddings = list(embedding_service.encode_many(chunks_text))
     except Exception as exc:
         logger.debug("Batch embedding failed; falling back to per-chunk encoding", error=str(exc))
         for i, body in enumerate(chunks_text):
@@ -265,7 +267,7 @@ def load_document(path: Path, name: str) -> ContextDocument:
                 embeddings[i] = embedding_service.encode(body)
             except Exception:
                 pass  # lexical fallback will be used
-    for index, (body, emb) in enumerate(zip(chunks_text, embeddings)):
+    for index, (body, emb) in enumerate(zip(chunks_text, embeddings, strict=False)):
         document.chunks.append(DocumentChunk(document=name, index=index, text=body, embedding=emb))
 
     logger.info("Context document loaded", document=name, chars=len(text), chunks=len(document.chunks))
@@ -288,7 +290,11 @@ def search_documents(
     if not chunks or not query.strip():
         return []
 
-    ranked = embedding_service.rank(query, [(chunk.text, chunk.embedding) for chunk in chunks])
+    candidates: list[tuple[str, np.ndarray | None]] = [
+        (chunk.text, np.asarray(chunk.embedding, dtype=np.float32) if chunk.embedding is not None else None)
+        for chunk in chunks
+    ]
+    ranked = embedding_service.rank(query, candidates)
 
     results: list[tuple[str, str]] = []
     for score, index in ranked[:top_k]:

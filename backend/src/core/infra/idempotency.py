@@ -6,12 +6,10 @@ import asyncio
 import time
 from typing import Any
 
-from src.utils.logging import logger
-
 
 class IdempotencyStore:
     """In-memory idempotency key store with TTL.
-    
+
     Tracks in-flight request keys and caches their results to prevent
     duplicate execution of the same request.
     """

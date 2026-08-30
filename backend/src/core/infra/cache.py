@@ -42,7 +42,8 @@ class CacheBackend(ABC):
         return None
 
     def set_bytes(self, key: str, value: bytes, ttl: int | None = None) -> None:
-        pass
+        """Store raw bytes with optional TTL."""
+        return None
 
     def get_stale(self, key: str) -> tuple[Any | None, bool]:
         return self.get(key), True
@@ -101,7 +102,7 @@ class InProcessCache(CacheBackend):
 
     def get_bytes(self, key: str) -> bytes | None:
         val = self.get(key)
-        return val if isinstance(val, (bytes, bytearray)) else None
+        return bytes(val) if isinstance(val, (bytes, bytearray)) else None
 
     def set_bytes(self, key: str, value: bytes, ttl: int | None = None) -> None:
         self.set(key, bytes(value), ttl=ttl)

@@ -79,7 +79,7 @@ def _physical_cores_windows() -> int | None:
         count = 0
         offset = 0
         while offset + 8 <= length.value:
-            size = int.from_bytes(buffer[offset + 4 : offset + 8], "little")
+            size = int.from_bytes(b"".join(buffer[offset + 4 : offset + 8]), "little")
             if size <= 0:
                 break
             count += 1

@@ -261,7 +261,9 @@ class CodeExecutor:
 
                 output = buffer.getvalue().strip() or "Executed successfully."
                 if len(output) > 50000:
-                    output = output[:50000] + "\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]"
+                    output = (
+                        output[:50000] + "\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]"
+                    )
                 if on_stdout and output:
                     on_stdout(output)
                 return ExecutionResult(

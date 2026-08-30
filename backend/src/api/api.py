@@ -120,6 +120,7 @@ app = FastAPI(
 
 try:
     from src.core.infra.telemetry import setup_telemetry
+
     setup_telemetry(app)
 except Exception as e:
     logger.warning("Failed to setup telemetry", error=str(e))

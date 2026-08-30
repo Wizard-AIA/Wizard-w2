@@ -1,13 +1,16 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable
+from enum import StrEnum
+from typing import Any
 
-class NodeStatus(str, Enum):
+
+class NodeStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
 
 @dataclass
 class DAGNode:
@@ -21,11 +24,13 @@ class DAGNode:
     started_at: float | None = None
     finished_at: float | None = None
 
+
 @dataclass
 class DAGEdge:
     source_id: str
     target_id: str
-    condition: Callable[['DAGNode'], bool] | None = None
+    condition: Callable[["DAGNode"], bool] | None = None
+
 
 class ExecutionDAG:
     def __init__(self):
@@ -43,11 +48,11 @@ class ExecutionDAG:
     def add_edge(self, source_id: str, target_id: str, condition: Callable[[DAGNode], bool] | None = None) -> None:
         if source_id not in self.nodes or target_id not in self.nodes:
             raise ValueError("Source or target node not in DAG")
-        
+
         self.edges.append(DAGEdge(source_id=source_id, target_id=target_id, condition=condition))
         self._adjacency_list[source_id].append(target_id)
         self._in_degree[target_id] += 1
-        
+
         # Check for cycles
         if self._has_cycle():
             # Rollback
@@ -63,14 +68,14 @@ class ExecutionDAG:
         def dfs(node_id: str) -> bool:
             visited.add(node_id)
             rec_stack.add(node_id)
-            
+
             for neighbor in self._adjacency_list.get(node_id, []):
                 if neighbor not in visited:
                     if dfs(neighbor):
                         return True
                 elif neighbor in rec_stack:
                     return True
-            
+
             rec_stack.remove(node_id)
             return False
 
@@ -84,16 +89,16 @@ class ExecutionDAG:
         in_degree = self._in_degree.copy()
         queue = [node_id for node_id, degree in in_degree.items() if degree == 0]
         sorted_nodes = []
-        
+
         while queue:
             current_id = queue.pop(0)
             sorted_nodes.append(self.nodes[current_id])
-            
+
             for neighbor in self._adjacency_list.get(current_id, []):
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
-                    
+
         return sorted_nodes
 
     def get_ready_nodes(self) -> list[DAGNode]:
@@ -101,7 +106,7 @@ class ExecutionDAG:
         for node in self.nodes.values():
             if node.status != NodeStatus.PENDING:
                 continue
-            
+
             is_ready = True
             for edge in self.edges:
                 if edge.target_id == node.id:
@@ -139,7 +144,7 @@ class ExecutionDAG:
         return {"nodes": nodes_dict, "edges": edges_list}
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'ExecutionDAG':
+    def from_dict(cls, data: dict) -> "ExecutionDAG":
         dag = cls()
         for node_data in data.get("nodes", {}).values():
             node = DAGNode(
@@ -154,8 +159,8 @@ class ExecutionDAG:
                 finished_at=node_data.get("finished_at"),
             )
             dag.add_node(node)
-            
+
         for edge_data in data.get("edges", []):
             dag.add_edge(edge_data["source_id"], edge_data["target_id"])
-            
+
         return dag

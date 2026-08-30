@@ -24,7 +24,11 @@ class BackupScheduler:
     async def start(self) -> None:
         self._tasks.append(asyncio.create_task(self._backup_loop(), name="db-backup"))
         self._tasks.append(asyncio.create_task(self._checkpoint_loop(), name="wal-checkpoint"))
-        logger.info("backup_scheduler_started", backup_h=self._backup_interval / 3600, checkpoint_h=self._checkpoint_interval / 3600)
+        logger.info(
+            "backup_scheduler_started",
+            backup_h=self._backup_interval / 3600,
+            checkpoint_h=self._checkpoint_interval / 3600,
+        )
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -34,6 +38,7 @@ class BackupScheduler:
 
     async def _backup_loop(self) -> None:
         from src.core.database import db_mgr
+
         while True:
             await asyncio.sleep(self._backup_interval)
             try:
@@ -45,6 +50,7 @@ class BackupScheduler:
 
     async def _checkpoint_loop(self) -> None:
         from src.core.database import db_mgr
+
         while True:
             await asyncio.sleep(self._checkpoint_interval)
             try:

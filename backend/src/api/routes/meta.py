@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.responses import JSONResponse
@@ -18,6 +19,7 @@ from src.api.schemas import (
     ModelDownloadRequest,
     ModelDownloadsResponse,
     ModelDownloadState,
+    ModelInfoResponse,
     ModelListResponse,
     ModelSelection,
     PermissionCategoryResponse,
@@ -58,10 +60,13 @@ router = APIRouter(tags=["meta"])
 
 API_VERSION = "4.0.0"
 
+
 @router.get("/metrics")
 async def metrics_endpoint():
-    from src.core.infra.metrics import metrics
     from starlette.responses import PlainTextResponse
+
+    from src.core.infra.metrics import metrics
+
     return PlainTextResponse(content=metrics.generate_prometheus_text(), media_type="text/plain; version=0.0.4")
 
 
@@ -103,6 +108,7 @@ async def health_ready() -> JSONResponse:
     if sandbox_available:
         try:
             import httpx
+
             async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")) as client:
                 resp = await client.get("http://localhost/_ping", timeout=2.0)
                 if resp.status_code == 200:
@@ -116,7 +122,7 @@ async def health_ready() -> JSONResponse:
 
     status_code = 200 if is_ready else 503
     status = "ok" if is_ready else "degraded"
-    
+
     return JSONResponse(
         status_code=status_code,
         content=HealthDetailResponse(
@@ -126,8 +132,8 @@ async def health_ready() -> JSONResponse:
             sandbox_available=sandbox_available,
             execution_backend=backend,
             model_provider=settings.API_PROVIDER,
-            checks=checks
-        ).model_dump()
+            checks=checks,
+        ).model_dump(),
     )
 
 
@@ -257,7 +263,7 @@ async def server_config() -> ServerConfig:
         plot_format=settings.PLOT_FORMAT,
         sandbox_available=backend == "docker",
         sandbox_enabled=settings.SANDBOX_ENABLED,
-        execution_backend=backend,
+        execution_backend=cast(Any, backend),
         execution_backend_setting=settings.EXECUTION_BACKEND,
         execution_isolation=isolation_for(backend),
         host_sandbox=settings.HOST_SANDBOX,
@@ -499,7 +505,7 @@ async def update_server_config(
     if payload.openai_api_key is not None:
         settings.OPENAI_API_KEY = payload.openai_api_key
         os.environ["OPENAI_API_KEY"] = payload.openai_api_key
-        credentials.set_key("openai", payload.openai_api_key)
+        credentials.set("openai", payload.openai_api_key)
         env_updates["OPENAI_API_KEY"] = payload.openai_api_key
 
     if payload.anthropic_base_url is not None:
@@ -510,7 +516,7 @@ async def update_server_config(
     if payload.anthropic_api_key is not None:
         settings.ANTHROPIC_API_KEY = payload.anthropic_api_key
         os.environ["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
-        credentials.set_key("anthropic", payload.anthropic_api_key)
+        credentials.set("anthropic", payload.anthropic_api_key)
         env_updates["ANTHROPIC_API_KEY"] = payload.anthropic_api_key
 
     if payload.api_provider is not None:
@@ -561,7 +567,7 @@ async def update_server_config(
     if payload.gemini_api_key is not None:
         settings.GEMINI_API_KEY = payload.gemini_api_key
         os.environ["GEMINI_API_KEY"] = payload.gemini_api_key
-        credentials.set_key("gemini", payload.gemini_api_key)
+        credentials.set("gemini", payload.gemini_api_key)
         env_updates["GEMINI_API_KEY"] = payload.gemini_api_key
 
     if payload.gateway_api_url is not None:
@@ -572,7 +578,7 @@ async def update_server_config(
     if payload.gateway_api_key is not None:
         settings.GATEWAY_API_KEY = payload.gateway_api_key
         os.environ["GATEWAY_API_KEY"] = payload.gateway_api_key
-        credentials.set_key("custom_gateway", payload.gateway_api_key)
+        credentials.set("custom_gateway", payload.gateway_api_key)
         env_updates["GATEWAY_API_KEY"] = payload.gateway_api_key
 
     if payload.embedding_provider is not None:
@@ -802,7 +808,7 @@ async def list_models(
 
     return ModelListResponse(
         provider=resolved,
-        models=[model.to_dict() for model in models],
+        models=[ModelInfoResponse(**model.to_dict()) for model in models],
         suggested=suggested,
         selected={
             # Falls back to what discovery resolved, not to the configured

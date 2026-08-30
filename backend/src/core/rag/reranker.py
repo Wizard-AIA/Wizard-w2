@@ -10,6 +10,7 @@ from src.utils.logging import logger
 @dataclass
 class RerankResult:
     """A single reranked passage with its cross-encoder score."""
+
     text: str
     score: float
     original_index: int
@@ -27,6 +28,7 @@ class CrossEncoderReranker:
         self._available = False
         try:
             from flashrank import Ranker
+
             self._ranker = Ranker(model_name=model_name)
             self._available = True
             logger.info("cross_encoder_reranker_loaded", model=model_name)
@@ -37,9 +39,7 @@ class CrossEncoderReranker:
     def available(self) -> bool:
         return self._available
 
-    def rerank(
-        self, query: str, candidates: list[str], top_k: int = 5
-    ) -> list[RerankResult]:
+    def rerank(self, query: str, candidates: list[str], top_k: int = 5) -> list[RerankResult]:
         """Rerank candidates and return the top-k by cross-encoder score.
 
         If the cross-encoder is unavailable, returns the first *top_k*
@@ -47,11 +47,11 @@ class CrossEncoderReranker:
         """
         if not self._available or not candidates:
             return [
-                RerankResult(text=t, score=1.0 - i * 0.01, original_index=i)
-                for i, t in enumerate(candidates[:top_k])
+                RerankResult(text=t, score=1.0 - i * 0.01, original_index=i) for i, t in enumerate(candidates[:top_k])
             ]
         try:
             from flashrank import RerankRequest
+
             passages = [{"text": c} for c in candidates]
             request = RerankRequest(query=query, passages=passages)
             results = self._ranker.rerank(request)
@@ -66,8 +66,7 @@ class CrossEncoderReranker:
         except Exception as exc:
             logger.warning("cross_encoder_rerank_failed", error=str(exc))
             return [
-                RerankResult(text=t, score=1.0 - i * 0.01, original_index=i)
-                for i, t in enumerate(candidates[:top_k])
+                RerankResult(text=t, score=1.0 - i * 0.01, original_index=i) for i, t in enumerate(candidates[:top_k])
             ]
 
 

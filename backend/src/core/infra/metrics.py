@@ -1,12 +1,12 @@
-import time
 from collections import deque
 from threading import Lock
+
 
 class MetricsCollector:
     def __init__(self, window_size=1000):
         self.window_size = window_size
         self._lock = Lock()
-        
+
         # Histograms store a tuple of (count, sum, deque_of_values)
         self.histograms = {
             "wizard_request_duration_seconds": {},
@@ -20,7 +20,7 @@ class MetricsCollector:
             "wizard_llm_tokens_per_sec": ("provider", "model"),
             "wizard_turn_duration_seconds": (),
         }
-        
+
         self.counters = {
             "wizard_errors_total": {},
             "wizard_llm_tokens_total": {},
@@ -50,7 +50,7 @@ class MetricsCollector:
             h["count"] += 1
             h["sum"] += value
             h["values"].append(value)
-            
+
     def record_ttft(self, provider, model, ttft):
         self.record_histogram("wizard_llm_ttft_seconds", (provider, model), ttft)
 
@@ -69,7 +69,7 @@ class MetricsCollector:
 
     def _format_labels(self, label_names, label_values, extra_labels=None):
         pairs = []
-        for k, v in zip(label_names, label_values):
+        for k, v in zip(label_names, label_values, strict=False):
             pairs.append(f'{k}="{v}"')
         if extra_labels:
             for k, v in extra_labels.items():
@@ -83,25 +83,27 @@ class MetricsCollector:
         with self._lock:
             # Counters
             for name, data in self.counters.items():
-                if not data: continue
+                if not data:
+                    continue
                 lines.append(f"# HELP {name} Counter metric")
                 lines.append(f"# TYPE {name} counter")
                 label_names = self.counter_labels[name]
                 for label_values, count in data.items():
                     label_str = self._format_labels(label_names, label_values)
                     lines.append(f"{name}{label_str} {count}")
-            
+
             # Histograms
             for name, data in self.histograms.items():
-                if not data: continue
+                if not data:
+                    continue
                 lines.append(f"# HELP {name} Histogram metric")
                 lines.append(f"# TYPE {name} summary")
                 label_names = self.histogram_labels[name]
                 for label_values, h in data.items():
                     count = h["count"]
                     h_sum = h["sum"]
-                    values = sorted(list(h["values"]))
-                    
+                    values = sorted(h["values"])
+
                     if values:
                         p50 = values[int(len(values) * 0.5)]
                         p90 = values[int(len(values) * 0.9)]
@@ -110,17 +112,16 @@ class MetricsCollector:
                     else:
                         p50 = p90 = p95 = p99 = 0.0
 
-                    base_labels = dict(zip(label_names, label_values))
-                    
                     # Quantiles
                     for q, v in (("0.5", p50), ("0.9", p90), ("0.95", p95), ("0.99", p99)):
                         l_str = self._format_labels(label_names, label_values, {"quantile": q})
                         lines.append(f"{name}{l_str} {v}")
-                        
+
                     l_str_sum_count = self._format_labels(label_names, label_values)
                     lines.append(f"{name}_sum{l_str_sum_count} {h_sum}")
                     lines.append(f"{name}_count{l_str_sum_count} {count}")
-        
+
         return "\n".join(lines) + "\n"
+
 
 metrics = MetricsCollector()

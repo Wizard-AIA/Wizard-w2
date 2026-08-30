@@ -100,7 +100,7 @@ def classify_task_complexity(instruction: str, context: dict[str, Any] | None = 
     # Use SLMRouter to fast-track lightweight queries
     slm = SLMRouter()
     intent, tier = slm.route(instruction)
-    
+
     if intent in ("metadata", "chitchat") and not metadata.get("previous_error") and not metadata.get("multi_step"):
         return TaskTier.LIGHTWEIGHT
 

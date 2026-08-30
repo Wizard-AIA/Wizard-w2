@@ -1,13 +1,10 @@
-import pytest
-import time
-import numpy as np
-from src.core.rag.hybrid_search import reciprocal_rank_fusion
-from src.core.rag.reranker import CrossEncoderReranker, get_reranker
-from src.core.infra.cache import InProcessCache
-from src.core.semantic_cache import SemanticCache
-from src.core.rag.retriever import ContextRetriever
-from src.core.database import db_mgr
 import pandas as pd
+
+from src.core.infra.cache import InProcessCache
+from src.core.rag.hybrid_search import reciprocal_rank_fusion
+from src.core.rag.reranker import CrossEncoderReranker
+from src.core.rag.retriever import ContextRetriever
+from src.core.semantic_cache import SemanticCache
 
 
 def test_reciprocal_rank_fusion():
@@ -48,12 +45,14 @@ def test_semantic_cache_single_flight_and_evict():
 
 def test_plan_aware_column_selection():
     retriever = ContextRetriever()
-    df = pd.DataFrame({
-        "order_id": [1, 2],
-        "customer_name": ["Alice", "Bob"],
-        "discount_pct": [0.1, 0.2],
-        "tax_rate": [0.05, 0.05],
-    })
+    df = pd.DataFrame(
+        {
+            "order_id": [1, 2],
+            "customer_name": ["Alice", "Bob"],
+            "discount_pct": [0.1, 0.2],
+            "tax_rate": [0.05, 0.05],
+        }
+    )
     cols, truncated = retriever.select_columns(
         query="show customer_name",
         df=df,

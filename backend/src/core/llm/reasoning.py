@@ -113,6 +113,7 @@ class ReasoningStream:
         self._pending = ""
         self._inside = False
         import time
+
         self._start_time = time.monotonic()
         self._first_token_emitted = False
         self._provider = provider
@@ -123,7 +124,9 @@ class ReasoningStream:
         out = self._feed_inner(delta)
         if out and not self._first_token_emitted:
             import time
+
             from src.core.infra.metrics import metrics
+
             self._first_token_emitted = True
             metrics.record_ttft(self._provider, self._model, time.monotonic() - self._start_time)
         return out
@@ -175,7 +178,9 @@ class ReasoningStream:
         out = [(self._inside, remainder)]
         if out and not self._first_token_emitted:
             import time
+
             from src.core.infra.metrics import metrics
+
             self._first_token_emitted = True
             metrics.record_ttft(self._provider, self._model, time.monotonic() - self._start_time)
         return out

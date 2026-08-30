@@ -1,19 +1,23 @@
 import asyncio
 import json
 import threading
-from typing import AsyncIterator, Any
+from collections.abc import AsyncIterator
+from typing import Any
+
 from src.config import settings
 from src.utils.logging import logger
+
 
 class SessionEventBus:
     def __init__(self):
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
         self._redis = None
         self._lock = threading.Lock()
-        
+
         if settings.REDIS_URL:
             try:
                 import redis.asyncio as aioredis
+
                 self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
                 logger.info("SessionEventBus configured with Redis")
             except ImportError:
@@ -21,7 +25,7 @@ class SessionEventBus:
 
     def publish(self, session_id: str, event: dict[str, Any]) -> None:
         event_str = json.dumps(event)
-        
+
         if self._redis:
             # Fire and forget async task if we're in an event loop
             try:
@@ -64,7 +68,7 @@ class SessionEventBus:
                 if session_id not in self._subscribers:
                     self._subscribers[session_id] = set()
                 self._subscribers[session_id].add(q)
-            
+
             try:
                 while True:
                     event = await q.get()
@@ -75,5 +79,6 @@ class SessionEventBus:
                         self._subscribers[session_id].discard(q)
                         if not self._subscribers[session_id]:
                             del self._subscribers[session_id]
+
 
 session_bus = SessionEventBus()

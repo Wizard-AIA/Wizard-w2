@@ -139,7 +139,7 @@ class TheCouncil:
 
         reviews: list[dict[str, Any]] = []
         for specialist, outcome in zip(self.specialists, outcomes, strict=True):
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException):
                 logger.warning("Specialist review failed", agent=specialist.name, error=str(outcome))
                 continue
             reviews.append(outcome)

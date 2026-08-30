@@ -1,17 +1,17 @@
-import pytest
 import asyncio
-import time
-from src.core.infra.telemetry import get_tracer, inject_trace_context, extract_trace_context
-from src.core.infra.metrics import MetricsCollector
-from src.core.infra.session_bus import SessionEventBus
+
+import pytest
+
 from src.core.context_summarizer import ContextSummarizer
 from src.core.database import db_mgr
-from src.core.tools.daemon import DaemonClient
+from src.core.infra.metrics import MetricsCollector
+from src.core.infra.session_bus import SessionEventBus
+from src.core.infra.telemetry import extract_trace_context, get_tracer, inject_trace_context
 
 
 def test_telemetry_fallback():
     tracer = get_tracer("test.tracer")
-    with tracer.start_as_current_span("test_span") as span:
+    with tracer.start_as_current_span("test_span"):
         carrier = {}
         inject_trace_context(carrier)
         assert isinstance(carrier, dict)

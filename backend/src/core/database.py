@@ -264,17 +264,18 @@ class DatabaseManager:
                 conn.execute("PRAGMA foreign_keys=ON")
             except sqlite3.Error as exc:  # pragma: no cover - pragma support varies
                 logger.warning("Failed to apply SQLite pragmas", error=str(exc))
-            
+
             # Attempt to load sqlite-vec for native vector search
             try:
                 conn.enable_load_extension(True)
                 import sqlite_vec
+
                 sqlite_vec.load(conn)
                 conn.enable_load_extension(False)
                 self._has_vec = True
             except (ImportError, Exception):
                 self._has_vec = False
-                
+
             self._local.conn = conn
         return conn
 
@@ -333,11 +334,19 @@ class DatabaseManager:
                     conn.execute(statement)
 
                 if self._has_vec:
-                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_semantic_cache USING vec0(embedding float[384], +cache_key TEXT)")
-                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_trajectories USING vec0(embedding float[384], +session_id TEXT)")
-                    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[384], +session_id TEXT)")
-                
-                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_trajectories USING fts5(question, code, content='trajectories', content_rowid='rowid')")
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_semantic_cache USING vec0(embedding float[384], +cache_key TEXT)"
+                    )
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_trajectories USING vec0(embedding float[384], +session_id TEXT)"
+                    )
+                    conn.execute(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[384], +session_id TEXT)"
+                    )
+
+                conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS fts_trajectories USING fts5(question, code, content='trajectories', content_rowid='rowid')"
+                )
             logger.info("SQLite database initialized", path=self.db_path)
         except Exception as e:
             logger.error("Failed to initialize SQLite database", error=str(e))
@@ -348,6 +357,7 @@ class DatabaseManager:
     def backup(self, dest_path: Path | None = None) -> Path:
         """Create a hot, non-blocking backup of the database using the online backup API."""
         import sqlite3 as _sqlite3
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         dest = dest_path or self._db_path.parent / "backups" / f"wizard_{ts}.db"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -383,7 +393,9 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
     # Dead-Letter Queue
     # ------------------------------------------------------------------ #
-    def save_dead_letter(self, job_id: str, kind: str, payload: str | None, error: str, stack_trace: str | None, retry_count: int) -> None:
+    def save_dead_letter(
+        self, job_id: str, kind: str, payload: str | None, error: str, stack_trace: str | None, retry_count: int
+    ) -> None:
         with self._write() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO dead_letter_jobs (id, kind, payload, error, stack_trace, retry_count) VALUES (?, ?, ?, ?, ?, ?)",
@@ -392,7 +404,9 @@ class DatabaseManager:
 
     def get_dead_letters(self, limit: int = 50) -> list[dict]:
         with self._read() as conn:
-            rows = conn.execute("SELECT * FROM dead_letter_jobs WHERE replayed_at IS NULL ORDER BY failed_at DESC LIMIT ?", (limit,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM dead_letter_jobs WHERE replayed_at IS NULL ORDER BY failed_at DESC LIMIT ?", (limit,)
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def mark_dlq_replayed(self, job_id: str) -> None:
@@ -475,7 +489,9 @@ class DatabaseManager:
         """Remove cache entries for a specific session."""
         try:
             with self._read() as conn:
-                rows = conn.execute("SELECT columns FROM schema_registry WHERE session_id = ?", (session_id,)).fetchall()
+                rows = conn.execute(
+                    "SELECT columns FROM schema_registry WHERE session_id = ?", (session_id,)
+                ).fetchall()
                 if not rows:
                     return
                 active_columns = []
@@ -1274,7 +1290,8 @@ class DatabaseManager:
         if not self._has_vec:
             return []  # caller falls back to in-memory ranking
         import struct
-        blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+
+        blob = struct.pack(f"{len(query_embedding)}f", *query_embedding)
         with self._read() as conn:
             rows = conn.execute(
                 f"SELECT rowid, distance FROM vec_{table} WHERE embedding MATCH ? AND k = ?",
@@ -1293,6 +1310,7 @@ class DatabaseManager:
             return [{"rowid": r["rowid"], "score": -r["rank"]} for r in rows]
         except Exception:
             return []
+
 
 # Singleton instance
 db_mgr = DatabaseManager()

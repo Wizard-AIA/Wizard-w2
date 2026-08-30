@@ -1,10 +1,11 @@
-import pytest
 import pandas as pd
-from src.core.agent.dag import ExecutionDAG, DAGNode, DAGEdge, NodeStatus
+import pytest
+
+from src.core.agent.dag import DAGNode, ExecutionDAG
 from src.core.agent.grounding import check_table_grounding
+from src.core.infra.queue import get_queue
 from src.core.llm.slm_router import SLMRouter
-from src.core.security.sandbox.docker_security import validate_container_config, SecurityPolicyError
-from src.core.infra.queue import get_queue, InMemoryJobQueue
+from src.core.security.sandbox.docker_security import SecurityPolicyError, validate_container_config
 
 
 def test_dag_execution_and_cycles():
@@ -40,17 +41,13 @@ def test_dag_execution_and_cycles():
 
 
 def test_table_level_grounding():
-    text = (
-        "Here are the regional results:\n\n"
-        "| Region | Revenue |\n"
-        "| --- | --- |\n"
-        "| North | 100 |\n"
-        "| South | 250 |\n"
+    text = "Here are the regional results:\n\n| Region | Revenue |\n| --- | --- |\n| North | 100 |\n| South | 250 |\n"
+    df = pd.DataFrame(
+        {
+            "Region": ["North", "South"],
+            "Revenue": [100, 250],
+        }
     )
-    df = pd.DataFrame({
-        "Region": ["North", "South"],
-        "Revenue": [100, 250],
-    })
     result = check_table_grounding(text, [df])
     assert result["tables_found"] == 1
     assert result["grounded"] is True
@@ -94,17 +91,21 @@ def test_docker_security_validation():
 
     # Disallow root volume mount
     with pytest.raises(SecurityPolicyError):
-        validate_container_config({
-            "Privileged": False,
-            "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
-        })
+        validate_container_config(
+            {
+                "Privileged": False,
+                "Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
+            }
+        )
 
     # Disallow Privileged
     with pytest.raises(SecurityPolicyError):
-        validate_container_config({
-            "Privileged": True,
-            "Binds": [],
-        })
+        validate_container_config(
+            {
+                "Privileged": True,
+                "Binds": [],
+            }
+        )
 
 
 def test_job_queue_instance():

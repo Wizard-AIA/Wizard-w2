@@ -29,7 +29,9 @@ answering questions.
 
 from __future__ import annotations
 
+import builtins
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 from src.config import settings
@@ -197,7 +199,7 @@ class SkillRegistry:
         """
         return bool(self._load())
 
-    def search(self, query: str, limit: int | None = None) -> list[SkillMatch]:
+    def search(self, query: str, limit: int | None = None) -> builtins.list[SkillMatch]:
         """The passages most relevant to ``query``, best first.
 
         With an encoder loaded this is :meth:`embedding_service.rank`, the same
@@ -236,7 +238,7 @@ class SkillRegistry:
         else:
             ranked = _rank_by_coverage(query, [chunk.text for chunk, _ in chunks])
 
-        matches: list[SkillMatch] = []
+        matches: builtins.list[SkillMatch] = []
         claimed: set[str] = set()
         for score, index in ranked:
             if len(matches) >= top_k:
@@ -250,7 +252,7 @@ class SkillRegistry:
             matches.append(SkillMatch(skill=skill, text=chunk.text, score=float(score)))
         return matches
 
-    def render_block(self, matches: list[SkillMatch], limit: int | None = None) -> str:
+    def render_block(self, matches: Sequence[SkillMatch], limit: int | None = None) -> str:
         """The ``<skills>`` block injected into the planning prompt.
 
         Hard-capped: this is the one place a skill's text costs prompt budget, and
@@ -299,7 +301,7 @@ class SkillRegistry:
         body: str,
         *,
         layer: SkillLayer = SkillLayer.USER,
-        tags: list[str] | None = None,
+        tags: Sequence[str] | None = None,
         overwrite: bool = True,
     ) -> Skill:
         """Creates or replaces a skill in a writable layer.

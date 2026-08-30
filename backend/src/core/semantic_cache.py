@@ -71,7 +71,9 @@ class SemanticCache:
             if not candidates:
                 return None
 
-            ranked = embedding_service.rank(query.strip().lower(), [(c["query"], c.get("embedding")) for c in candidates])
+            ranked = embedding_service.rank(
+                query.strip().lower(), [(c["query"], c.get("embedding")) for c in candidates]
+            )
             if not ranked:
                 return None
 
@@ -100,16 +102,19 @@ class SemanticCache:
     def _evict_if_needed(self, max_entries: int = 5000) -> None:
         """Remove oldest semantic cache entries beyond the capacity limit."""
         from src.core.database import db_mgr
+
         try:
-            count_rows = db_mgr._read("SELECT COUNT(*) as cnt FROM semantic_cache")
-            count = count_rows[0]["cnt"] if count_rows else 0
+            with db_mgr._read() as conn:
+                row = conn.execute("SELECT COUNT(*) as cnt FROM semantic_cache").fetchone()
+                count = row["cnt"] if row else 0
             if count > max_entries:
                 excess = count - max_entries
-                db_mgr._write(
-                    "DELETE FROM semantic_cache WHERE rowid IN "
-                    "(SELECT rowid FROM semantic_cache ORDER BY rowid ASC LIMIT ?)",
-                    (excess,),
-                )
+                with db_mgr._write() as conn:
+                    conn.execute(
+                        "DELETE FROM semantic_cache WHERE rowid IN "
+                        "(SELECT rowid FROM semantic_cache ORDER BY rowid ASC LIMIT ?)",
+                        (excess,),
+                    )
         except Exception:
             pass  # eviction failure is non-critical
 

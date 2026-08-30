@@ -546,7 +546,9 @@ class DaemonClient:
                         if total_stdout_len + len(chunk) > MAX_STDOUT_LEN:
                             allowed = max(0, MAX_STDOUT_LEN - total_stdout_len)
                             stdout_parts.append(chunk[:allowed])
-                            stdout_parts.append("\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]")
+                            stdout_parts.append(
+                                "\n[OUTPUT TRUNCATED: Result exceeded maximum 50,000 character buffer limit]"
+                            )
                             truncated = True
                         else:
                             stdout_parts.append(chunk)

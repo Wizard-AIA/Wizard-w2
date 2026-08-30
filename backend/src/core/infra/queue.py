@@ -123,8 +123,15 @@ class JobQueue:
                     except Exception as exc:
                         job.retry_count += 1
                         if job.retry_count <= job.max_retries:
-                            delay = (2 ** job.retry_count) + random.uniform(0, 0.5)
-                            logger.warning("job_retry", job_id=job.id, kind=kind, retry=job.retry_count, delay_s=round(delay, 2), error=str(exc))
+                            delay = (2**job.retry_count) + random.uniform(0, 0.5)
+                            logger.warning(
+                                "job_retry",
+                                job_id=job.id,
+                                kind=kind,
+                                retry=job.retry_count,
+                                delay_s=round(delay, 2),
+                                error=str(exc),
+                            )
                             await asyncio.sleep(delay)
                             continue
                         job.status = JobStatus.FAILED
@@ -143,11 +150,13 @@ class JobQueue:
     def _route_to_dlq(self, job: Job, exc: Exception) -> None:
         """Persist a terminally failed job to the dead-letter queue."""
         import traceback
+
         from src.core.database import db_mgr
+
         try:
             db_mgr.save_dead_letter(
                 job_id=job.id,
-                kind=job.kind if hasattr(job, 'kind') else "unknown",
+                kind=job.kind if hasattr(job, "kind") else "unknown",
                 payload=None,
                 error=str(exc),
                 stack_trace=traceback.format_exc(),
@@ -226,31 +235,29 @@ class JobQueue:
         return "redis-backed" if settings.redis_enabled else "in-process"
 
 
-
 InMemoryJobQueue = JobQueue
+
 
 class RedisJobQueue(JobQueue):
     """External Redis queue backend."""
+
     def __init__(self, max_workers: int | None = None):
         super().__init__(max_workers)
         import redis.asyncio as aioredis
+
         self.redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-        self.queue_prefix = getattr(settings, 'REDIS_KEY_PREFIX', 'wizard:')
+        self.queue_prefix = getattr(settings, "REDIS_KEY_PREFIX", "wizard:")
         self.queue_key = f"{self.queue_prefix}jobs:queue"
-        self._handlers = {}
-        self._worker_tasks = []
+        self._handlers: dict[str, Any] = {}
+        self._worker_tasks: list[asyncio.Task[Any]] = []
         self._worker_started = False
 
     def _persist_to_redis(self, job: Job):
         try:
-            asyncio.ensure_future(self.redis.hset(
-                f"{self.queue_prefix}jobs:{job.id}",
-                mapping=job.to_dict()
-            ))
-            asyncio.ensure_future(self.redis.expire(
-                f"{self.queue_prefix}jobs:{job.id}",
-                settings.JOB_RESULT_TTL_SECONDS
-            ))
+            asyncio.ensure_future(self.redis.hset(f"{self.queue_prefix}jobs:{job.id}", mapping=job.to_dict()))
+            asyncio.ensure_future(
+                self.redis.expire(f"{self.queue_prefix}jobs:{job.id}", settings.JOB_RESULT_TTL_SECONDS)
+            )
         except Exception as exc:
             logger.debug("Failed to persist job to Redis hash", error=str(exc))
 
@@ -269,31 +276,31 @@ class RedisJobQueue(JobQueue):
                 if not res:
                     continue
                 _, job_id = res
-                
+
                 # Retrieve local handler
                 handler = self._handlers.pop(job_id, None)
                 if not handler:
                     continue
-                
+
                 # Fetch job state
                 job = self._jobs.get(job_id)
                 if not job:
                     continue
-                
+
                 # Execute
                 job.status = JobStatus.RUNNING
                 job.started_at = time.time()
                 self._persist(job)
                 self._persist_to_redis(job)
-                
+
                 # Periodic heartbeat task
                 async def heartbeat():
                     while job.status == JobStatus.RUNNING:
                         await asyncio.sleep(5)
                         self._persist_to_redis(job)
-                
+
                 hb_task = asyncio.ensure_future(heartbeat())
-                
+
                 try:
                     job.result = await handler(job)
                     job.status = JobStatus.SUCCEEDED
@@ -322,12 +329,13 @@ class RedisJobQueue(JobQueue):
         self._handlers[job.id] = handler
         self._persist(job)
         self._persist_to_redis(job)
-        
+
         async def _push():
             await self.redis.lpush(self.queue_key, job.id)
+
         task = asyncio.ensure_future(_push())
         self._tasks[job.id] = task
-        
+
         self._start_workers_if_needed()
         return job
 
@@ -335,6 +343,7 @@ class RedisJobQueue(JobQueue):
         for t in self._worker_tasks:
             t.cancel()
         await super().shutdown()
+
 
 _queue: JobQueue | None = None
 _queue_lock = threading.Lock()
@@ -347,10 +356,11 @@ def get_queue() -> JobQueue:
     with _queue_lock:
         if _queue is None:
             if settings.redis_enabled:
-                try:
-                    import redis.asyncio
+                import importlib.util
+
+                if importlib.util.find_spec("redis.asyncio") is not None:
                     _queue = RedisJobQueue()
-                except ImportError:
+                else:
                     _queue = JobQueue()
             else:
                 _queue = JobQueue()

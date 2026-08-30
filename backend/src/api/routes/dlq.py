@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import require_api_key
 from src.core.database import db_mgr
-from src.core.infra.queue import get_queue
+
 
 router = APIRouter(prefix="/api/dlq", tags=["dlq"], dependencies=[Depends(require_api_key)])
 

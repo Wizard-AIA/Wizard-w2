@@ -32,10 +32,10 @@ from src.config import settings
 from src.core.agent.consent import ConsentBroker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import AnalysisOrchestrator
+from src.core.infra.idempotency import get_idempotency_store
 from src.core.session import Session, session_manager
 from src.utils.errors import safe_error_message
 from src.utils.logging import logger
-from src.core.infra.idempotency import get_idempotency_store
 
 
 router = APIRouter(tags=["chat"])
@@ -78,7 +78,7 @@ async def chat(
         raise HTTPException(status_code=409, detail="Analysis already in progress for this session")
 
     await session_lock.acquire()
-    
+
     try:
         session.append_message("user", request.message)
         collector = EventCollector()
@@ -114,10 +114,10 @@ async def chat(
             grounding=payload["grounding"],
             skills_used=payload["skills_used"],
         )
-        
+
         if x_idempotency_key:
             store.store_result(x_idempotency_key, chat_response)
-            
+
         return chat_response
     finally:
         session_lock.release()
@@ -132,6 +132,7 @@ async def chat_stream(
     orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
 ):
     """Server-Sent Events alternative to WebSocket for proxy-hostile environments."""
+
     async def event_generator():
         collector = EventCollector()
         # Run orchestrator in background task
@@ -220,7 +221,7 @@ class WebSocketEmitter:
             # or block briefly
             try:
                 await asyncio.wait_for(self._queue.put(event), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # drop if still full after 1s
 
 

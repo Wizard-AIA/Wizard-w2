@@ -231,7 +231,9 @@ async def preview_data(
         if sort_by not in df.columns:
             raise HTTPException(status_code=400, detail=f"Unknown column '{sort_by}'.")
         # Memory optimization: sort only the target column index, avoiding full DataFrame copy
-        sorted_idx = df[sort_by].sort_values(ascending=sort_order == "asc", kind="stable").index[start : start + per_page]
+        sorted_idx = (
+            df[sort_by].sort_values(ascending=sort_order == "asc", kind="stable").index[start : start + per_page]
+        )
         subset = df.loc[sorted_idx]
     else:
         subset = df.iloc[start : start + per_page]

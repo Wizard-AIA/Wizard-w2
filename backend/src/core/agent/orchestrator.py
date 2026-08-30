@@ -151,6 +151,7 @@ MODES = ("auto", "fast", "deep", "planning")
 @dataclass
 class IterationCheckpoint:
     """Snapshot of a verified iteration's state for quality rollback."""
+
     iteration: int
     code: str
     output: str
@@ -2685,12 +2686,12 @@ class AnalysisOrchestrator:
                     dataset_manifest=dataset_manifest_from_session(session),
                     steps=[
                         ExecutedStep(
-                            goal=step["goal"],
-                            code=step["code"],
-                            ok=step.get("ok", True),
-                            observation=step.get("observation", ""),
-                            duration_ms=step.get("duration_ms", 0),
-                            retries=step.get("retries", 0),
+                            goal=str(step.get("goal", "")),
+                            code=str(step.get("code", "")),
+                            ok=bool(step.get("ok", True)),
+                            observation=str(step.get("observation", "")),
+                            duration_ms=int(float(str(step.get("duration_ms", 0)))),
+                            retries=int(float(str(step.get("retries", 0)))),
                         )
                         for step in exported_steps
                     ],

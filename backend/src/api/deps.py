@@ -34,7 +34,9 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
     global _warned_no_key
     if not settings.API_KEY:
         if not _warned_no_key:
-            logger.warning("API_KEY is not set — all routes are unauthenticated. Set API_KEY in .env for production use.")
+            logger.warning(
+                "API_KEY is not set — all routes are unauthenticated. Set API_KEY in .env for production use."
+            )
             _warned_no_key = True
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.API_KEY):

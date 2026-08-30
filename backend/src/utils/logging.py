@@ -58,14 +58,15 @@ def trace_agent(agent_name: str):
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 from src.core.infra.telemetry import get_tracer
+
                 tracer = get_tracer("wizard.agent")
-                
+
                 with tracer.start_as_current_span(agent_name) as span:
                     span.set_attribute("function_name", func.__name__)
                     session_id = kwargs.get("session_id")
                     if session_id:
                         span.set_attribute("session_id", session_id)
-                        
+
                     start_time = time.time()
                     logger.info(f"Agent Started: {agent_name}", status="started")
                     try:
@@ -91,14 +92,15 @@ def trace_agent(agent_name: str):
             @wraps(func)
             def wrapper(*args, **kwargs):
                 from src.core.infra.telemetry import get_tracer
+
                 tracer = get_tracer("wizard.agent")
-                
+
                 with tracer.start_as_current_span(agent_name) as span:
                     span.set_attribute("function_name", func.__name__)
                     session_id = kwargs.get("session_id")
                     if session_id:
                         span.set_attribute("session_id", session_id)
-                        
+
                     start_time = time.time()
                     logger.info(f"Agent Started: {agent_name}", status="started")
                     try:
