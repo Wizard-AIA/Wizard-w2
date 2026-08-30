@@ -127,6 +127,12 @@ export function SettingsWorkbench() {
       if (!payload.gateway_api_key) delete payload.gateway_api_key
 
       const updated = await api.updateConfig(payload)
+      if (form.data_mode) {
+        await api.setDataMode({
+          mode: form.data_mode,
+          schema_only: form.data_schema_only,
+        }).catch(() => null)
+      }
       setConfig(updated)
       syncFormFromConfig(updated)
       await globalRefreshConfig()

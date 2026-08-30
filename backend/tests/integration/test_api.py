@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.api import app
+from src.config import settings
 from src.core.session import session_manager
 
 
@@ -602,6 +603,8 @@ def test_patch_server_config(client: TestClient) -> None:
         assert data["agent_grounding_check"] is True
         assert data["openai_base_url"] == "https://api.openai.com/v1"
     finally:
+        from src.api.routes.meta import _persist_env_file
+
         settings.AGENT_REQUIRE_APPROVAL = orig_approval
         settings.AGENT_MAX_ITERATIONS = orig_iter
         settings.MAX_TOKENS = orig_tokens
@@ -610,6 +613,14 @@ def test_patch_server_config(client: TestClient) -> None:
             os.environ["MAX_TOKENS"] = orig_env_tokens
         else:
             os.environ.pop("MAX_TOKENS", None)
+        _persist_env_file(
+            {
+                "MAX_TOKENS": str(orig_tokens),
+                "TEMPERATURE": str(orig_temp),
+                "AGENT_MAX_ITERATIONS": str(orig_iter),
+                "AGENT_REQUIRE_APPROVAL": str(orig_approval).lower(),
+            }
+        )
 
 
 def test_cors_preflight_for_patch_method(client: TestClient) -> None:
@@ -624,3 +635,45 @@ def test_cors_preflight_for_patch_method(client: TestClient) -> None:
     )
     assert res.status_code == 200
     assert "PATCH" in res.headers.get("access-control-allow-methods", "")
+
+
+def test_data_mode_synchronization_with_active_session_and_config(client: TestClient) -> None:
+    """PATCH /api/config with data_mode synchronizes active sessions and settings."""
+    orig_mode = settings.DATA_MODE
+    session_res = client.post("/api/session", json={})
+    assert session_res.status_code == 200
+    session_id = session_res.json()["session_id"]
+    headers = {SESSION_HEADER: session_id}
+
+    try:
+        # Update config to local-only
+        res = client.patch("/api/config", json={"data_mode": "local-only"})
+        assert res.status_code == 200
+        assert res.json()["data_mode"] == "local-only"
+        assert settings.DATA_MODE == "local-only"
+
+        # Session data-mode endpoint reflects local-only
+        mode_res = client.get("/api/data-mode", headers=headers)
+        assert mode_res.status_code == 200
+        assert mode_res.json()["mode"] == "local-only"
+
+        # Models endpoint reflects local-only allowed providers
+        models_res = client.get("/api/models", headers=headers)
+        assert models_res.status_code == 200
+        providers = {p["id"]: p["allowed"] for p in models_res.json()["providers"]}
+        assert providers.get("ollama") is True
+        assert providers.get("gemini") is False
+
+        # POST /api/data-mode switches back to cloud-only and synchronizes config
+        set_mode_res = client.post("/api/data-mode", json={"mode": "cloud-only"}, headers=headers)
+        assert set_mode_res.status_code == 200
+        assert set_mode_res.json()["mode"] == "cloud-only"
+        assert settings.DATA_MODE == "cloud-only"
+
+        config_res = client.get("/api/config")
+        assert config_res.status_code == 200
+        assert config_res.json()["data_mode"] == "cloud-only"
+    finally:
+        settings.DATA_MODE = orig_mode
+        os.environ["DATA_MODE"] = orig_mode
+

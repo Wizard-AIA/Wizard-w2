@@ -49,7 +49,7 @@ from src.core.llm.downloader import ProviderNotDownloadable, model_downloader
 from src.core.llm.reasoning import looks_like_reasoning_model
 from src.core.permissions import CATEGORIES, describe_profile, normalize as normalize_profile
 from src.core.security.sandbox import capability as sandbox_capability
-from src.core.session import Session
+from src.core.session import Session, session_manager
 from src.core.tools import runtime as runtime_backend
 from src.providers import exists as provider_exists
 from src.utils.hostinfo import host_info
@@ -528,11 +528,20 @@ async def update_server_config(
         settings.DATA_MODE = payload.data_mode
         os.environ["DATA_MODE"] = payload.data_mode
         env_updates["DATA_MODE"] = payload.data_mode
+        for sess in list(session_manager._sessions.values()):
+            sess.set_data_mode(payload.data_mode)
+            for role in ("manager", "worker", "vision"):
+                assigned = sess.models.provider_for(role)
+                if assigned and check_provider(sess.data_mode, assigned, role):
+                    setattr(sess.models, f"{role}_provider", None)
+                    setattr(sess.models, role, None)
 
     if payload.data_schema_only is not None:
         settings.DATA_SCHEMA_ONLY = payload.data_schema_only
         os.environ["DATA_SCHEMA_ONLY"] = str(payload.data_schema_only).lower()
         env_updates["DATA_SCHEMA_ONLY"] = str(payload.data_schema_only).lower()
+        for sess in list(session_manager._sessions.values()):
+            sess.data_policy.schema_only = payload.data_schema_only
 
     if payload.sandbox_exec_timeout is not None:
         settings.SANDBOX_EXEC_TIMEOUT = payload.sandbox_exec_timeout
@@ -646,15 +655,23 @@ async def set_data_mode(request: DataModeRequest, session: Session = Depends(get
     the user would have to work out why.
     """
     if request.mode is not None:
-        session.set_data_mode(request.mode)
-        for role in ("manager", "worker", "vision"):
-            assigned = session.models.provider_for(role)
-            if assigned and check_provider(session.data_mode, assigned, role):
-                setattr(session.models, f"{role}_provider", None)
-                setattr(session.models, role, None)
+        settings.DATA_MODE = request.mode
+        os.environ["DATA_MODE"] = request.mode
+        _persist_env_file({"DATA_MODE": request.mode})
+        for sess in list(session_manager._sessions.values()):
+            sess.set_data_mode(request.mode)
+            for role in ("manager", "worker", "vision"):
+                assigned = sess.models.provider_for(role)
+                if assigned and check_provider(sess.data_mode, assigned, role):
+                    setattr(sess.models, f"{role}_provider", None)
+                    setattr(sess.models, role, None)
 
     if request.schema_only is not None:
-        session.data_policy.schema_only = request.schema_only
+        settings.DATA_SCHEMA_ONLY = request.schema_only
+        os.environ["DATA_SCHEMA_ONLY"] = str(request.schema_only).lower()
+        _persist_env_file({"DATA_SCHEMA_ONLY": str(request.schema_only).lower()})
+        for sess in list(session_manager._sessions.values()):
+            sess.data_policy.schema_only = request.schema_only
 
     return _data_mode_response(session)
 

@@ -309,10 +309,22 @@ export function ModelsWorkbench() {
         </div>
 
         {activeProvider && !activeProvider.allowed && (
-          <p className="mb-4 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[12.5px] leading-relaxed text-warning">
-            {activeProvider.label} cannot be used while this session is set to {dataMode?.mode}. Change
-            the data mode in the sidebar to assign a model from here.
-          </p>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/25 bg-warning/8 p-3.5 text-[12.5px] leading-relaxed text-warning">
+            <span>
+              {activeProvider.label} cannot be used while this session is set to {dataMode?.mode}.
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                const targetMode = activeProvider.kind === "cloud" ? "cloud-only" : "local-only"
+                await api.setDataMode({ mode: targetMode }).catch(() => null)
+                await load(provider ?? undefined, true)
+              }}
+              className="cursor-pointer rounded-lg bg-warning/20 px-3 py-1 text-[12px] font-semibold text-warning transition-colors hover:bg-warning/30"
+            >
+              Switch to {activeProvider.kind === "cloud" ? "Cloud-Only" : "Local-Only"} Mode
+            </button>
+          </div>
         )}
 
         {activeProvider?.hint && (
