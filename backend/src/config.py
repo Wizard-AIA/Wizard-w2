@@ -430,11 +430,11 @@ class Settings(BaseSettings):
 
     #: Output budget per kind of call. Generous enough that a reasoning model can
     #: finish a thought, small enough that it cannot spend a turn on one.
-    LLM_MAX_TOKENS_PLAN: int = 1024
-    LLM_MAX_TOKENS_DECISION: int = 512
-    LLM_MAX_TOKENS_CODE: int = 1536
-    LLM_MAX_TOKENS_ANSWER: int = 1024
-    LLM_MAX_TOKENS_REVIEW: int = 256
+    LLM_MAX_TOKENS_PLAN: int = 2048
+    LLM_MAX_TOKENS_DECISION: int = 1024
+    LLM_MAX_TOKENS_CODE: int = 4096
+    LLM_MAX_TOKENS_ANSWER: int = 4096
+    LLM_MAX_TOKENS_REVIEW: int = 512
 
     MAX_CORRECTION_RETRIES: int = 3
 
