@@ -100,4 +100,3 @@ func looksLikeCheckout(dir string) bool {
 // BackendDir and FrontendDir are convenience joins off Root.
 func BackendDir(root string) string  { return filepath.Join(root, "backend") }
 func FrontendDir(root string) string { return filepath.Join(root, "frontend") }
-
