@@ -123,7 +123,11 @@ function parseBlocks(source: string): Block[] {
     }
 
     const paragraph: string[] = []
-    while (index < lines.length && lines[index].trim() && !isBlockStart(lines[index])) {
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !isBlockStart(lines[index], index + 1 < lines.length ? lines[index + 1] : undefined)
+    ) {
       paragraph.push(lines[index])
       index += 1
     }
@@ -138,20 +142,24 @@ function parseBlocks(source: string): Block[] {
   return blocks
 }
 
-function isBlockStart(line: string): boolean {
+function isBlockStart(line: string, nextLine?: string): boolean {
+  const trimmed = line.trim()
   return (
-    line.trim().startsWith("```") ||
-    /^#{1,6}\s/.test(line) ||
+    trimmed.startsWith("```") ||
+    /^#{1,6}\s/.test(trimmed) ||
     /^\s*[-*+]\s/.test(line) ||
     /^\s*\d+[.)]\s/.test(line) ||
-    line.trim().startsWith(">")
+    trimmed.startsWith(">") ||
+    /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
+    (line.includes("|") && nextLine !== undefined && /^[\s|:-]+$/.test(nextLine) && nextLine.includes("-"))
   )
 }
 
 function splitRow(line: string): string[] {
   return line
-    .replace(/^\s*\|/, "")
-    .replace(/\|\s*$/, "")
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
     .split("|")
     .map((cell) => cell.trim())
 }
