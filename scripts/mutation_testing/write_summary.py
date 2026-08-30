@@ -66,8 +66,7 @@ def main() -> int:
         lines += [
             "### Files with the most surviving mutants",
             "",
-            "A surviving mutant means the test suite did not notice that line's behavior "
-            "change -- the most direct signal of an undertested branch.",
+            "A surviving mutant means the test suite did not notice that line's behavior change -- the most direct signal of an undertested branch.",
             "",
             "| File | Survived | Total mutants |",
             "|---|---:|---:|",

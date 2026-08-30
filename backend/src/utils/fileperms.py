@@ -22,6 +22,18 @@ from pathlib import Path
 from src.utils.logging import logger
 
 
+if sys.platform == "win32":
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except (ImportError, AttributeError):
+        ctypes = None  # type: ignore[assignment]
+        wintypes = None  # type: ignore[assignment]
+else:
+    ctypes = None  # type: ignore[assignment]
+    wintypes = None  # type: ignore[assignment]
+
+
 def _icacls(*args: str) -> bool:
     try:
         subprocess.run(  # noqa: S603 - fixed executable, arguments are not user input
@@ -59,8 +71,8 @@ def _set_entry_native(path: Path, sid: str) -> bool:
     to show for it. This talks to the same security APIs icacls wraps, so the
     restriction still lands when the utility itself is missing.
     """
-    import ctypes
-    from ctypes import wintypes
+    if ctypes is None or wintypes is None:
+        return False
 
     GRANT_ACCESS = 1
     NO_INHERITANCE = 0
@@ -138,8 +150,8 @@ def _set_entry_native(path: Path, sid: str) -> bool:
 
 def _reset_native(path: Path) -> None:
     """``icacls /reset``, but through advapi32 directly. Best-effort rollback."""
-    import ctypes
-
+    if ctypes is None:
+        return
     UNPROTECTED_DACL_SECURITY_INFORMATION = 0x20000000
     DACL_SECURITY_INFORMATION = 0x4
     SE_FILE_OBJECT = 1
@@ -157,8 +169,9 @@ def _reset_native(path: Path) -> None:
             None,
             None,
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        # Best-effort rollback: failure to reset DACL should not crash process
+        logger.debug("Win32 DACL reset rollback ignored error", path=str(path), error=str(exc))
 
 
 def _restrict_windows(path: Path, description: str) -> None:

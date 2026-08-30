@@ -156,14 +156,15 @@ class RedisCache(CacheBackend):
                 self._client.setex(self._key(key), ttl, value)
             else:
                 self._client.set(self._key(key), value)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis set_bytes failed", key=key, error=str(exc))
 
     def get_bytes(self, key: str) -> bytes | None:
         """Retrieve raw bytes without JSON deserialization."""
         try:
             return self._client.get(self._key(key))
-        except Exception:
+        except Exception as exc:
+            logger.debug("Redis get_bytes failed", key=key, error=str(exc))
             return None
 
     def delete(self, key: str) -> None:

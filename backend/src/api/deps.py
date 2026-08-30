@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import time
 from collections import defaultdict, deque
+from functools import lru_cache
 from threading import Lock
 
 from fastapi import Header, HTTPException, Query, Request, WebSocket
@@ -21,7 +22,9 @@ from src.utils.logging import logger
 SESSION_HEADER = "X-Session-Id"
 
 
-_warned_no_key = False
+@lru_cache(maxsize=1)
+def _log_no_api_key_warning() -> None:
+    logger.warning("API_KEY is not set — all routes are unauthenticated. Set API_KEY in .env for production use.")
 
 
 def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
@@ -31,13 +34,8 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
     beyond localhost can set a key without touching code. Comparison is constant
     time so the key cannot be recovered by timing.
     """
-    global _warned_no_key
     if not settings.API_KEY:
-        if not _warned_no_key:
-            logger.warning(
-                "API_KEY is not set — all routes are unauthenticated. Set API_KEY in .env for production use."
-            )
-            _warned_no_key = True
+        _log_no_api_key_warning()
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")

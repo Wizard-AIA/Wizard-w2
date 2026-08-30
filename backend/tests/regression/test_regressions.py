@@ -399,7 +399,7 @@ def test_no_model_name_is_hardcoded_in_the_defaults() -> None:
     every gateway, so switching provider failed with an opaque error until the
     user also edited their .env. Empty means "use what this provider has".
     """
-    fresh = Settings()
+    fresh = Settings(_env_file=None)
     assert fresh.MODEL_NAME == ""
     assert fresh.WORKER_MODEL_NAME == ""
     assert fresh.VISION_MODEL_NAME == ""

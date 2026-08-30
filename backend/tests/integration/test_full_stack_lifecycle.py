@@ -11,6 +11,7 @@ Validates the end-to-end analytical workflow:
 
 from __future__ import annotations
 
+import inspect
 import io
 
 import pandas as pd
@@ -48,7 +49,7 @@ class ScriptedReActLLM:
             chunks.append(chunk)
             if on_delta:
                 res = on_delta(chunk)
-                if hasattr(res, "__await__"):
+                if inspect.isawaitable(res):
                     await res
         return "".join(chunks)
 

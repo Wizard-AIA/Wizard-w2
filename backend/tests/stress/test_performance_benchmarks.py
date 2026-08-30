@@ -21,22 +21,18 @@ class TestPerformanceBenchmarks:
 
         sink = pa.BufferOutputStream()
 
-        start_time = time.time()
         start_time = time.perf_counter()
         with pa.ipc.new_stream(sink, table.schema) as writer:
             writer.write_table(table)
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
         buf = sink.getvalue()
         size_mb = buf.size / (1024 * 1024)
-        throughput = size_mb / duration if duration > 0 else 0
         throughput = size_mb / duration
 
         # assert > 30 MB/s
         assert throughput > 30, f"Throughput was {throughput:.2f} MB/s, expected > 30 MB/s"
         assert len(buf) > 0
-        assert throughput > 0
 
     @pytest.mark.parametrize("num_rows", [100_000, 500_000, 2_000_000])
     @pytest.mark.parametrize("compression", ["snappy", "gzip"])
@@ -52,14 +48,14 @@ class TestPerformanceBenchmarks:
         file_path = tmp_path / f"test_{num_rows}_{compression}.parquet"
 
         # Write
-        start_write = time.time()
+        start_write = time.perf_counter()
         pq.write_table(table, file_path, compression=compression)
-        write_duration = time.time() - start_write
+        write_duration = time.perf_counter() - start_write
 
         # Read
-        start_read = time.time()
+        start_read = time.perf_counter()
         table_read = pq.read_table(file_path)
-        read_duration = time.time() - start_read
+        read_duration = time.perf_counter() - start_read
 
         df_read = table_read.to_pandas()
 
@@ -83,18 +79,15 @@ class TestPerformanceBenchmarks:
 
         code = scripts[script_complexity]
 
-        start_time = time.time()
         start_time = time.perf_counter()
         for _ in range(iterations):
             verdict = CodeGuard.scan(code, extra_roots=("/workspace",))
             # Just verify it returns something
             assert hasattr(verdict, "ok")
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
         avg_latency_ms = (duration / iterations) * 1000
         assert avg_latency_ms < 10, f"Average latency was {avg_latency_ms:.2f} ms, expected < 10 ms"
-        assert avg_latency_ms < 50, f"Average latency was {avg_latency_ms:.2f} ms, expected < 50 ms"
 
     @pytest.mark.parametrize("num_rows", [100_000, 1_000_000, 5_000_000])
     @pytest.mark.parametrize("num_groups", [10, 1000, 100_000])
@@ -108,10 +101,8 @@ class TestPerformanceBenchmarks:
         conn = duckdb.connect(":memory:")
         conn.register("my_table", df)
 
-        start_time = time.time()
         start_time = time.perf_counter()
         res = conn.execute("SELECT group_id, SUM(value), AVG(value), COUNT(value) FROM my_table GROUP BY group_id").df()
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
         assert len(res) <= num_groups
@@ -159,13 +150,10 @@ class TestPerformanceBenchmarks:
 
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        start_time = time.time()
         start_time = time.perf_counter()
         df_read = pd.read_csv(file_path)
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
-        throughput = file_size_mb / duration if duration > 0 else 0
         throughput = file_size_mb / duration
         assert len(df_read) == num_rows
         assert throughput > 0
@@ -176,11 +164,9 @@ class TestPerformanceBenchmarks:
         data = {f"col_{i}": np.random.randn(num_rows) for i in range(num_cols)}
         df = pd.DataFrame(data)
 
-        start_time = time.time()
         start_time = time.perf_counter()
         for i in range(num_cols):
             _ = df[f"col_{i}"]
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
         avg_access_ms = (duration / num_cols) * 1000
@@ -206,10 +192,8 @@ class TestPerformanceBenchmarks:
         else:
             arr = np.array([f"string_{i}" for i in range(sizes)], dtype=object)
 
-        start_time = time.time()
         start_time = time.perf_counter()
         arrow_arr = pa.array(arr)
-        duration = time.time() - start_time
         duration = max(time.perf_counter() - start_time, 1e-6)
 
         assert len(arrow_arr) == sizes
