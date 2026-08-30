@@ -387,7 +387,7 @@ class CodeGuard:
     # ------------------------------------------------------------------ #
     @staticmethod
     def strip_markdown_fences(code: str) -> str:
-        """Removes ```python fences an LLM sometimes leaves in the payload."""
+        """Removes ```python fences and stray language tags an LLM leaves in the payload."""
         cleaned = code.strip()
         if cleaned.startswith("```"):
             lines = cleaned.splitlines()
@@ -395,8 +395,15 @@ class CodeGuard:
                 lines = lines[1:]
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
-            cleaned = "\n".join(lines)
-        return cleaned.strip()
+            cleaned = "\n".join(lines).strip()
+
+        # Remove standalone leading language header lines (e.g. "python", "py", "```python")
+        lines = cleaned.splitlines()
+        while lines and lines[0].strip().lower() in ("python", "py", "```python", "```py", "```"):
+            lines = lines[1:]
+        cleaned = "\n".join(lines).strip()
+
+        return cleaned
 
     #: Aliases small models routinely use without importing.
     COMMON_IMPORTS = {

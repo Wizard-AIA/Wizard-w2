@@ -2009,11 +2009,24 @@ class AnalysisOrchestrator:
         response = strip_reasoning(response)
         fenced = re.search(r"```(?:python|py)?\s*\n(.*?)```", response, re.DOTALL)
         if fenced:
-            return fenced.group(1).strip()
-        stripped = response.strip()
-        if stripped.startswith("```"):
-            stripped = stripped.strip("`").strip()
-        return stripped
+            extracted = fenced.group(1).strip()
+        else:
+            stripped = response.strip()
+            if stripped.startswith("```"):
+                lines = stripped.splitlines()
+                if lines:
+                    lines = lines[1:]
+                if lines and lines[-1].strip().startswith("```"):
+                    lines = lines[:-1]
+                extracted = "\n".join(lines).strip()
+            else:
+                extracted = stripped
+
+        # Remove standalone leading language header lines (e.g. "python", "py", "```python")
+        lines = extracted.splitlines()
+        while lines and lines[0].strip().lower() in ("python", "py", "```python", "```py", "```"):
+            lines = lines[1:]
+        return "\n".join(lines).strip()
 
     async def _execute(self, state: RunState, session: Session, emitter: Emitter | None) -> ExecutionResult:
         started = time.perf_counter()

@@ -177,6 +177,14 @@ def test_repair_strips_markdown_fences() -> None:
     assert parses
     assert code == "print(1)"
 
+    parses, code = CodeGuard.repair("python\nprint(1)")
+    assert parses
+    assert code == "print(1)"
+
+    parses, code = CodeGuard.repair("```python\npython\nprint(1)\n```")
+    assert parses
+    assert code == "print(1)"
+
 
 def test_repair_adds_missing_alias_imports() -> None:
     """A missing import is a runtime NameError, not a SyntaxError.
