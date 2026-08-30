@@ -89,6 +89,50 @@ class LLMUnavailableError(RuntimeError):
     """Raised when no client could be constructed for a request."""
 
 
+def clean_llm_error_message(err: Exception | str, provider: str = "", model: str = "") -> str:
+    """Formats raw LLM exceptions, HTTP 429 quota errors, and API gateway responses into clean messages."""
+    raw = str(err).strip()
+    # 429 / Quota / Rate Limit
+    if "429" in raw or "quota" in raw.lower() or "resource_exhausted" in raw.lower() or "rate limit" in raw.lower():
+        retry_match = re.search(r"[Pp]lease retry in ([\d\.]+[s|m]?)", raw)
+        retry_delay = f" (retry in {retry_match.group(1)})" if retry_match else ""
+
+        model_match = re.search(r"model:? ([\w\.-]+)", raw)
+        target_model = model_match.group(1) if model_match else (model or "selected model")
+
+        if "gemini" in (provider or target_model).lower() and ("limit: 0" in raw or "free_tier" in raw):
+            return (
+                f"Quota limit exceeded for '{target_model}' on Google Gemini{retry_delay}. "
+                "This model has 0 free-tier quota on your project. "
+                "Please switch to 'gemini-2.5-flash' in Settings / Models."
+            )
+        return (
+            f"Rate limit or quota exceeded for '{target_model}' on {provider or 'provider'}{retry_delay}. "
+            "Please wait a moment before retrying, or switch models in Settings / Models."
+        )
+
+    # 401 / Authentication
+    if "401" in raw or "auth" in raw.lower() or "api key" in raw.lower() or "unauthorized" in raw.lower():
+        return (
+            f"Authentication failed for {provider or 'provider'}: Invalid or missing API key. "
+            "Please verify your API key in Settings / Models."
+        )
+
+    # 404 / Model Not Found
+    if "404" in raw or "not_found" in raw.lower() or "does not exist" in raw.lower():
+        return (
+            f"Model '{model or 'requested'}' was not found on {provider or 'provider'}. "
+            "Please select an installed model in Settings / Models."
+        )
+
+    # Strip raw JSON dumps and dict reprs
+    cleaned = re.sub(r"Error code: \d+ - \[.*\]", "", raw, flags=re.DOTALL).strip()
+    if cleaned:
+        return cleaned
+    cleaned = re.sub(r"\{.*\}", "", raw, flags=re.DOTALL).strip()
+    return cleaned if cleaned else raw[:200]
+
+
 class DataModeViolation(LLMUnavailableError):
     """Raised when the session's data mode forbids the provider a role resolved to.
 
@@ -571,8 +615,9 @@ class LLMProvider:
             self._record(spec, role, session_id, response, prompt, text)
             return text
         except Exception as exc:
-            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
-            raise LLMUnavailableError(str(exc)) from exc
+            cleaned = clean_llm_error_message(exc, provider=spec.provider, model=spec.model)
+            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=cleaned)
+            raise LLMUnavailableError(cleaned) from exc
 
     async def acomplete(
         self,
@@ -597,8 +642,9 @@ class LLMProvider:
             self._record(spec, role, session_id, response, prompt, text)
             return text
         except Exception as exc:
-            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=str(exc))
-            raise LLMUnavailableError(str(exc)) from exc
+            cleaned = clean_llm_error_message(exc, provider=spec.provider, model=spec.model)
+            logger.error("LLM completion failed", provider=spec.provider, model=spec.model, error=cleaned)
+            raise LLMUnavailableError(cleaned) from exc
 
     async def astream(
         self,
@@ -650,8 +696,9 @@ class LLMProvider:
                     produced.append(text)
                     yield text
         except Exception as exc:
-            logger.error("LLM streaming failed", provider=spec.provider, model=spec.model, error=str(exc))
-            raise LLMUnavailableError(str(exc)) from exc
+            cleaned = clean_llm_error_message(exc, provider=spec.provider, model=spec.model)
+            logger.error("LLM streaming failed", provider=spec.provider, model=spec.model, error=cleaned)
+            raise LLMUnavailableError(cleaned) from exc
         self._record(spec, role, session_id, counted, prompt, "".join(produced))
 
     async def stream_to(

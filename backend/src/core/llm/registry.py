@@ -152,7 +152,7 @@ def classify(name: str) -> list[str]:
     if any(hint in lowered for hint in CODE_HINTS) or any(h in lowered for h in ("gpt-4", "claude", "gemini", "gemma")):
         caps.append("code")
     if any(hint in lowered for hint in REASONING_HINTS) or any(
-        h in lowered for h in ("pro", "opus", "sonnet", "o1", "o3")
+        h in lowered for h in ("pro", "opus", "sonnet", "o1", "o3", "flash", "thinking")
     ):
         caps.append("reasoning")
     if not caps:
@@ -497,29 +497,45 @@ class ModelRegistry:
         models = self.list_models(provider=name)
         names = [m.name for m in models]
 
+        preferred_defaults: dict[str, dict[str, list[str]]] = {
+            "gemini": {
+                "manager": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
+                "worker": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
+                "vision": ["gemini-2.5-flash", "gemini-3.7-flash", "gemini-flash-latest"],
+            },
+            "openai": {
+                "manager": ["gpt-4o-mini", "gpt-4o"],
+                "worker": ["gpt-4o-mini", "gpt-4o"],
+                "vision": ["gpt-4o-mini", "gpt-4o"],
+            },
+            "anthropic": {
+                "manager": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+                "worker": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+                "vision": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+            },
+        }
+
         def first_with(capability: str) -> str | None:
             for model in models:
                 if capability in model.capabilities:
                     return model.name
             return None
 
-        def pick(configured: str, capability: str) -> str | None:
-            # A configured default is only meaningful on the provider that holds
-            # it: an Ollama tag will 404 on a gateway, so on any other provider
-            # fall straight through to what is actually there. It is also empty
-            # by default now -- pinning a model is an override, not a
-            # requirement.
+        def pick(configured: str, role_key: str, capability: str) -> str | None:
             if configured and configured in names:
                 return configured
+            for pref in preferred_defaults.get(name, {}).get(role_key, []):
+                if pref in names:
+                    return pref
             return first_with(capability) or (names[0] if names else None)
 
         return {
-            "manager": pick(settings.MODEL_NAME, "reasoning"),
-            "worker": pick(settings.WORKER_MODEL_NAME, "code"),
+            "manager": pick(settings.MODEL_NAME, "manager", "reasoning"),
+            "worker": pick(settings.WORKER_MODEL_NAME, "worker", "code"),
             "vision": (
                 settings.VISION_MODEL_NAME
                 if settings.VISION_MODEL_NAME and settings.VISION_MODEL_NAME in names
-                else first_with("vision")
+                else pick("", "vision", "vision")
             ),
         }
 

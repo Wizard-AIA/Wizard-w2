@@ -723,11 +723,18 @@ class AnalysisOrchestrator:
             state.answer = str(exc)
             return self._result(state, "failed")
         except LLMUnavailableError as exc:
-            message = (
-                f"Could not reach the language model: {exc}. "
-                "Check that the provider is running and that a model is installed."
-            )
-            logger.error("Run aborted, LLM unavailable", error=str(exc))
+            err_msg = str(exc)
+            if any(
+                k in err_msg.lower()
+                for k in ("quota", "rate limit", "authentication", "api key", "not found", "switch to")
+            ):
+                message = err_msg
+            else:
+                message = (
+                    f"Could not reach the language model: {err_msg}. "
+                    "Check that the provider is running and that a model is installed."
+                )
+            logger.error("Run aborted, LLM unavailable", error=err_msg)
             await emit(emitter, EventType.ERROR, content=message)
             state.answer = message
             return self._result(state, "failed")
