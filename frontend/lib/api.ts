@@ -100,6 +100,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (returned) storeSessionId(returned)
 
   if (!response.ok) {
+    if (response.status === 404 && sessionId) {
+      clearStoredSessionId()
+    }
     throw new ApiError(await extractError(response), response.status)
   }
   if (response.status === 204) return undefined as T

@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { storeSessionId, websocketUrl } from "./api"
+import { clearStoredSessionId, storeSessionId, websocketUrl } from "./api"
 import { recordUsageFrame } from "./usage-store"
 import type {
   ActionKind,
@@ -714,6 +714,9 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
         case "error": {
           const text = String(event.content ?? "Something went wrong.")
+          if (text.includes("Session not found") || text.includes("expired")) {
+            clearStoredSessionId()
+          }
           if (activeIdRef.current) {
             patchActive((message) => ({
               ...message,
@@ -838,12 +841,16 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       if (isCurrent()) setConnection("error")
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event: WebSocketEventMap["close"]) => {
       if (!isCurrent()) return
       if (heartbeatRef.current) clearInterval(heartbeatRef.current)
       heartbeatRef.current = null
       socketRef.current = null
       setConnection("closed")
+
+      if (event.code === 1008) {
+        clearStoredSessionId()
+      }
 
       // A close mid-run would otherwise leave the UI spinning forever.
       if (activeIdRef.current) {
