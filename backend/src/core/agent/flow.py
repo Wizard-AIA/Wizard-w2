@@ -16,11 +16,12 @@ from src.core.agent.events import EventCollector
 from src.core.agent.orchestrator import RunResult, orchestrator
 from src.core.data_mode import should_redact
 from src.core.execution import ExecutionResult
+from src.core.infra.telemetry import trace_agent
 from src.core.llm import LLMRole, llm_provider
 from src.core.prompts import create_cleaning_prompt
 from src.core.tools import runtime as runtime_backend
 from src.core.tools.catalog import CatalogEngine
-from src.utils.logging import logger, trace_agent
+from src.utils.logging import logger
 
 
 if TYPE_CHECKING:

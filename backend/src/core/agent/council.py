@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Any
 from src.config import settings
 from src.core.analysis.validation.semantic import check_chart_legibility
 from src.core.analysis.validation.statistical import check_significance_claims
+from src.core.infra.telemetry import trace_agent
 from src.core.llm import LLMRole, llm_provider, strip_reasoning
-from src.utils.logging import logger, trace_agent
+from src.utils.logging import logger
 
 
 if TYPE_CHECKING:  # `src.core.session` pulls in the executor; keep that out of import order
