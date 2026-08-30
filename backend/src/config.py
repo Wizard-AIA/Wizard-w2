@@ -678,7 +678,7 @@ class Settings(BaseSettings):
     # field default rather than fail int/float parsing at import time -- the
     # same "blank counts as unset" rule the host-sizing validator already
     # applies, just enforced before validation instead of inside one field.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore", env_ignore_empty=True)
 
     @field_validator("CORS_ALLOW_ORIGINS")
     @classmethod

@@ -175,6 +175,13 @@ class _RemoteEncoder:
             if keep_alive:
                 payload["keep_alive"] = keep_alive
             return f"{root}/api/embed", payload
+        if self.provider == "gemini":
+            model_name = self.model or "gemini-embedding-001"
+            if not model_name.startswith("models/"):
+                model_name = f"models/{model_name}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:batchEmbedContents"
+            requests = [{"model": model_name, "content": {"parts": [{"text": t}]}} for t in texts]
+            return url, {"requests": requests}
         base = settings.provider_openai_base_url(self.provider).rstrip("/")
         return f"{base}/embeddings", {"model": self.model, "input": texts}
 
@@ -200,10 +207,15 @@ class _RemoteEncoder:
 
     @staticmethod
     def _vectors_from(payload: dict[str, Any]) -> list[list[float]]:
-        # Ollama: {"embeddings": [[...]]}. OpenAI-compatible: {"data": [{"embedding": [...]}]},
+        # Ollama: {"embeddings": [[...]]}.
+        # Gemini: {"embeddings": [{"values": [...]}]}.
+        # OpenAI-compatible: {"data": [{"embedding": [...]}]},
         # which is *not* guaranteed to come back in request order, so it is sorted by index.
         if isinstance(payload.get("embeddings"), list):
-            return payload["embeddings"]
+            embeddings = payload["embeddings"]
+            if embeddings and isinstance(embeddings[0], dict) and "values" in embeddings[0]:
+                return [row.get("values", []) for row in embeddings if isinstance(row, dict)]
+            return embeddings
         data = payload.get("data")
         if isinstance(data, list):
             ordered = sorted(data, key=lambda row: row.get("index", 0) if isinstance(row, dict) else 0)
@@ -228,7 +240,10 @@ class _RemoteEncoder:
         headers = {}
         key = settings.provider_api_key(self.provider)
         if key:
-            headers["Authorization"] = f"Bearer {key}"
+            if self.provider == "gemini":
+                headers["x-goog-api-key"] = key
+            else:
+                headers["Authorization"] = f"Bearer {key}"
         try:
             request_timeout = settings.EMBEDDING_TIMEOUT if timeout is None else timeout
             response = self._http().post(url, json=payload, headers=headers, timeout=request_timeout)
@@ -440,7 +455,7 @@ class EmbeddingService:
         defaults = {
             "openai": "text-embedding-3-small",
             "ollama": "nomic-embed-text",
-            "gemini": "text-embedding-004",
+            "gemini": "gemini-embedding-001",
         }
         return defaults.get(provider, "")
 
@@ -525,6 +540,7 @@ class EmbeddingService:
             # A working encoder that just failed is a transient problem, not a
             # reason to keep paying for it on every subsequent call.
             self._remote = None
+            self._remote_checked = True
             self._note_remote_failure()
 
         model = self._get_model()

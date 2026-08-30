@@ -94,6 +94,8 @@ EXCLUDED_MODEL_PATTERNS = (
     "text-curie",
     "babbage",
     "ada",
+    # Deprecated cloud endpoints
+    "gemini-2.5-pro",
 )
 
 
