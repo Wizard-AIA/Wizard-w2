@@ -1,0 +1,21 @@
+name: Canary Deployment
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run canary deployment
+        run: python scripts/canary_deploy.py
