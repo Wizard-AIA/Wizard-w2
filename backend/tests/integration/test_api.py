@@ -610,3 +610,17 @@ def test_patch_server_config(client: TestClient) -> None:
             os.environ["MAX_TOKENS"] = orig_env_tokens
         else:
             os.environ.pop("MAX_TOKENS", None)
+
+
+def test_cors_preflight_for_patch_method(client: TestClient) -> None:
+    """OPTIONS preflight for PATCH must return 200 OK and allow PATCH."""
+    res = client.options(
+        "/api/config",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert res.status_code == 200
+    assert "PATCH" in res.headers.get("access-control-allow-methods", "")

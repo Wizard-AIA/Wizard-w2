@@ -228,11 +228,7 @@ app.add_middleware(
     # Credentials cannot be combined with a wildcard origin; the setting object
     # resolves the two together so the combination is never invalid.
     allow_credentials=settings.cors_allow_credentials,
-    # PUT is here because `PUT /api/data-mode/dataset/{name}` is what the
-    # per-source data policy control calls, cross-origin, from the frontend. It
-    # was missing, so that control's preflight failed in a browser while every
-    # test passed -- TestClient makes no preflight request.
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
     expose_headers=["X-Session-Id", "X-Arrow-Total-Rows", "X-Arrow-Offset"],
 )
