@@ -65,22 +65,24 @@ function parseBlocks(source: string): Block[] {
       continue
     }
 
-    if (line.trim().startsWith("$$")) {
+    if (line.trim().startsWith("$$") || line.trim().startsWith("\\[")) {
+      const isBracket = line.trim().startsWith("\\[")
+      const closeMarker = isBracket ? "\\]" : "$$"
       const body: string[] = []
       const firstLine = line.trim().slice(2).trim()
-      if (firstLine.endsWith("$$") && firstLine.length > 2) {
-        blocks.push({ type: "math", content: firstLine.slice(0, -2).trim() })
+      if (firstLine.endsWith(closeMarker) && firstLine.length >= 2) {
+        blocks.push({ type: "math", content: firstLine.slice(0, -closeMarker.length).trim() })
         index += 1
         continue
       }
       if (firstLine) body.push(firstLine)
       index += 1
-      while (index < lines.length && !lines[index].trim().endsWith("$$")) {
+      while (index < lines.length && !lines[index].trim().endsWith(closeMarker)) {
         body.push(lines[index])
         index += 1
       }
       if (index < lines.length) {
-        const lastLine = lines[index].trim().replace(/\$\$$/, "").trim()
+        const lastLine = lines[index].trim().slice(0, -closeMarker.length).trim()
         if (lastLine) body.push(lastLine)
         index += 1
       }
@@ -171,6 +173,8 @@ function isBlockStart(line: string, nextLine?: string): boolean {
   const trimmed = line.trim()
   return (
     trimmed.startsWith("```") ||
+    trimmed.startsWith("$$") ||
+    trimmed.startsWith("\\[") ||
     /^#{1,6}\s/.test(trimmed) ||
     /^\s*[-*+]\s/.test(line) ||
     /^\s*\d+[.)]\s/.test(line) ||
@@ -269,9 +273,9 @@ function Block({ block }: { block: Block }) {
 
     default:
       return (
-        <p className="whitespace-pre-wrap leading-7">
+        <div className="whitespace-pre-wrap leading-7">
           <Inline text={block.content} />
-        </p>
+        </div>
       )
   }
 }
@@ -308,16 +312,22 @@ function CodeBlock({ language, content }: { language: string; content: string })
 
 /** Renders inline emphasis, math formulas, code spans and links. */
 function Inline({ text }: { text: string }): ReactNode {
-  const pattern = /(\$\$[^\$]+\$\$|\$[^\$\n]+\$|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g
+  const pattern = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g
   const parts = text.split(pattern).filter((part) => part !== undefined && part !== "")
 
   return (
     <>
       {parts.map((part, index) => {
-        if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
+        if (part.startsWith("$$") && part.endsWith("$$") && part.length >= 4) {
           return <MathSpan key={index} math={part.slice(2, -2)} display />
         }
-        if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
+        if (part.startsWith("\\[") && part.endsWith("\\]") && part.length >= 4) {
+          return <MathSpan key={index} math={part.slice(2, -2)} display />
+        }
+        if (part.startsWith("\\(") && part.endsWith("\\)") && part.length >= 4) {
+          return <MathSpan key={index} math={part.slice(2, -2)} />
+        }
+        if (part.startsWith("$") && part.endsWith("$") && part.length >= 2) {
           return <MathSpan key={index} math={part.slice(1, -1)} />
         }
         if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) {
@@ -370,7 +380,9 @@ function Inline({ text }: { text: string }): ReactNode {
 function MathSpan({ math, display = false }: { math: string; display?: boolean }) {
   const html = useMemo(() => {
     try {
-      return katex.renderToString(math.trim(), {
+      // Normalize escaped backslashes before common LaTeX macros (e.g. \\frac -> \frac)
+      const normalized = math.trim().replace(/(?<!\\)\\\\(?=[a-zA-Z])/g, "\\")
+      return katex.renderToString(normalized, {
         throwOnError: false,
         displayMode: display,
       })
@@ -381,7 +393,7 @@ function MathSpan({ math, display = false }: { math: string; display?: boolean }
 
   return (
     <span
-      className={cn(display ? "my-1 block w-full text-center" : "inline-block align-baseline")}
+      className={cn(display ? "my-2 block w-full overflow-x-auto text-center py-1" : "inline-block align-baseline")}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
