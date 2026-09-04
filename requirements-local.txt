@@ -18,10 +18,10 @@
 duckdb==1.5.5
 
 # Multithreaded dataframe execution for large group-bys and joins.
-polars==1.43.2
+polars==1.44.1
 
 # Statistics, inference and machine learning.
-statsmodels==0.14.6
+statsmodels==0.15.0
 scikit-learn==1.9.0
 # The CPU build. Plain `xgboost` ships a CUDA-enabled libxgboost.so: 154 MB
 # compressed against 4.5 MB here, for a GPU a local install will not be using.

@@ -15,7 +15,7 @@ langchain-openai>=1.6.0
 # Anthropic's Messages API, which is not OpenAI-shaped and needs its own client.
 # Only required when a role is assigned to the `anthropic` provider; without it
 # that provider reports what to install rather than failing obscurely.
-langchain-anthropic>=1.6.1
+langchain-anthropic>=1.7.0
 
 # ---------------------------------------------------------------------------
 # Data source connectors
@@ -39,7 +39,7 @@ sqlalchemy>=2.0.52
 pymongo>=4.17.0
 
 # S3, MinIO, Cloudflare R2 and other S3-compatible object storage.
-boto3>=1.43.79
+boto3>=1.43.85
 
 # ---------------------------------------------------------------------------
 # Local embeddings
