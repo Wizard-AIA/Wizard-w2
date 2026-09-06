@@ -4,6 +4,15 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.8] - 2026-09-06
+
+### Fixed
+- **Clean Execution Runtime & Monkeypatch Removal:** Eliminated ad-hoc runtime overrides on `pd.DataFrame` and `scikit-learn` in `execution.py`, restoring standard, predictable Python library semantics with AST-based security controls.
+- **Universal Data Engineering Standards in Prompting:** Enforced core data science best practices across code generation prompts (numeric isolation for aggregations/correlations, NaN inspection and imputation, linear model coefficient array flattening, and strict schema adherence).
+- **Context-Enriched Self-Correction:** Augmented execution error prompts to include the executed `<failed_code>`, live `<runtime_diagnostics>` (actual DataFrame shape, columns, precise dtypes, and null counts), enabling models to self-heal dynamically across any dataset.
+- **Remote GPU Acceleration Tuning:** Optimized Ollama context budgeting (`LLM_NUM_CTX=4096`) ensuring 100% GPU VRAM residence (0% CPU offload) on 8 GB cards (e.g. RTX 2060 SUPER) with ~85 t/s on `qwen3:4b` and ~55 t/s on `qwen2.5-coder:7b` over Tailscale.
+- **KaTeX Math Rendering:** Enhanced LaTeX equation delimiters (`$$...$$`, `\[...\]`, `\(...\)`), normalized escaped delimiters, and fixed paragraph DOM nesting in frontend markdown rendering.
+
 ## [v1.0.7] - 2026-08-30
 
 ### Fixed

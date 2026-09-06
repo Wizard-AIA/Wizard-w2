@@ -1976,6 +1976,7 @@ class AnalysisOrchestrator:
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "worker"),
             understanding=self._ensure_understanding(state, session),
+            failed_code=state.failed_code,
         )
 
         raw = await llm_provider.acomplete(

@@ -397,6 +397,7 @@ def create_prompt(
     max_columns: int | None = None,
     redact: bool = False,
     understanding: dict[str, Any] | None = None,
+    failed_code: str | None = None,
 ) -> str:
     """Worker prompt: turn an approved plan into executable Python."""
     # The tier's column budget, not the global one. `TierBudget.max_columns`
@@ -418,11 +419,35 @@ def create_prompt(
 
     error_block = ""
     if previous_error:
+        failed_code_section = f"\n<failed_code>\n```python\n{failed_code}\n```\n</failed_code>\n" if failed_code else ""
+        try:
+            col_types = ", ".join(f"{c} ({df[c].dtype})" for c in df.columns[:40])
+            nan_cols = [f"{c} ({df[c].isna().sum()} nulls)" for c in df.columns if df[c].isna().any()]
+            nan_info = f"- Columns with Missing Values: {', '.join(nan_cols)}" if nan_cols else "- Missing Values: None detected"
+            diagnostics = (
+                f"<runtime_diagnostics>\n"
+                f"- DataFrame Shape: {len(df):,} rows x {len(df.columns)} columns\n"
+                f"- Available Columns & Dtypes: {col_types}\n"
+                f"{nan_info}\n"
+                f"</runtime_diagnostics>\n"
+            )
+        except Exception:
+            diagnostics = ""
+
         error_block = (
+            f"{failed_code_section}"
             f"\n<previous_error>\n{previous_error}\n</previous_error>\n"
-            "<error_handling>\nThe previous attempt failed. Read the traceback line by line, identify the exact "
-            "variable or column that caused it, and write corrected code that still fulfils the plan. "
-            "Do not apologise and do not explain -- just fix it.\n</error_handling>\n"
+            f"{diagnostics}"
+            "<error_handling>\n"
+            "The previous code attempt failed execution. Follow these instructions carefully:\n"
+            "1. Inspect the traceback and pinpoint the exact line in <failed_code> that failed.\n"
+            "2. Consult <runtime_diagnostics> to verify exact column names, data types, and null values.\n"
+            "3. If a column name was wrong, replace it with the real column name from <runtime_diagnostics>.\n"
+            "4. If a type or float conversion failed, explicitly filter numeric columns (e.g. df.select_dtypes(include='number')) or cast appropriately.\n"
+            "5. If an estimator failed on NaNs, drop or impute nulls before fitting.\n"
+            "6. If an attribute does not exist on a library object, use the official API (e.g. statsmodels for p-values, sklearn for predictions).\n"
+            "Emit the complete, corrected Python script in a ```python block. Do not apologize and do not output conversational text.\n"
+            "</error_handling>\n"
         )
 
     revision_block = ""
@@ -466,7 +491,10 @@ Translate the analytical request and plan into robust, vectorized, and flawless 
 Engineering Standards:
 - Write vectorized pandas or duckdb queries (`duckdb.sql('SELECT ... FROM df').df()`) rather than slow Python `for` loops over rows.
 - For large datasets or heavy group-bys, prefer Polars lazy execution (`pl.from_pandas(df).lazy()`) when listed above.
-- Defensive coding: Verify column existence in `df.columns` before indexing. Handle potential `ZeroDivisionError` and missing values cleanly.
+- Type Safety & Aggregations: Always isolate numeric columns before computing correlations, covariance, or mathematical reductions (e.g. `num_df = df.select_dtypes(include='number')` or specify `numeric_only=True` in pandas methods like `.corr()`, `.mean()`, `.median()`, `.std()`).
+- Estimator & Modeling Hygiene: Statistical and ML estimators require clean, numeric, complete matrices. Always inspect and resolve missing values (`.dropna()` or explicit imputation) and encode categorical features before fitting.
+- API Contracts: Use `scikit-learn` for predictive modeling, cross-validation, and metrics (accuracy, ROC-AUC, F1). Note that linear model coefficients are 2D arrays (shape `(1, n_features)`); flatten or index them when constructing Series or DataFrames (e.g. `pd.Series(model.coef_[0], index=features)`). Use `statsmodels.api` when formal hypothesis testing, p-values, t-statistics, or confidence intervals are required (`sm.OLS`, `sm.Logit`), as statsmodels natively provides `.summary()` and `.pvalues`. Never access non-existent attributes on estimator objects.
+- Defensive Schema Grounding: Reference only columns explicitly present in `<schema>`. Verify column existence in `df.columns` before indexing. Never guess, pluralize, or assume column names.
 - Avoid `SettingWithCopyWarning` by using `.copy()` or explicit `.loc[row_indexer, col_indexer]` indexing.
 </available_libraries>
 

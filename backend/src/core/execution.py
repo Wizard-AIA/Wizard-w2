@@ -25,7 +25,7 @@ from typing import Any
 import pandas as pd
 
 from src.config import settings
-from src.core.security.code_guard import CodeGuard, GuardVerdict
+from src.core.security.code_guard import BANNED_MODULES, CodeGuard, GuardVerdict
 from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
@@ -33,7 +33,7 @@ from src.utils.logging import logger
 # Builtins removed from the in-process fallback namespace. A mitigation, not a
 # boundary. Anything the guard already rejects will never get here.
 BLOCKED_BUILTINS = frozenset(
-    {"eval", "exec", "compile", "open", "input", "exit", "quit", "help", "__import__", "breakpoint"}
+    {"eval", "exec", "compile", "open", "input", "exit", "quit", "help", "breakpoint"}
 )
 
 
@@ -221,6 +221,14 @@ class CodeExecutor:
         from src.core.tools.stats import StatisticalToolkit
 
         safe_builtins = {name: value for name, value in vars(builtins).items() if name not in BLOCKED_BUILTINS}
+
+        def _safe_import(name, *args, **kwargs):
+            root = name.split(".")[0]
+            if root in BANNED_MODULES:
+                raise ImportError(f"Importing {root!r} is restricted in this environment")
+            return builtins.__import__(name, *args, **kwargs)
+
+        safe_builtins["__import__"] = _safe_import
         namespace: dict[str, Any] = {
             "pd": pd,
             "np": np,
@@ -280,7 +288,7 @@ class CodeExecutor:
                 import traceback
 
                 sys.stdout = original_stdout
-                detail = traceback.format_exc(limit=6)
+                detail = traceback.format_exc(limit=8)
                 logger.warning("Local execution failed", error=str(exc))
                 return ExecutionResult(
                     output=f"Error executing code:\n{detail}",
