@@ -42,12 +42,12 @@ if (-not $tag) {
             $tag = $releaseJson.tag_name
         }
     } catch {
-        Write-WizardLog "Could not contact GitHub API, falling back to release baseline v1.0.7" "Yellow"
-        $tag = "v1.0.7"
+        Write-WizardLog "Could not contact GitHub API, falling back to release baseline v1.0.8" "Yellow"
+        $tag = "v1.0.8"
     }
 }
 
-if (-not $tag) { $tag = "v1.0.7" }
+if (-not $tag) { $tag = "v1.0.8" }
 if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
 
 Write-WizardLog "Target release: $tag" "Green"
