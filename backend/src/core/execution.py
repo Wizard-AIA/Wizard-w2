@@ -32,9 +32,7 @@ from src.utils.logging import logger
 
 # Builtins removed from the in-process fallback namespace. A mitigation, not a
 # boundary. Anything the guard already rejects will never get here.
-BLOCKED_BUILTINS = frozenset(
-    {"eval", "exec", "compile", "open", "input", "exit", "quit", "help", "breakpoint"}
-)
+BLOCKED_BUILTINS = frozenset({"eval", "exec", "compile", "open", "input", "exit", "quit", "help", "breakpoint"})
 
 
 @dataclass

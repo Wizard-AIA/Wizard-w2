@@ -1744,7 +1744,7 @@ export interface components {
             version: string;
             /**
              * App Version
-             * @default 1.0.7
+             * @default 1.0.8
              */
             app_version: string;
             /** Sandbox Available */
@@ -1772,7 +1772,7 @@ export interface components {
             version: string;
             /**
              * App Version
-             * @default 1.0.7
+             * @default 1.0.8
              */
             app_version: string;
             /** Sandbox Available */
@@ -2158,7 +2158,7 @@ export interface components {
             version: string;
             /**
              * App Version
-             * @default 1.0.7
+             * @default 1.0.8
              */
             app_version: string;
             /**

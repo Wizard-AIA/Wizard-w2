@@ -87,7 +87,8 @@
     "overrides": {
       "postcss": "$postcss",
       "sharp": "^0.35.3",
-      "js-yaml": "^4.2.1"
+      "js-yaml": "^4.2.1",
+      "browserslist": "^4.28.7"
     }
   }
 }

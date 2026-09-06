@@ -423,7 +423,11 @@ def create_prompt(
         try:
             col_types = ", ".join(f"{c} ({df[c].dtype})" for c in df.columns[:40])
             nan_cols = [f"{c} ({df[c].isna().sum()} nulls)" for c in df.columns if df[c].isna().any()]
-            nan_info = f"- Columns with Missing Values: {', '.join(nan_cols)}" if nan_cols else "- Missing Values: None detected"
+            nan_info = (
+                f"- Columns with Missing Values: {', '.join(nan_cols)}"
+                if nan_cols
+                else "- Missing Values: None detected"
+            )
             diagnostics = (
                 f"<runtime_diagnostics>\n"
                 f"- DataFrame Shape: {len(df):,} rows x {len(df.columns)} columns\n"
