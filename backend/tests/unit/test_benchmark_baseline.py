@@ -11,7 +11,7 @@ SCRIPTS_DIR = ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from benchmark_harness.baseline import compare, fingerprint_manifest, load_baseline
+from benchmark_harness.baseline import compare, fingerprint_manifest, load_baseline  # noqa: E402
 
 
 def test_reviewed_baseline_matches_the_current_offline_fixture_corpus() -> None:

@@ -16,9 +16,9 @@ from src.api.deps import client_ip, client_key, ip_rate_limiter, rate_limiter
 from src.api.routes import chat, connections, datasets, dlq, export, meta, sandbox, sessions, skills, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
-from src.core.infra.queue import get_queue
 from src.core.infra.backup_scheduler import BackupScheduler
 from src.core.infra.metrics import metrics
+from src.core.infra.queue import get_queue
 from src.core.llm import llm_provider
 from src.core.session import session_manager
 from src.core.tools import runtime as runtime_backend
