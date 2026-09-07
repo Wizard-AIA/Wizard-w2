@@ -83,9 +83,9 @@ a Wizard checkout (or set `WIZARD_ROOT` yourself).
 | `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `API_PROVIDER`/`DATA_MODE`, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
-| `wizard update` | `git pull --ff-only`, reinstalls dependencies (the same steps as `init`), re-checks the compat marker. Restarts the daemon afterward if it was running before. This is currently a source-checkout update, not a binary self-update. |
+| `wizard update` | For a source checkout: `git pull --ff-only`, dependency rebuild, and API compatibility check. For an official release install: checks the latest GitHub Release, reports a newer version when present, verifies its `SHA256SUMS` entry, stages the complete matching package, preserves `backend/.env`, rebuilds it, then advances the stable launcher/current pointer while retaining the prior package. `--check` only reports version availability; `--self` forces the release-install path. |
 | `wizard skills add/list/update/discard/remove/token` | Fronts `backend/main.py skills` — the same install machinery (fetch, pin to a commit, show every skill's full contents, ask before writing) the REST routes and web UI's install-from-GitHub flow use, now also reachable from the compiled binary. Runs in the wizard-managed venv from `wizard init`; `add`/`update` prompt on a real terminal unless `--yes` is given. |
-| `wizard version` | Prints this binary's compiled-in compat version. |
+| `wizard version` | Prints this binary's immutable release build version and compiled-in backend API compatibility marker. It performs no network check; use `wizard update --check` to see whether a newer release is available. |
 
 ### Local, hybrid and cloud setups
 
@@ -165,27 +165,26 @@ A few things this does for you beyond writing the flag values into
 
 ## Release updates and version awareness (in scope)
 
-The existing tagged-release workflow is the delivery channel for the compiled
-CLI. The following work is explicitly in scope for the production CLI; it is
-not yet available in the current binary:
+The tagged-release workflow is the delivery channel for the compiled CLI.
+Release-installed binaries use this flow today; source checkouts continue to
+use their explicit Git update path:
 
-- Add an explicit, bounded `wizard update --check` release query that reports
+- `wizard update --check` makes an explicit, bounded release query and reports
   the installed build version, available version, installation channel, and
   whether an update is applicable. Ordinary CLI invocations must not make a
   silent network request.
-- Stamp release binaries with an immutable CLI build version, publish a signed
-  manifest and SHA-256 checksums alongside every platform archive, and reject
-  unsigned, malformed, incompatible, or mismatched artifacts before staging.
-- Add `wizard update --self` for release-installed binaries. It must select the
-  current OS/architecture archive, download to a staging directory, verify the
-  manifest/checksum and compatibility marker, health-check the staged release,
-  atomically switch the installed release, and retain a known-good prior
-  release for rollback. Windows replacement needs a helper process so the
-  running executable is never overwritten in place.
-- Keep source and binary updates deliberately separate: the existing `wizard
-  update` continues to update a checkout, while `--self` only operates on a
-  recognized release installation. Both paths must be idempotent, clearly
-  report their action, and leave the active installation unchanged on failure.
+- Release binaries are stamped with an immutable build version and each release
+  publishes a `SHA256SUMS` integrity file. The updater rejects a missing,
+  malformed, duplicate, incompatible, or mismatched checksum before unpacking.
+- `wizard update` automatically selects the matching OS/architecture archive
+  for a recognized release installation; `wizard update --self` selects this
+  path explicitly. It stages the full package, preserves `backend/.env`,
+  rebuilds it before activation, then safely switches the launcher/current
+  pointer, and retains the previous package for rollback. Windows uses a
+  detached helper so it never overwrites the running executable in place.
+- Source and binary updates remain deliberately separate. An ordinary source
+  checkout uses Git; a release install uses verified packages. Neither updates
+  the active release when staging or preparation fails.
 
 ## What's deliberately out of scope this milestone
 

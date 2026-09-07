@@ -27,6 +27,13 @@ func Root() (string, error) {
 	for _, envVar := range []string{"WIZARD_ROOT", "WIZARD_HOME", "WIZARD_DIR"} {
 		if envVal := os.Getenv(envVar); envVal != "" {
 			if looksLikeCheckout(envVal) {
+				// Release installers retain old packages for rollback and move
+				// the stable current pointer during an update. A persisted
+				// WIZARD_ROOT may still name the old package, so prefer its
+				// sibling current pointer when it is a valid checkout.
+				if current := filepath.Join(filepath.Dir(envVal), "current"); looksLikeCheckout(current) {
+					return current, nil
+				}
 				return envVal, nil
 			}
 			if root, err := RootFrom(envVal); err == nil {

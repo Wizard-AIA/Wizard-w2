@@ -227,11 +227,12 @@ production image can start an unsandboxed generated-code runtime by accident.
   backup verification before destructive migrations, and post-deploy smoke
   tests through the public API.
 - Bring CLI release updates into this phase: stamp each binary with its build
-  version; publish a signed manifest and checksums; implement an explicit
-  `wizard update --check`; and implement a platform-aware `wizard update
-  --self` that verifies, stages, health-checks, atomically switches, and can
-  roll back a release installation. The existing checkout updater remains a
-  separate source-update path.
+  version; publish checksums; implement an explicit `wizard update --check`;
+  and implement a platform-aware `wizard update --self` that verifies, stages,
+  prepares, switches with platform-appropriate atomicity, and can roll back a
+  release installation. The existing checkout updater remains a separate
+  source-update path. Add signing when a release-signing key and verification
+  policy are provisioned.
 
 **Acceptance:** a test deployment proves an image-digest rollback after an SLO
 or quality breach; disabled flags remove the live code path; release records

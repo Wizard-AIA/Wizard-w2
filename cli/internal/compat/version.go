@@ -25,6 +25,11 @@ import (
 // building without ldflags (e.g. `go build` during local development).
 var CompatAPIVersion = "4.0.0"
 
+// BuildVersion identifies this CLI release. The release build stamps it with
+// the immutable Git tag; a plain local build remains explicitly "dev" so it
+// is never mistaken for a published artifact.
+var BuildVersion = "dev"
+
 // Major returns the leading numeric component of a dotted version string,
 // e.g. "3.1.0" -> 3. An unparsable string yields an error rather than a
 // silent 0, since a 0 would compare as "older than everything" and mask the

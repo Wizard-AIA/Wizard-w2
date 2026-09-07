@@ -103,7 +103,7 @@ for target in "${TARGETS[@]}"; do
   echo
   echo "Building cli/$binname for $goos/$goarch..."
   (cd "$REPO_ROOT/cli" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
-    -ldflags "-X wizard/internal/compat.CompatAPIVersion=$API_VERSION" \
+    -ldflags "-X wizard/internal/compat.CompatAPIVersion=$API_VERSION -X wizard/internal/compat.BuildVersion=$VERSION" \
     -o "$build_dir/$binname" ./cmd/wizard)
 
   if [ "$goos" = "$HOST_GOOS" ] && [ "$goarch" = "$HOST_GOARCH" ]; then
@@ -135,6 +135,15 @@ for target in "${TARGETS[@]}"; do
 
   rm -rf "$build_dir"
 done
+
+# The updater verifies this file before unpacking an archive. Keep it a
+# release asset, not merely CI output, so every client receives the same
+# digest list as the publisher.
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$DIST_DIR" && sha256sum ./*.zip > SHA256SUMS)
+else
+  (cd "$DIST_DIR" && shasum -a 256 ./*.zip > SHA256SUMS)
+fi
 
 echo
 echo "All targets built. Zips in $DIST_DIR:"
