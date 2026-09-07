@@ -391,7 +391,9 @@ async def test_successful_run_is_cached(loaded_session: Session, stub_llm) -> No
         session=loaded_session, instruction="minimum of column A", mode="fast", emitter=EventCollector()
     )
 
-    cached = semantic_cache.lookup("minimum of column A", ["A", "B", "C"])
+    cached = semantic_cache.lookup(
+        "minimum of column A", ["A", "B", "C"], scope=orchestrator._cache_scope(loaded_session)
+    )
     assert cached is not None
     assert "min" in cached
 

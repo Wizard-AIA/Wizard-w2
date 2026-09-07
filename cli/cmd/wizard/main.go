@@ -23,7 +23,7 @@ Usage:
   wizard doctor   Same as status.
   wizard attach   Follow the backend/frontend logs live.
   wizard logs     Print log file paths (add --tail N for recent lines).
-  wizard update   git pull, reinstall dependencies, re-check compatibility.
+  wizard update   Update a checkout, or a release install; add --check to only check.
   wizard skills   Install and manage skills (add/list/update/discard/remove/token).
   wizard version  Print this binary's version and compat marker.
 
@@ -41,13 +41,18 @@ func run(args []string) int {
 	}
 
 	cmd, rest := args[0], args[1:]
+	if cmd == "__apply-update" {
+		// Windows only: a detached, already-verified new binary waits for
+		// this process to exit before replacing the locked launcher.
+		return commands.RunApplyStagedUpdate(rest)
+	}
 
 	switch cmd {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return 0
 	case "-v", "--version", "version":
-		fmt.Printf("wizard CLI, backend API compat v%s\n", compat.CompatAPIVersion)
+		fmt.Printf("wizard CLI %s, backend API compat v%s\n", compat.BuildVersion, compat.CompatAPIVersion)
 		return 0
 	}
 

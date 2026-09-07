@@ -16,6 +16,8 @@ from src.api.deps import client_ip, client_key, ip_rate_limiter, rate_limiter
 from src.api.routes import chat, connections, datasets, dlq, export, meta, sandbox, sessions, skills, workspace
 from src.config import settings
 from src.core.embeddings import embedding_service
+from src.core.infra.backup_scheduler import BackupScheduler
+from src.core.infra.metrics import metrics
 from src.core.infra.queue import get_queue
 from src.core.llm import llm_provider
 from src.core.session import session_manager
@@ -98,12 +100,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         llm_provider.warm()
 
     task = asyncio.ensure_future(_maintenance_loop())
+    backups = BackupScheduler(
+        backup_interval_hours=settings.BACKUP_INTERVAL_HOURS,
+        checkpoint_interval_hours=settings.BACKUP_CHECKPOINT_INTERVAL_HOURS,
+        max_retained=settings.BACKUP_RETAINED_COUNT,
+    )
+    if settings.BACKUPS_ENABLED:
+        await backups.start()
     try:
         yield
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             _ = await task
+        if settings.BACKUPS_ENABLED:
+            await backups.stop()
         await get_queue().shutdown()
         await asyncio.to_thread(session_manager.shutdown)
         await asyncio.to_thread(sandbox_pool.shutdown)
@@ -117,6 +128,27 @@ app = FastAPI(
     version=meta.API_VERSION,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def record_http_metrics(request: Request, call_next):
+    """Record bounded-cardinality request health metrics from the live path."""
+    started = time.monotonic()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    except Exception as exc:
+        metrics.record_error(type(exc).__name__)
+        raise
+    finally:
+        # Starlette resolves ``route`` during dispatch. Before that (or for a
+        # 404), use one bounded bucket rather than request URLs or query text.
+        route = request.scope.get("route")
+        endpoint = getattr(route, "path", None) or "unmatched"
+        metrics.record_request(request.method, endpoint, status, time.monotonic() - started)
+
 
 try:
     from src.core.infra.telemetry import setup_telemetry

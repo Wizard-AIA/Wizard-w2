@@ -34,7 +34,9 @@ jobs:
           generate_release_notes: false
           draft: false
           prerelease: false
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
 
   sbom:
     needs: release

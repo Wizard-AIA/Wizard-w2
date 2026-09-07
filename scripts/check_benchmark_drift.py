@@ -1,36 +1,60 @@
-import random
+"""Verify the versioned, offline analytical-quality benchmark baseline.
+
+This deliberately does not run a live model or manufacture a pass rate. The
+standard pytest job executes the adversarial scenarios; this companion check
+then verifies that their fixture identities and required test coverage still
+match the reviewed baseline. Changing a scenario is allowed, but requires an
+explicit baseline update in the same review.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
 import sys
+from pathlib import Path
+
+from benchmark_harness.baseline import compare, fingerprint_manifest, load_baseline
 
 
-def run_benchmarks():
-    print("Running benchmarks...")
-    # Simulate benchmark results
-    pass_rate = random.uniform(92.0, 100.0)
-    baseline_pass_rate = 96.0
-    quality_drop = random.choice([0, 1])
-    return pass_rate, baseline_pass_rate, quality_drop
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BASELINE = ROOT / "benchmarks" / "baselines" / "offline_adversarial_v1.json"
 
 
-def main():
-    pass_rate, baseline_pass_rate, quality_drop = run_benchmarks()
-    print(f"Overall pass rate: {pass_rate:.2f}%")
-    print(f"Baseline pass rate: {baseline_pass_rate:.2f}%")
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    parser.add_argument(
+        "--print-current",
+        action="store_true",
+        help="Print the reviewed fixture/test manifest; useful when intentionally updating a baseline.",
+    )
+    args = parser.parse_args()
 
-    if pass_rate < 95.0:
-        print("[BENCHMARK REGRESSION DETECTED: Pass rate dropped below threshold]")
-        sys.exit(1)
+    current = fingerprint_manifest(ROOT)
+    if args.print_current:
+        print(json.dumps(current, indent=2, sort_keys=True))
+        return 0
 
-    if pass_rate < (baseline_pass_rate - 2.0):
-        print("[BENCHMARK REGRESSION DETECTED: Pass rate dropped below threshold]")
-        sys.exit(1)
+    try:
+        expected = load_baseline(args.baseline)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"BENCHMARK BASELINE INVALID: {exc}", file=sys.stderr)
+        return 2
 
-    if quality_drop > 0:
-        print("[BENCHMARK REGRESSION DETECTED: Quality drop on adversarial scenarios must be 0%]")
-        sys.exit(1)
+    failures = compare(expected, current)
+    if failures:
+        print("BENCHMARK REGRESSION DETECTED:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 1
 
-    print("Benchmark pass summary: All invariants passed successfully.")
-    sys.exit(0)
+    print(
+        "Offline analytical benchmark baseline matches "
+        f"{len(current['scenarios'])} reviewed scenario fixtures and required tests."
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

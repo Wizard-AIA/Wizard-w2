@@ -126,7 +126,9 @@ fi
 
 if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     ln -sfn "${PACKAGE_DIR}" "${INSTALL_DIR}/current"
-    WIZARD_SRC_BIN="${PACKAGE_DIR}/cli/wizard"
+    # The launcher must follow current rather than one versioned package, so
+    # `wizard update` can atomically advance the release without a shell edit.
+    WIZARD_SRC_BIN="${INSTALL_DIR}/current/cli/wizard"
 else
     WIZARD_SRC_BIN=$(find "${INSTALL_DIR}" -type f -name "wizard" 2>/dev/null | head -n 1)
 fi
@@ -144,7 +146,7 @@ fi
 # where the executable is copied or symlink resolution is unavailable, and it
 # lets `wizard init`/`wizard start` locate the bundled backend from any cwd.
 if [ -n "${PACKAGE_DIR:-}" ] && [ -d "${PACKAGE_DIR}" ]; then
-    WIZARD_ROOT="${PACKAGE_DIR}"
+    WIZARD_ROOT="${INSTALL_DIR}/current"
 else
     WIZARD_ROOT="$(dirname "$(dirname "${WIZARD_SRC_BIN}")")"
 fi

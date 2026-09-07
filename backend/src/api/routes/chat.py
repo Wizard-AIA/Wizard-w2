@@ -32,7 +32,7 @@ from src.config import settings
 from src.core.agent.consent import ConsentBroker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import AnalysisOrchestrator
-from src.core.infra.idempotency import get_idempotency_store
+from src.core.infra.idempotency import IdempotencyConflict, get_idempotency_store, request_fingerprint
 from src.core.session import Session, session_manager
 from src.utils.errors import safe_error_message
 from src.utils.logging import logger
@@ -56,9 +56,18 @@ async def chat(
     Use the WebSocket for token streaming; this exists for scripts and integrations.
     """
     store = get_idempotency_store()
+    fingerprint = request_fingerprint(
+        session_id=session.id,
+        message=request.message,
+        mode=request.mode,
+        approved_plan=request.approved_plan,
+    )
 
     if x_idempotency_key:
-        cached = store.get_cached(x_idempotency_key)
+        try:
+            cached = store.get_cached(x_idempotency_key, fingerprint)
+        except IdempotencyConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if cached:
             response.headers[SESSION_HEADER] = session.id
             return cached
@@ -116,7 +125,7 @@ async def chat(
         )
 
         if x_idempotency_key:
-            store.store_result(x_idempotency_key, chat_response)
+            store.store_result(x_idempotency_key, fingerprint, chat_response)
 
         return chat_response
     finally:

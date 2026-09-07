@@ -39,3 +39,8 @@ jobs:
       - name: Run Throughput and Latency Benchmarks
         run: |
           pytest backend/tests/stress/test_performance_benchmarks.py -v -s
+
+      - name: Verify reviewed analytical benchmark baseline
+        run: |
+          pytest backend/tests/benchmark backend/tests/unit/test_benchmark_baseline.py -v
+          python scripts/check_benchmark_drift.py

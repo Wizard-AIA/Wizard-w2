@@ -76,7 +76,7 @@ from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, TaskTier, classify_task_complexity, llm_provider, model_registry
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
-from src.core.llm.usage import usage_ledger
+from src.core.llm.usage import SessionUsage, usage_ledger
 from src.core.memory import working_memory
 from src.core.permissions import denial_reason, unattended_reason
 from src.core.prompts import (
@@ -90,6 +90,7 @@ from src.core.prompts import (
 )
 from src.core.rag.retriever import context_retriever
 from src.core.security.code_guard import imported_modules
+from src.core.security.untrusted_context import ContextKind, UntrustedContext, render_untrusted_context
 from src.core.semantic_cache import semantic_cache
 from src.core.skills import promotion
 from src.core.skills.registry import skill_registry
@@ -203,6 +204,9 @@ class RunState:
     verification: str = ""
     grounding: GroundingReport = field(default_factory=GroundingReport)
     usage: dict[str, Any] = field(default_factory=dict)
+    #: Snapshot captured before this turn starts. The final usage readout is a
+    #: delta from this exact point, never the session's historical aggregate.
+    usage_snapshot: SessionUsage = field(default_factory=SessionUsage, repr=False)
     #: Names of the skills that reached this turn, in the order they were used.
     #: Reported on the final frame so an answer can say what informed it.
     skills_used: list[str] = field(default_factory=list)
@@ -622,6 +626,7 @@ class AnalysisOrchestrator:
         """
         mode = self.normalise_mode(mode)
         state = RunState(instruction=instruction, mode=mode, can_prompt=can_prompt)
+        state.usage_snapshot = usage_ledger.snapshot_many([session.id])
 
         if session.df is None:
             await emit(emitter, EventType.ERROR, content="No dataset is loaded for this session.")
@@ -749,6 +754,19 @@ class AnalysisOrchestrator:
     # ------------------------------------------------------------------ #
     # Orientation: the opening plan
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _cache_scope(session: Session) -> str:
+        """Identity dimensions that must never share a generated-code cache.
+
+        The scope intentionally contains hashes and policy booleans only. It
+        prevents a code path selected under one dataset version or cloud
+        redaction policy from becoming a cache hit under another.
+        """
+        handle = session.active_handle
+        dataset_hash = handle.content_hash if handle is not None else "no-dataset"
+        policy = handle and session.data_policy.schema_only_for(handle.name, handle.origin)
+        return f"dataset={dataset_hash}|mode={session.data_mode}|schema_only={bool(policy)}"
+
     async def _orient(
         self,
         state: RunState,
@@ -768,7 +786,7 @@ class AnalysisOrchestrator:
         self._ensure_understanding(state, session)
 
         # 1. Exact/semantic cache: a verified solution for this exact question.
-        cached = semantic_cache.lookup(state.instruction, columns)
+        cached = semantic_cache.lookup(state.instruction, columns, scope=self._cache_scope(session))
         if cached:
             state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
@@ -793,7 +811,7 @@ class AnalysisOrchestrator:
         # Retrieved, not asked for: this is a ranking over local files and costs
         # no round-trip. It is reached only past the cache and fast-path returns
         # above, so a turn that never plans never pays for it either.
-        skills_block = await self._consult_skills(state, emitter)
+        skills_block = await self._consult_skills(state, session, emitter)
 
         prompt = create_planning_prompt(
             state.instruction,
@@ -807,7 +825,7 @@ class AnalysisOrchestrator:
             memory_context=working_memory.get_context_string(state.instruction, session_id=session.id),
             previous_code=previous_code if self.is_visual_revision(state.instruction, previous_code) else None,
             session_id=session.id,
-            history=session.history_prompt(),
+            history=session.history_prompt(redact_sensitive=self._redact_for(session, "manager")),
             max_columns=budget.max_columns,
             redact=self._redact_for(session, "manager"),
             skills=skills_block,
@@ -1248,7 +1266,7 @@ class AnalysisOrchestrator:
             chars=len(summary),
         )
 
-    async def _consult_skills(self, state: RunState, emitter: Emitter | None, query: str = "") -> str:
+    async def _consult_skills(self, state: RunState, session: Session, emitter: Emitter | None, query: str = "") -> str:
         """Ranks the installed skills against the question and reports what matched.
 
         Returns the rendered prompt block, and records every match on
@@ -1279,7 +1297,22 @@ class AnalysisOrchestrator:
                 score=round(match.score, 4),
                 phase=state.phase.value,
             )
-        return skill_registry.render_block(matches)
+        raw_block = skill_registry.render_block(matches)
+        if not raw_block:
+            return ""
+        # The registry already applies the configured cap to its surrounding
+        # `<skills>` block. Reserve enough of that cap for the fixed authority
+        # boundary instead of allowing an untrusted skill to expand the prompt.
+        opening, closing = "<skills>\n", "\n</skills>"
+        content = raw_block.removeprefix(opening).removesuffix(closing)
+        content = content[: max(0, settings.SKILLS_MAX_CHARS - 320)]
+        rendered, decision = render_untrusted_context(
+            UntrustedContext(ContextKind.SKILL, "installed-skills", content),
+            redact_sensitive=self._redact_for(session, "manager"),
+        )
+        if decision.quarantined:
+            state.warnings.append("Installed skill context was quarantined by prompt-injection policy.")
+        return f"<skills>\n{rendered.strip()}\n</skills>"
 
     async def _act_consult(
         self,
@@ -1303,9 +1336,21 @@ class AnalysisOrchestrator:
         query = decision.goal or state.instruction
         passages = await asyncio.to_thread(session.search_documents, query, budget.doc_chunks)
 
-        sections = [f"From `{name}`:\n{text}" for name, text in passages]
-        for _, text in passages:
-            state.investigation.note_finding(text.strip().splitlines()[0][:200])
+        sections = []
+        for hit in passages:
+            rendered, decision = render_untrusted_context(
+                UntrustedContext(ContextKind.DOCUMENT, hit.citation.label(), hit.text),
+                redact_sensitive=self._redact_for(session, "manager"),
+            )
+            sections.append(rendered.strip())
+            if decision.quarantined:
+                state.warnings.append(f"Retrieved document context was quarantined: {hit.citation.label()}.")
+            else:
+                state.investigation.note_finding(hit.text.strip().splitlines()[0][:200])
+            source_id = state.analysis.evidence.add_node(
+                "source", hit.citation.label(), **hit.citation.to_dict(), score=hit.score, methods=list(hit.methods)
+            )
+            state.analysis.evidence_refs.append(source_id)
 
         skill_matches = []
         if settings.SKILLS_ENABLED:
@@ -2603,7 +2648,7 @@ class AnalysisOrchestrator:
         columns = [str(c) for c in session.df.columns] if session.df is not None else []
 
         if state.code and not state.error and not state.blocked:
-            semantic_cache.add(state.instruction, columns, state.code)
+            semantic_cache.add(state.instruction, columns, state.code, scope=self._cache_scope(session))
 
             if state.retry_count > 0 and state.failed_code:
                 try:
@@ -2678,7 +2723,7 @@ class AnalysisOrchestrator:
         try:
             from src.core.database import db_mgr
 
-            state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
+            state.usage = usage_ledger.totals_since(state.usage_snapshot, [session.id, *state.subagent_ids])
             analysis_snapshot = state.analysis.to_dict()
             db_mgr.save_analysis_state(session.id, state.message_id, analysis_snapshot)
             db_mgr.save_plan_revisions(
@@ -2732,7 +2777,7 @@ class AnalysisOrchestrator:
         # Subagent LLM calls book under their own composite ids (see
         # `SubagentSession`), so the turn's own id alone would under-report
         # what a turn with subagents actually cost.
-        state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
+        state.usage = usage_ledger.totals_since(state.usage_snapshot, [session.id, *state.subagent_ids])
         # Only where a meter means something. Under local-only nothing was spent
         # and the honest surface is silence, not a row of zeroes.
         if state.usage.get("any_cloud"):

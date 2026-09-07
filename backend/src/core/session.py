@@ -38,10 +38,11 @@ from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor, isolation_for
 from src.core.infra.session_bus import session_bus
-from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
+from src.core.ingest.documents import ContextDocument, DocumentHit, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.llm.usage import usage_ledger
 from src.core.permissions import PermissionState
+from src.core.security.untrusted_context import ContextKind, UntrustedContext, render_untrusted_context
 from src.core.tools import runtime as runtime_backend
 from src.utils.logging import logger
 
@@ -434,7 +435,7 @@ class Session:
         with self._lock:
             return self.documents.pop(name, None) is not None
 
-    def search_documents(self, query: str, limit: int | None = None) -> list[tuple[str, str]]:
+    def search_documents(self, query: str, limit: int | None = None) -> list[DocumentHit]:
         """Passages from the attached references that bear on ``query``."""
         if not self.documents:
             return []
@@ -539,8 +540,8 @@ class Session:
                 return text[:idx].strip() + " [...]"
         return truncated + " [...]"
 
-    def history_prompt(self, limit: int | None = None) -> str:
-        """Renders recent turns for prompt injection. Empty when there is no history."""
+    def history_prompt(self, limit: int | None = None, *, redact_sensitive: bool = False) -> str:
+        """Render recent history as explicitly untrusted prompt data."""
         messages = self.history(limit)
         if not messages:
             return ""
@@ -550,7 +551,11 @@ class Session:
             text = (message["content"] or "").strip()
             if text:
                 text = self._compact_text(text)
-                lines.append(f"{speaker}: {text}")
+                rendered, _ = render_untrusted_context(
+                    UntrustedContext(ContextKind.HISTORY, speaker.lower(), f"{speaker}: {text}"),
+                    redact_sensitive=redact_sensitive,
+                )
+                lines.append(rendered.strip())
         if not lines:
             return ""
         return "\n<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>\n"

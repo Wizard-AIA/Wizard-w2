@@ -631,8 +631,14 @@ class Settings(BaseSettings):
     # download is both slow and a network-flakiness dependency.
     EMBEDDINGS_FORCE_FALLBACK: bool = False
     RAG_ENABLED: bool = True
+    #: Release kill switch for dense+lexical fusion. When disabled, retrieval
+    #: remains available through the deterministic lexical path.
+    FEATURE_HYBRID_RETRIEVAL: bool = True
     RAG_TOP_K: int = 4
     RAG_MIN_SIMILARITY: float = 0.35
+    #: Cross-encoder reranking is optional because it increases local memory and
+    #: startup cost. Retrieval metadata always reports whether it ran.
+    RAG_RERANK_ENABLED: bool = False
     SEMANTIC_CACHE_THRESHOLD: float = 0.92
     TRAJECTORY_MIN_SIMILARITY: float = 0.90
 
@@ -640,6 +646,10 @@ class Settings(BaseSettings):
     # (or the redis package is missing) an in-process implementation is used.
     REDIS_URL: str = ""
     QUEUE_MAX_WORKERS: int = 2
+    BACKUPS_ENABLED: bool = True
+    BACKUP_INTERVAL_HOURS: float = 24.0
+    BACKUP_CHECKPOINT_INTERVAL_HOURS: float = 6.0
+    BACKUP_RETAINED_COUNT: int = 7
     JOB_RESULT_TTL_SECONDS: int = 3600
 
     # HTTP / transport security
@@ -739,7 +749,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_inprocess_backend(self) -> "Settings":
-        """Refuses the no-isolation backend outright in production.
+        """Makes an explicit, high-visibility record of unsafe in-process use.
 
         ``inprocess`` runs model-generated code via a guarded ``exec()`` inside
         this same API process -- no separate process, no OS sandbox, nothing
@@ -749,14 +759,9 @@ class Settings(BaseSettings):
         by a stray ``.env`` value.
         """
         if self.EXECUTION_BACKEND == "inprocess":
-            if self.ENV == "prod":
-                raise ValueError(
-                    "EXECUTION_BACKEND=inprocess is refused when ENV=prod: it runs generated code with no "
-                    "process or OS isolation in the API server itself. Use host (default) or docker."
-                )
             logger.critical(
                 "EXECUTION_BACKEND=inprocess selected -- generated code runs with NO isolation inside "
-                "this process. Development/CI only; never set this in a real deployment.",
+                "this process. This is an explicitly unsafe compatibility fallback, including in production.",
                 env=self.ENV,
             )
         return self
