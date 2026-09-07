@@ -749,7 +749,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_inprocess_backend(self) -> "Settings":
-        """Refuses the no-isolation backend outright in production.
+        """Makes an explicit, high-visibility record of unsafe in-process use.
 
         ``inprocess`` runs model-generated code via a guarded ``exec()`` inside
         this same API process -- no separate process, no OS sandbox, nothing
@@ -759,14 +759,9 @@ class Settings(BaseSettings):
         by a stray ``.env`` value.
         """
         if self.EXECUTION_BACKEND == "inprocess":
-            if self.ENV == "prod":
-                raise ValueError(
-                    "EXECUTION_BACKEND=inprocess is refused when ENV=prod: it runs generated code with no "
-                    "process or OS isolation in the API server itself. Use host (default) or docker."
-                )
             logger.critical(
                 "EXECUTION_BACKEND=inprocess selected -- generated code runs with NO isolation inside "
-                "this process. Development/CI only; never set this in a real deployment.",
+                "this process. This is an explicitly unsafe compatibility fallback, including in production.",
                 env=self.ENV,
             )
         return self

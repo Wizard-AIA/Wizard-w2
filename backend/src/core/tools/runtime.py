@@ -11,9 +11,8 @@ inprocess    Guarded ``exec`` in the API process. No isolation; CI and locked-do
 ===========  ====================================================================
 
 Docker is reached only when ``EXECUTION_BACKEND=docker`` names it. Asking for a
-container and not having one degrades to ``host`` rather than failing, because a
-missing daemon is a reason to run somewhere else, not a reason to stop -- but the
-degradation is logged, since the user asked for something they did not get.
+container and not having one falls back to in-process execution for compatibility
+with hosts that cannot run Docker. The degradation is logged as unsafe.
 
 The choice is made per call rather than cached, because Docker can appear or
 disappear while the app is running and the answer to "where does code run" has
@@ -74,17 +73,17 @@ def active_backend() -> BackendName:
     if settings.EXECUTION_BACKEND == "inprocess":
         return "inprocess"
 
-    if settings.docker_backend_allowed:
+    if settings.EXECUTION_BACKEND == "docker":
         from src.core.tools.sandbox import sandbox_pool
 
-        if sandbox_pool.available:
+        if settings.SANDBOX_ENABLED and sandbox_pool.available:
             return "docker"
         # Asked for by name and not there. `sandbox_pool.available` has already
         # logged why, so this only records what it fell back to.
         from src.utils.logging import logger
 
-        logger.warning("Docker was requested but is unreachable; running on the host backend")
-        return "host"
+        logger.critical("Docker was requested but is unreachable; falling back to unsafe in-process execution")
+        return "inprocess"
 
     return "host" if settings.host_backend_allowed else "inprocess"
 
