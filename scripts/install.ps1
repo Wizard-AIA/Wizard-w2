@@ -11,6 +11,21 @@ function Write-WizardLog($text, $color = "Magenta") {
     Write-Host $text -ForegroundColor $color
 }
 
+function Wait-WizardFailure {
+    # A one-shot PowerShell window otherwise disappears before the user can
+    # read the error. Do not block redirected/automation input.
+    if ($env:WIZARD_NO_PAUSE -eq "1") { return }
+    if ($Host.Name -eq "ConsoleHost" -and -not [Console]::IsInputRedirected) {
+        Read-Host "Installation failed. Press Enter to close" | Out-Null
+    }
+}
+
+trap {
+    Write-WizardLog "Installation failed: $($_.Exception.Message)" "Red"
+    Wait-WizardFailure
+    break
+}
+
 Write-Host ""
 Write-Host "  Wizard - Autonomous AI Data Analyst Workspace" -ForegroundColor Magenta
 Write-Host "  Local-First • AST Sandboxed • Zero Cloud Telemetry" -ForegroundColor DarkGray
@@ -66,8 +81,7 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip -UseBasicParsing
 } catch {
-    Write-WizardLog "Failed to download $downloadUrl : $_" "Red"
-    exit 1
+    throw "Failed to download $downloadUrl : $($_.Exception.Message)"
 }
 
 # 5. Extract Archive
@@ -82,8 +96,7 @@ if (-not (Test-Path $binDir)) {
 try {
     Expand-Archive -Path $tempZip -DestinationPath $installDir -Force
 } catch {
-    Write-WizardLog "Expand-Archive failed: $_" "Red"
-    exit 1
+    throw "Expand-Archive failed: $($_.Exception.Message)"
 } finally {
     if (Test-Path $tempZip) {
         Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
