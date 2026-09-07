@@ -15,15 +15,15 @@ const (
 	minNodeMajor   = 20
 )
 
-// RunInit implements `wizard init`: optional interactive setup, environment
-// check, .env setup, dependency install, optional model pulls. Detect-and-
-// instruct only -- it never invokes a package manager on the user's behalf for
-// invokes a package manager on the user's behalf for Python/Node/Ollama
-// themselves, only for this project's own dependencies once the
-// prerequisites are confirmed present.
+// RunInit implements `wizard init`: optional interactive setup, prerequisite
+// installation, environment check, .env setup, dependency install, and
+// optional model pulls. Bare interactive runs offer to install missing tools;
+// scripted runs require the explicit --install-prerequisites flag.
 func RunInit(env *Env, args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	pullModels := fs.Bool("pull-models", false, "Also `ollama pull` a small default manager/worker pair if Ollama is present and no model is pinned.")
+	installPrerequisites := fs.Bool("install-prerequisites", false, "Install missing Python, Node.js, uv, pnpm, and required model-server tools using the host package manager.")
+	noInstallPrerequisites := fs.Bool("no-install-prerequisites", false, "Only check prerequisites; never install missing tools.")
 	managerModel := fs.String("manager-model", "qwen3:8b", "Model to pull for the manager role with --pull-models.")
 	workerModel := fs.String("worker-model", "qwen2.5-coder:7b", "Model to pull for the worker role with --pull-models.")
 	embeddingProvider := fs.String("embedding-provider", "", "Pin EMBEDDING_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty follows --provider.")
@@ -46,6 +46,10 @@ func RunInit(env *Env, args []string) int {
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	if *interactive && *nonInteractive {
 		fmt.Fprintln(env.Err, "--interactive and --non-interactive cannot be used together")
+		return 2
+	}
+	if *installPrerequisites && *noInstallPrerequisites {
+		fmt.Fprintln(env.Err, "--install-prerequisites and --no-install-prerequisites cannot be used together")
 		return 2
 	}
 	hasConfigFlags := false
@@ -101,13 +105,26 @@ func RunInit(env *Env, args []string) int {
 		*workerModel = settings.workerModel
 	}
 
+	configuredProvider := *provider
+	if configuredProvider == "" {
+		configuredProvider, _, _ = readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
+	}
+	configuredDataMode := *dataMode
+	if configuredDataMode == "" {
+		configuredDataMode, _, _ = readEnvValue(env.BackendEnvPath(), "DATA_MODE")
+	}
+	configuredEmbeddingProvider := *embeddingProvider
+	if configuredEmbeddingProvider == "" {
+		configuredEmbeddingProvider, _, _ = readEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER")
+	}
+
 	// A pure-cloud setup (a cloud provider and not also hybrid) has no local
 	// weights to size -- RAM-based manager/worker fitting below is Ollama-tag
 	// arithmetic (modelfit.go) that means nothing for a model named on
 	// Anthropic/OpenAI/a gateway, so it and the default Ollama model pull are
 	// skipped in favor of MODEL_NAME/WORKER_MODEL_NAME staying empty
 	// (auto-select on that provider), same as .env.example's own default.
-	pureCloud := *provider != "" && cloudProviders[*provider] && *dataMode != "hybrid"
+	pureCloud := configuredProvider != "" && cloudProviders[configuredProvider] && configuredDataMode != "hybrid"
 
 	fmt.Fprintln(env.Out, "Checking prerequisites...")
 	python := CheckPython(minPythonMajor, minPythonMinor)
@@ -120,11 +137,57 @@ func RunInit(env *Env, args []string) int {
 	printCheck(env.Out, node)
 	printCheck(env.Out, uv)
 	printCheck(env.Out, pnpm)
-	printCheck(env.Out, ollama)
+	ollamaRequired := requiresOllama(configuredProvider, configuredDataMode, configuredEmbeddingProvider)
+	if ollamaRequired {
+		printCheck(env.Out, ollama)
+	} else if !ollama.Found {
+		fmt.Fprintln(env.Out, "  [OPTIONAL] Ollama     not found on PATH; skipped for this provider/data-mode configuration.")
+	} else {
+		printCheck(env.Out, ollama)
+	}
 
-	if !python.OK || !node.OK || !uv.OK || !pnpm.OK {
-		fmt.Fprintln(env.Err, "\nOne or more required prerequisites are missing or too old. Install them and re-run `wizard init`.")
-		return 1
+	missing := requiredPrerequisites(python, node, uv, pnpm)
+	if ollamaRequired && !ollama.OK {
+		missing = append(missing, ollama)
+	}
+	if len(missing) > 0 {
+		shouldInstall := *installPrerequisites
+		if !shouldInstall && !*noInstallPrerequisites && shouldPromptInit(env.In, *interactive, *nonInteractive, hasConfigFlags || *pullModels) {
+			var err error
+			shouldInstall, err = askInstallPrerequisites(env, missing)
+			if err != nil {
+				fmt.Fprintf(env.Err, "Prerequisite installation prompt failed: %v\n", err)
+				return 1
+			}
+		}
+		if shouldInstall {
+			if err := installMissingPrerequisites(env, missing); err != nil {
+				fmt.Fprintf(env.Err, "\n%s\n", err)
+				return 1
+			}
+			refreshToolPath()
+			python = CheckPython(minPythonMajor, minPythonMinor)
+			node = CheckNode(minNodeMajor)
+			uv = CheckUV()
+			pnpm = CheckPnpm()
+			ollama = CheckOllama()
+			fmt.Fprintln(env.Out, "\nRechecking prerequisites after installation...")
+			printCheck(env.Out, python)
+			printCheck(env.Out, node)
+			printCheck(env.Out, uv)
+			printCheck(env.Out, pnpm)
+			if ollamaRequired {
+				printCheck(env.Out, ollama)
+			}
+			missing = requiredPrerequisites(python, node, uv, pnpm)
+			if ollamaRequired && !ollama.OK {
+				missing = append(missing, ollama)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Fprintln(env.Err, "\nOne or more required prerequisites are still missing or too old. Install them and re-run `wizard init`.")
+			return 1
+		}
 	}
 
 	// Decide the manager/worker pair before touching backend/.env, so a
@@ -186,6 +249,7 @@ func RunInit(env *Env, args []string) int {
 		}
 	}
 	finalProvider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
+	finalEmbeddingProvider, _, _ := readEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER")
 	warnMissingCloudConfig(env, finalProvider)
 
 	if err := installDependencies(env, python); err != nil {
@@ -202,7 +266,7 @@ func RunInit(env *Env, args []string) int {
 			return 1
 		}
 		fmt.Fprintln(env.Out, "\nPulling default models via Ollama...")
-		if !pullDefaultModels(env, resolvedManager, resolvedWorker, *embeddingModel, *provider, *embeddingProvider) {
+		if !pullDefaultModels(env, resolvedManager, resolvedWorker, *embeddingModel, finalProvider, finalEmbeddingProvider) {
 			return 1
 		}
 	case ollama.Found && !pureCloud:

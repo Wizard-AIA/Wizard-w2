@@ -24,8 +24,12 @@ wizard init && wizard start
 ```
 
 From a terminal, `wizard init` asks for the provider, data mode, models, and
-the relevant API key when needed. Press Enter to keep defaults; use
-`wizard init --non-interactive` for automation.
+the relevant API key when needed. Use ↑/↓ and Enter for choices, or press
+Enter to keep the shown default. If Python, Node.js, uv, or pnpm is missing,
+the interactive wizard asks whether to install it; cloud-only configurations
+do not require Ollama. Use `wizard init --non-interactive` for automation, or
+`wizard init --install-prerequisites --non-interactive` to install missing
+tools in a script.
 
 To remove Wizard's user data and local configuration while keeping the
 checkout and CLI, run `wizard delete` and confirm. Use `wizard delete --yes`

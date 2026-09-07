@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // initSettings is the complete set of setup choices that the interactive
@@ -58,7 +60,7 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if providerDefault == "" {
 		providerDefault = envValueOr(env, "API_PROVIDER", "ollama")
 	}
-	provider, err := promptChoice(env.Out, reader, "Default provider", []string{
+	provider, err := promptChoiceForInput(env.Out, input, reader, "Default provider", []string{
 		"ollama", "lmstudio", "anthropic", "openai", "gemini", "custom_gateway",
 	}, providerDefault)
 	if err != nil {
@@ -76,7 +78,7 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if modeDefault == "auto" && cloudProviders[provider] {
 		modeDefault = "cloud-only"
 	}
-	mode, err := promptChoice(env.Out, reader, "Data mode", []string{
+	mode, err := promptChoiceForInput(env.Out, input, reader, "Data mode", []string{
 		"auto", "local-only", "hybrid", "cloud-only",
 	}, modeDefault)
 	if err != nil {
@@ -93,7 +95,7 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if schemaDefault != "true" && schemaDefault != "false" {
 		schemaDefault = "true"
 	}
-	schemaOnly, err := promptChoice(env.Out, reader, "Send only schema to cloud models?", []string{
+	schemaOnly, err := promptChoiceForInput(env.Out, input, reader, "Send only schema to cloud models?", []string{
 		"true", "false",
 	}, schemaDefault)
 	if err != nil {
@@ -127,7 +129,7 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if embeddingDefault == "" {
 		embeddingDefault = "auto"
 	}
-	embeddingProvider, err := promptChoice(env.Out, reader, "Embedding provider", []string{
+	embeddingProvider, err := promptChoiceForInput(env.Out, input, reader, "Embedding provider", []string{
 		"auto", "ollama", "lmstudio", "anthropic", "openai", "gemini", "custom_gateway",
 	}, embeddingDefault)
 	if err != nil {
@@ -295,6 +297,102 @@ func promptChoice(out io.Writer, reader *bufio.Reader, label string, options []s
 			return "", io.ErrUnexpectedEOF
 		}
 	}
+}
+
+func promptChoiceForInput(out io.Writer, input io.Reader, reader *bufio.Reader, label string, options []string, current string) (string, error) {
+	if file, ok := input.(*os.File); ok && readerIsTerminal(file) {
+		return promptArrowChoice(out, file, label, options, current)
+	}
+	return promptChoice(out, reader, label, options, current)
+}
+
+func promptArrowChoice(out io.Writer, file *os.File, label string, options []string, current string) (string, error) {
+	defaultIndex := 0
+	for i, option := range options {
+		if option == current {
+			defaultIndex = i
+			break
+		}
+	}
+
+	state, err := term.MakeRaw(int(file.Fd()))
+	if err != nil {
+		return promptChoice(out, bufio.NewReader(file), label, options, current)
+	}
+	defer func() { _ = term.Restore(int(file.Fd()), state) }()
+
+	fmt.Fprintf(out, "\n%s (use ↑/↓, Enter):\n", label)
+	renderChoices(out, options, defaultIndex, false)
+	selected := defaultIndex
+	for {
+		key, err := readTerminalKey(file)
+		if err != nil {
+			return "", err
+		}
+		if len(key) == 1 && key[0] == 3 {
+			return "", fmt.Errorf("interactive setup cancelled")
+		}
+		next, accepted := applyTerminalKey(key, selected, len(options))
+		if accepted {
+			fmt.Fprintln(out)
+			return options[next], nil
+		}
+		if next == selected {
+			continue
+		}
+		selected = next
+		renderChoices(out, options, selected, true)
+	}
+}
+
+func renderChoices(out io.Writer, options []string, selected int, redraw bool) {
+	if redraw {
+		fmt.Fprintf(out, "\033[%dA", len(options))
+	}
+	for i, option := range options {
+		marker := "  "
+		if i == selected {
+			marker = "› "
+		}
+		fmt.Fprintf(out, "\r\033[2K%s%s", marker, option)
+		if i < len(options)-1 {
+			fmt.Fprint(out, "\n")
+		}
+	}
+}
+
+func readTerminalKey(file *os.File) ([]byte, error) {
+	first := []byte{0}
+	if _, err := io.ReadFull(file, first); err != nil {
+		return nil, err
+	}
+	if first[0] != 0x1b {
+		return first, nil
+	}
+	sequence := make([]byte, 3)
+	sequence[0] = first[0]
+	if _, err := io.ReadFull(file, sequence[1:]); err != nil {
+		return sequence[:1], nil
+	}
+	return sequence, nil
+}
+
+func applyTerminalKey(key []byte, selected, optionCount int) (int, bool) {
+	if optionCount == 0 {
+		return selected, true
+	}
+	switch string(key) {
+	case "\r", "\n":
+		return selected, true
+	case "\x1b[A", "k":
+		return (selected + optionCount - 1) % optionCount, false
+	case "\x1b[B", "j":
+		return (selected + 1) % optionCount, false
+	}
+	if len(key) == 1 && key[0] >= '1' && int(key[0]-'0') <= optionCount {
+		return int(key[0] - '1'), true
+	}
+	return selected, false
 }
 
 func envValue(env *Env, key string) string {

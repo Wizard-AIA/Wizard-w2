@@ -69,3 +69,26 @@ func TestPromptInitSettingsKeepsAutoDefaults(t *testing.T) {
 		t.Fatalf("blank model answers must retain auto-select defaults: %#v", settings)
 	}
 }
+
+func TestApplyTerminalKeyMovesAndAcceptsChoices(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      []byte
+		selected int
+		want     int
+		accept   bool
+	}{
+		{"down", []byte("\x1b[B"), 0, 1, false},
+		{"up wraps", []byte("\x1b[A"), 0, 2, false},
+		{"enter", []byte("\r"), 1, 1, true},
+		{"numeric fallback", []byte("2"), 0, 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, accepted := applyTerminalKey(tt.key, tt.selected, 3)
+			if got != tt.want || accepted != tt.accept {
+				t.Fatalf("applyTerminalKey(%q, %d, 3) = (%d, %v), want (%d, %v)", tt.key, tt.selected, got, accepted, tt.want, tt.accept)
+			}
+		})
+	}
+}
