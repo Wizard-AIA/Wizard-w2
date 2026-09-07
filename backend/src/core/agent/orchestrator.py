@@ -76,7 +76,7 @@ from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, TaskTier, classify_task_complexity, llm_provider, model_registry
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
-from src.core.llm.usage import usage_ledger
+from src.core.llm.usage import SessionUsage, usage_ledger
 from src.core.memory import working_memory
 from src.core.permissions import denial_reason, unattended_reason
 from src.core.prompts import (
@@ -204,6 +204,9 @@ class RunState:
     verification: str = ""
     grounding: GroundingReport = field(default_factory=GroundingReport)
     usage: dict[str, Any] = field(default_factory=dict)
+    #: Snapshot captured before this turn starts. The final usage readout is a
+    #: delta from this exact point, never the session's historical aggregate.
+    usage_snapshot: SessionUsage = field(default_factory=SessionUsage, repr=False)
     #: Names of the skills that reached this turn, in the order they were used.
     #: Reported on the final frame so an answer can say what informed it.
     skills_used: list[str] = field(default_factory=list)
@@ -623,6 +626,7 @@ class AnalysisOrchestrator:
         """
         mode = self.normalise_mode(mode)
         state = RunState(instruction=instruction, mode=mode, can_prompt=can_prompt)
+        state.usage_snapshot = usage_ledger.snapshot_many([session.id])
 
         if session.df is None:
             await emit(emitter, EventType.ERROR, content="No dataset is loaded for this session.")
@@ -2708,7 +2712,7 @@ class AnalysisOrchestrator:
         try:
             from src.core.database import db_mgr
 
-            state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
+            state.usage = usage_ledger.totals_since(state.usage_snapshot, [session.id, *state.subagent_ids])
             analysis_snapshot = state.analysis.to_dict()
             db_mgr.save_analysis_state(session.id, state.message_id, analysis_snapshot)
             db_mgr.save_plan_revisions(
@@ -2762,7 +2766,7 @@ class AnalysisOrchestrator:
         # Subagent LLM calls book under their own composite ids (see
         # `SubagentSession`), so the turn's own id alone would under-report
         # what a turn with subagents actually cost.
-        state.usage = usage_ledger.totals_many([session.id, *state.subagent_ids])
+        state.usage = usage_ledger.totals_since(state.usage_snapshot, [session.id, *state.subagent_ids])
         # Only where a meter means something. Under local-only nothing was spent
         # and the honest surface is silence, not a row of zeroes.
         if state.usage.get("any_cloud"):

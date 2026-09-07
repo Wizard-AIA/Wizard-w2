@@ -186,6 +186,44 @@ class SessionUsage:
         record.estimated = record.estimated or not usage.exact
         return record
 
+    def copy(self) -> SessionUsage:
+        """An immutable-at-the-call-site snapshot of this aggregate."""
+        return SessionUsage(
+            records={
+                key: UsageRecord(
+                    provider=record.provider,
+                    model=record.model,
+                    role=record.role,
+                    calls=record.calls,
+                    input_tokens=record.input_tokens,
+                    output_tokens=record.output_tokens,
+                    estimated=record.estimated,
+                )
+                for key, record in self.records.items()
+            }
+        )
+
+    def subtract(self, earlier: SessionUsage) -> SessionUsage:
+        """Return the non-negative delta from a prior snapshot."""
+        delta = SessionUsage()
+        for key, current in self.records.items():
+            previous = earlier.records.get(key)
+            calls = current.calls - (previous.calls if previous else 0)
+            input_tokens = current.input_tokens - (previous.input_tokens if previous else 0)
+            output_tokens = current.output_tokens - (previous.output_tokens if previous else 0)
+            if calls <= 0 and input_tokens <= 0 and output_tokens <= 0:
+                continue
+            delta.records[key] = UsageRecord(
+                provider=current.provider,
+                model=current.model,
+                role=current.role,
+                calls=max(0, calls),
+                input_tokens=max(0, input_tokens),
+                output_tokens=max(0, output_tokens),
+                estimated=current.estimated or (previous.estimated if previous else False),
+            )
+        return delta
+
     def to_dict(self) -> dict[str, Any]:
         records = [record.to_dict() for record in self.records.values()]
         priced = [record for record in self.records.values() if record.cost_usd is not None]
@@ -240,35 +278,44 @@ class UsageLedger:
         correct for "what did this turn cost." The per-branch breakdown a UI
         wants instead is still available from `totals(child_id)` individually.
         """
-        merged = SessionUsage()
-        # `_act_parallel` appends a branch id whether or not it finished, so a
-        # caller-side accident aside, nothing here should assume the list is
-        # already unique. `dict.fromkeys` also drops the empty-string id a
-        # caller can pass without a truthiness check at every call site.
-        unique_ids = [session_id for session_id in dict.fromkeys(session_ids) if session_id]
         with self._lock:
-            for session_id in unique_ids:
-                usage = self._sessions.get(session_id)
-                if usage is None:
-                    continue
-                for key, record in usage.records.items():
-                    target = merged.records.get(key)
-                    if target is None:
-                        merged.records[key] = UsageRecord(
-                            provider=record.provider,
-                            model=record.model,
-                            role=record.role,
-                            calls=record.calls,
-                            input_tokens=record.input_tokens,
-                            output_tokens=record.output_tokens,
-                            estimated=record.estimated,
-                        )
-                    else:
-                        target.calls += record.calls
-                        target.input_tokens += record.input_tokens
-                        target.output_tokens += record.output_tokens
-                        target.estimated = target.estimated or record.estimated
-        return merged.to_dict()
+            return self._combined_locked(session_ids).to_dict()
+
+    def snapshot_many(self, session_ids: list[str]) -> SessionUsage:
+        """Capture aggregate usage before a turn begins without exposing live state."""
+        with self._lock:
+            return self._combined_locked(session_ids)
+
+    def totals_since(self, snapshot: SessionUsage, session_ids: list[str]) -> dict[str, Any]:
+        """Usage added by this turn, including all subagents it created."""
+        with self._lock:
+            return self._combined_locked(session_ids).subtract(snapshot).to_dict()
+
+    def _combined_locked(self, session_ids: list[str]) -> SessionUsage:
+        merged = SessionUsage()
+        unique_ids = [session_id for session_id in dict.fromkeys(session_ids) if session_id]
+        for session_id in unique_ids:
+            usage = self._sessions.get(session_id)
+            if usage is None:
+                continue
+            for key, record in usage.records.items():
+                target = merged.records.get(key)
+                if target is None:
+                    merged.records[key] = UsageRecord(
+                        provider=record.provider,
+                        model=record.model,
+                        role=record.role,
+                        calls=record.calls,
+                        input_tokens=record.input_tokens,
+                        output_tokens=record.output_tokens,
+                        estimated=record.estimated,
+                    )
+                else:
+                    target.calls += record.calls
+                    target.input_tokens += record.input_tokens
+                    target.output_tokens += record.output_tokens
+                    target.estimated = target.estimated or record.estimated
+        return merged
 
     def forget(self, session_id: str) -> None:
         with self._lock:
