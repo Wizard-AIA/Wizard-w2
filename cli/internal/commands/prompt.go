@@ -324,8 +324,11 @@ func promptArrowChoice(out io.Writer, file *os.File, label string, options []str
 	defer func() { _ = term.Restore(int(file.Fd()), state) }()
 
 	fmt.Fprintf(out, "\n%s (use ↑/↓, Enter):\n", label)
-	renderChoices(out, options, defaultIndex, false)
+	for i, option := range options {
+		fmt.Fprintf(out, "  %d) %s\n", i+1, option)
+	}
 	selected := defaultIndex
+	renderArrowSelection(out, options, selected, false)
 	for {
 		key, err := readTerminalKey(file)
 		if err != nil {
@@ -343,24 +346,26 @@ func promptArrowChoice(out io.Writer, file *os.File, label string, options []str
 			continue
 		}
 		selected = next
-		renderChoices(out, options, selected, true)
+		renderArrowSelection(out, options, selected, true)
 	}
 }
 
-func renderChoices(out io.Writer, options []string, selected int, redraw bool) {
+func renderArrowSelection(out io.Writer, options []string, selected int, redraw bool) {
 	if redraw {
-		fmt.Fprintf(out, "\033[%dA", len(options))
+		// PowerShell may pass arrow bytes through raw mode but not enable ANSI
+		// cursor-up/erase sequences. Keep redraws on one line so the menu never
+		// grows a duplicate option list on terminals without VT processing.
+		fmt.Fprint(out, "\r")
 	}
-	for i, option := range options {
-		marker := "  "
-		if i == selected {
-			marker = "› "
-		}
-		fmt.Fprintf(out, "\r\033[2K%s%s", marker, option)
-		if i < len(options)-1 {
-			fmt.Fprint(out, "\n")
+	selection := fmt.Sprintf("Selected: %s", options[selected])
+	// Padding clears leftovers when the previous option has a longer name.
+	width := 0
+	for _, option := range options {
+		if len(option) > width {
+			width = len(option)
 		}
 	}
+	fmt.Fprintf(out, "%-*s", len(selection)+width+10, selection)
 }
 
 func readTerminalKey(file *os.File) ([]byte, error) {

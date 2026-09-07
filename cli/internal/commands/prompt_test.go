@@ -92,3 +92,18 @@ func TestApplyTerminalKeyMovesAndAcceptsChoices(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderArrowSelectionRedrawsOnlyOneLine(t *testing.T) {
+	out := &bytes.Buffer{}
+	options := []string{"ollama", "gemini", "custom_gateway"}
+	renderArrowSelection(out, options, 1, false)
+	renderArrowSelection(out, options, 2, true)
+
+	text := out.String()
+	if strings.Contains(text, "\033[") {
+		t.Fatalf("selection redraw must not depend on ANSI cursor movement: %q", text)
+	}
+	if strings.Count(text, "\r") != 1 || !strings.Contains(text, "Selected: custom_gateway") {
+		t.Fatalf("expected one carriage-return redraw of the selected line, got %q", text)
+	}
+}
