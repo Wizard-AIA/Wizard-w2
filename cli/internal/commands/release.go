@@ -164,7 +164,7 @@ func validReleaseURL(raw string) error {
 	return nil
 }
 
-func downloadReleaseAsset(ctx context.Context, asset releaseAsset, destination string, limit int64) error {
+func downloadReleaseAsset(ctx context.Context, asset releaseAsset, destination string, limit int64) (err error) {
 	if err := validReleaseURL(asset.URL); err != nil {
 		return err
 	}
@@ -191,7 +191,11 @@ func downloadReleaseAsset(ctx context.Context, asset releaseAsset, destination s
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if closeErr := out.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("closing downloaded %s: %w", asset.Name, closeErr)
+		}
+	}()
 	n, err := io.Copy(out, io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return err
