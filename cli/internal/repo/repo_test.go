@@ -70,3 +70,31 @@ func TestRootFromRequiresBothMarkers(t *testing.T) {
 		t.Fatalf("got err=%v, want ErrNotFound with only backend/main.py present", err)
 	}
 }
+
+func TestRootFromExecutableFindsWindowsStyleInstalledLayout(t *testing.T) {
+	installDir := t.TempDir()
+	checkout := filepath.Join(installDir, "current")
+	if err := os.MkdirAll(filepath.Join(installDir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(checkout, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(checkout, "frontend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "backend", "main.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "frontend", "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := rootFromExecutable(filepath.Join(installDir, "bin", "wizard.exe"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != checkout {
+		t.Fatalf("got %q, want current checkout path %q", got, checkout)
+	}
+}

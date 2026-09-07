@@ -15,8 +15,9 @@ const (
 	minNodeMajor   = 20
 )
 
-// RunInit implements `wizard init`: environment check, .env setup, dependency
-// install, optional model pulls. Detect-and-instruct only -- it never
+// RunInit implements `wizard init`: optional interactive setup, environment
+// check, .env setup, dependency install, optional model pulls. Detect-and-
+// instruct only -- it never invokes a package manager on the user's behalf for
 // invokes a package manager on the user's behalf for Python/Node/Ollama
 // themselves, only for this project's own dependencies once the
 // prerequisites are confirmed present.
@@ -29,7 +30,10 @@ func RunInit(env *Env, args []string) int {
 	embeddingModel := fs.String("embedding-model", "", "Model to use for embeddings (e.g. nomic-embed-text, bge-m3, text-embedding-3-small).")
 	provider := fs.String("provider", "", "Pin API_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty leaves backend/.env's existing/default value.")
 	dataMode := fs.String("data-mode", "", "Pin DATA_MODE: local-only | hybrid | cloud-only. Empty leaves it to derive -- see backend/.env.example.")
+	interactive := fs.Bool("interactive", false, "Ask setup questions even when configuration flags are also supplied.")
+	nonInteractive := fs.Bool("non-interactive", false, "Never ask setup questions; use flags and backend/.env defaults.")
 	baseURL := fs.String("base-url", "", "Point --provider at a proxy: writes ANTHROPIC_BASE_URL/OPENAI_BASE_URL/GEMINI_BASE_URL/LMSTUDIO_BASE_URL/OLLAMA_BASE_URL depending on --provider.")
+	lmstudioKey := fs.String("lmstudio-key", "", "Write LMSTUDIO_API_KEY into backend/.env.")
 	anthropicKey := fs.String("anthropic-key", "", "Write ANTHROPIC_API_KEY into backend/.env.")
 	openaiKey := fs.String("openai-key", "", "Write OPENAI_API_KEY into backend/.env.")
 	geminiKey := fs.String("gemini-key", "", "Write GEMINI_API_KEY into backend/.env.")
@@ -40,8 +44,26 @@ func RunInit(env *Env, args []string) int {
 	}
 	explicit := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	modelsExplicit := explicit["manager-model"] || explicit["worker-model"]
-
+	if *interactive && *nonInteractive {
+		fmt.Fprintln(env.Err, "--interactive and --non-interactive cannot be used together")
+		return 2
+	}
+	hasConfigFlags := false
+	for _, name := range []string{
+		"provider", "data-mode", "manager-model", "worker-model", "embedding-provider",
+		"embedding-model", "base-url", "lmstudio-key", "anthropic-key", "openai-key",
+		"gemini-key", "gateway-url", "gateway-key",
+	} {
+		hasConfigFlags = hasConfigFlags || explicit[name]
+	}
+	settings := initSettings{providerConfig: providerConfig{
+		provider: *provider, dataMode: *dataMode, baseURL: *baseURL,
+		embeddingProvider: *embeddingProvider, embeddingModel: *embeddingModel,
+		lmstudioKey: *lmstudioKey, anthropicKey: *anthropicKey,
+		openaiKey: *openaiKey, geminiKey: *geminiKey,
+		gatewayURL: *gatewayURL, gatewayKey: *gatewayKey,
+	}, managerModel: *managerModel, workerModel: *workerModel,
+		managerModelFlagSet: explicit["manager-model"], workerModelFlagSet: explicit["worker-model"]}
 	if *provider != "" && !validProviders[*provider] {
 		fmt.Fprintf(env.Err, "invalid --provider %q; must be one of: ollama, lmstudio, anthropic, openai, gemini, custom_gateway\n", *provider)
 		return 2
@@ -50,6 +72,35 @@ func RunInit(env *Env, args []string) int {
 		fmt.Fprintf(env.Err, "invalid --data-mode %q; must be one of: local-only, hybrid, cloud-only\n", *dataMode)
 		return 2
 	}
+
+	// --pull-models is an operational request, not a request to re-open the
+	// setup questionnaire. Use --interactive when both behaviors are wanted.
+	if shouldPromptInit(env.In, *interactive, *nonInteractive, hasConfigFlags || *pullModels) {
+		fmt.Fprintln(env.Out, "\nWizard setup (press Enter to keep the shown default; use --non-interactive for automation)")
+		if err := promptInitSettings(env, &settings); err != nil {
+			fmt.Fprintf(env.Err, "Interactive setup cancelled: %v\n", err)
+			return 2
+		}
+	}
+	*provider = settings.provider
+	*dataMode = settings.dataMode
+	*baseURL = settings.baseURL
+	*embeddingProvider = settings.embeddingProvider
+	*embeddingModel = settings.embeddingModel
+	*lmstudioKey = settings.lmstudioKey
+	*anthropicKey = settings.anthropicKey
+	*openaiKey = settings.openaiKey
+	*geminiKey = settings.geminiKey
+	*gatewayURL = settings.gatewayURL
+	*gatewayKey = settings.gatewayKey
+	modelsExplicit := explicit["manager-model"] || explicit["worker-model"] || settings.managerModelSet || settings.workerModelSet
+	if settings.managerModelSet {
+		*managerModel = settings.managerModel
+	}
+	if settings.workerModelSet {
+		*workerModel = settings.workerModel
+	}
+
 	// A pure-cloud setup (a cloud provider and not also hybrid) has no local
 	// weights to size -- RAM-based manager/worker fitting below is Ollama-tag
 	// arithmetic (modelfit.go) that means nothing for a model named on
@@ -106,15 +157,33 @@ func RunInit(env *Env, args []string) int {
 		return 1
 	}
 
-	cfg := providerConfig{
-		provider: *provider, dataMode: *dataMode, baseURL: *baseURL,
-		embeddingProvider: *embeddingProvider, embeddingModel: *embeddingModel,
-		anthropicKey: *anthropicKey, openaiKey: *openaiKey, geminiKey: *geminiKey,
-		gatewayURL: *gatewayURL, gatewayKey: *gatewayKey,
-	}
-	if err := applyProviderConfig(env, cfg); err != nil {
+	if err := applyProviderConfig(env, settings.providerConfig); err != nil {
 		fmt.Fprintf(env.Err, "Could not write provider settings to backend/.env: %v\n", err)
 		return 1
+	}
+	if settings.managerModelSet {
+		if err := setEnvValue(env.BackendEnvPath(), "MODEL_NAME", settings.managerModel); err != nil {
+			fmt.Fprintf(env.Err, "Could not write model settings to backend/.env: %v\n", err)
+			return 1
+		}
+	}
+	if settings.workerModelSet {
+		if err := setEnvValue(env.BackendEnvPath(), "WORKER_MODEL_NAME", settings.workerModel); err != nil {
+			fmt.Fprintf(env.Err, "Could not write model settings to backend/.env: %v\n", err)
+			return 1
+		}
+	}
+	if settings.dataModeClear {
+		if err := setEnvValue(env.BackendEnvPath(), "DATA_MODE", ""); err != nil {
+			fmt.Fprintf(env.Err, "Could not clear data mode in backend/.env: %v\n", err)
+			return 1
+		}
+	}
+	if settings.embeddingProviderClear {
+		if err := setEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER", ""); err != nil {
+			fmt.Fprintf(env.Err, "Could not clear embedding provider in backend/.env: %v\n", err)
+			return 1
+		}
 	}
 	finalProvider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
 	warnMissingCloudConfig(env, finalProvider)

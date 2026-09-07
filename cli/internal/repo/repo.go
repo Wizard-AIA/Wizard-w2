@@ -42,14 +42,12 @@ func Root() (string, error) {
 		}
 	}
 
-	// 3. Check executable binary directory and its ancestors (e.g. Homebrew Cellar / opt)
+	// 3. Check the executable's checkout and the installed-package layout
+	// (e.g. Homebrew Cellar or the standalone installer). Windows keeps a copy
+	// of the binary in <install>/bin while <install>/current points at the
+	// checkout, so the checkout is not an ancestor of the executable there.
 	if exe, err := os.Executable(); err == nil {
-		if realExe, err := filepath.EvalSymlinks(exe); err == nil {
-			if root, err := RootFrom(filepath.Dir(realExe)); err == nil {
-				return root, nil
-			}
-		}
-		if root, err := RootFrom(filepath.Dir(exe)); err == nil {
+		if root, err := rootFromExecutable(exe); err == nil {
 			return root, nil
 		}
 	}
@@ -72,6 +70,26 @@ func Root() (string, error) {
 		}
 	}
 
+	return "", ErrNotFound
+}
+
+func rootFromExecutable(exe string) (string, error) {
+	dirs := []string{filepath.Dir(exe)}
+	if realExe, err := filepath.EvalSymlinks(exe); err == nil {
+		dirs = append([]string{filepath.Dir(realExe)}, dirs...)
+	}
+
+	for _, dir := range dirs {
+		if root, err := RootFrom(dir); err == nil {
+			return root, nil
+		}
+		// The Linux/macOS installer and Windows installer both maintain this
+		// stable pointer beside bin/: <install>/current -> <checkout>.
+		current := filepath.Join(filepath.Dir(dir), "current")
+		if root, err := RootFrom(current); err == nil {
+			return root, nil
+		}
+	}
 	return "", ErrNotFound
 }
 

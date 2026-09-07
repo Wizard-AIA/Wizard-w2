@@ -20,6 +20,7 @@ type Env struct {
 	RepoRoot    string
 	BackendDir  string
 	FrontendDir string
+	In          io.Reader
 
 	ConfigDir string
 	RunDir    string
@@ -60,6 +61,7 @@ func NewEnv() (*Env, error) {
 		RepoRoot:    root,
 		BackendDir:  repo.BackendDir(root),
 		FrontendDir: repo.FrontendDir(root),
+		In:          os.Stdin,
 		ConfigDir:   configDir,
 		RunDir:      runDir,
 		LogsDir:     logsDir,

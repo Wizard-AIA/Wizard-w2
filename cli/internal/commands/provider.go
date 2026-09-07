@@ -29,6 +29,8 @@ type providerConfig struct {
 	baseURL           string
 	embeddingProvider string
 	embeddingModel    string
+	dataSchemaOnly    string
+	lmstudioKey       string
 	anthropicKey      string
 	openaiKey         string
 	geminiKey         string
@@ -48,6 +50,8 @@ func applyProviderConfig(env *Env, cfg providerConfig) error {
 		{"DATA_MODE", cfg.dataMode},
 		{"EMBEDDING_PROVIDER", cfg.embeddingProvider},
 		{"EMBEDDING_REMOTE_MODEL", cfg.embeddingModel},
+		{"DATA_SCHEMA_ONLY", cfg.dataSchemaOnly},
+		{"LMSTUDIO_API_KEY", cfg.lmstudioKey},
 		{"ANTHROPIC_API_KEY", cfg.anthropicKey},
 		{"OPENAI_API_KEY", cfg.openaiKey},
 		{"GEMINI_API_KEY", cfg.geminiKey},

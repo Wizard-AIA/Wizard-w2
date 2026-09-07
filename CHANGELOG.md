@@ -4,6 +4,17 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.9] - 2026-09-07
+
+### Added
+- `wizard init` now offers an interactive first-run setup for provider, data
+  mode, privacy, models, embeddings, and relevant API credentials. Use
+  `--non-interactive` for automation or `--interactive` to force the wizard.
+- Added guarded `wizard delete` cleanup for Wizard user data and local
+  configuration, with `--yes` and `--keep-env` options.
+- Linux and Windows installers now persist the bundled checkout location, so
+  installed `wizard init` and `wizard start` work from any directory.
+
 ## [v1.0.8] - 2026-09-06
 
 ### Fixed
@@ -181,7 +192,7 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
-[Unreleased]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.6...HEAD
+[v1.0.9]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.8...v1.0.9
 [v1.0.6]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.5...v1.0.6
 [v1.0.5]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.4...v1.0.5
 [v2.0.0-w2-planning]: https://github.com/Wizard-AIA/Wizard-w2/compare/v2.2.1...v2.0.0-w2-planning

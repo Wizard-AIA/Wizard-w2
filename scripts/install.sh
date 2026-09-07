@@ -68,7 +68,7 @@ if [ -z "${TAG}" ]; then
     if command -v curl >/dev/null 2>&1; then
         LATEST_TAG=$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' || true)
     fi
-    TAG="${LATEST_TAG:-v1.0.8}"
+    TAG="${LATEST_TAG:-v1.0.9}"
 fi
 
 # Ensure tag has 'v' prefix
@@ -140,14 +140,29 @@ else
     exit 1
 fi
 
+# Persist the checkout location as well as PATH. This is needed on platforms
+# where the executable is copied or symlink resolution is unavailable, and it
+# lets `wizard init`/`wizard start` locate the bundled backend from any cwd.
+if [ -n "${PACKAGE_DIR:-}" ] && [ -d "${PACKAGE_DIR}" ]; then
+    WIZARD_ROOT="${PACKAGE_DIR}"
+else
+    WIZARD_ROOT="$(dirname "$(dirname "${WIZARD_SRC_BIN}")")"
+fi
+export WIZARD_ROOT
+
 # 6. Configure Shell PATH
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
+ROOT_LINE="export WIZARD_ROOT=\"${WIZARD_ROOT}\""
 UPDATED_SHELL=""
 
 for RC_FILE in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     if [ -f "${RC_FILE}" ]; then
-        if ! grep -q "${BIN_DIR}" "${RC_FILE}" 2>/dev/null; then
+        if ! grep -Fqx "${PATH_LINE}" "${RC_FILE}" 2>/dev/null; then
             echo -e "\n# Wizard CLI\n${PATH_LINE}" >> "${RC_FILE}"
+            UPDATED_SHELL="${RC_FILE}"
+        fi
+        if ! grep -Fqx "${ROOT_LINE}" "${RC_FILE}" 2>/dev/null; then
+            echo "${ROOT_LINE}" >> "${RC_FILE}"
             UPDATED_SHELL="${RC_FILE}"
         fi
         break
@@ -157,8 +172,12 @@ done
 # Fish shell support
 FISH_CONF="$HOME/.config/fish/config.fish"
 if [ -d "$HOME/.config/fish" ]; then
-    if [ -f "${FISH_CONF}" ] && ! grep -q "${BIN_DIR}" "${FISH_CONF}" 2>/dev/null; then
+    if [ -f "${FISH_CONF}" ] && ! grep -Fqx "fish_add_path ${BIN_DIR}" "${FISH_CONF}" 2>/dev/null; then
         echo -e "\n# Wizard CLI\nfish_add_path ${BIN_DIR}" >> "${FISH_CONF}"
+        UPDATED_SHELL="${FISH_CONF}"
+    fi
+    if [ -f "${FISH_CONF}" ] && ! grep -Fqx "set -gx WIZARD_ROOT \"${WIZARD_ROOT}\"" "${FISH_CONF}" 2>/dev/null; then
+        echo "set -gx WIZARD_ROOT \"${WIZARD_ROOT}\"" >> "${FISH_CONF}"
         UPDATED_SHELL="${FISH_CONF}"
     fi
 fi
@@ -170,7 +189,7 @@ if [ -n "${UPDATED_SHELL}" ]; then
     echo -e "${DIM}  Added to PATH in ${UPDATED_SHELL}${RESET}"
 fi
 
-echo -e "\n${BOLD}Next steps:${RESET}"
+echo -e "\n${BOLD}Next steps (available from any directory):${RESET}"
 if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
     echo -e "  1. Reload your shell:     ${GREEN}export PATH=\"${BIN_DIR}:\$PATH\"${RESET} (or restart terminal)"
 fi

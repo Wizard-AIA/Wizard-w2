@@ -23,6 +23,15 @@ brew tap Wizard-AIA/wizard && brew install wizard
 wizard init && wizard start
 ```
 
+From a terminal, `wizard init` asks for the provider, data mode, models, and
+the relevant API key when needed. Press Enter to keep defaults; use
+`wizard init --non-interactive` for automation.
+
+To remove Wizard's user data and local configuration while keeping the
+checkout and CLI, run `wizard delete` and confirm. Use `wizard delete --yes`
+for a confirmed non-interactive deletion, or `--keep-env` to preserve
+`backend/.env`.
+
 ### 📦 Option B: Standalone Prebuilt Binary
 **[Download latest release package](https://github.com/Wizard-AIA/Wizard-w2/releases/latest)** for macOS, Linux, or Windows, extract it, and run:
 

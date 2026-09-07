@@ -42,12 +42,12 @@ if (-not $tag) {
             $tag = $releaseJson.tag_name
         }
     } catch {
-        Write-WizardLog "Could not contact GitHub API, falling back to release baseline v1.0.8" "Yellow"
-        $tag = "v1.0.8"
+        Write-WizardLog "Could not contact GitHub API, falling back to release baseline v1.0.9" "Yellow"
+        $tag = "v1.0.9"
     }
 }
 
-if (-not $tag) { $tag = "v1.0.8" }
+if (-not $tag) { $tag = "v1.0.9" }
 if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
 
 Write-WizardLog "Target release: $tag" "Green"
@@ -117,7 +117,18 @@ if (-not $wizardSrc -or -not (Test-Path $wizardSrc)) {
 $wizardExe = Join-Path $binDir "wizard.exe"
 if ($wizardSrc -and (Test-Path $wizardSrc)) {
     Copy-Item -Path $wizardSrc -Destination $wizardExe -Force
+} else {
+    throw "Failed to locate wizard.exe in the extracted release."
 }
+
+# The executable is copied to bin\ while the checkout is a sibling package
+# directory. Persist the checkout root so `wizard init` and `wizard start` can
+# locate backend/ and frontend/ from any working directory.
+if (-not $pkgDir -or -not (Test-Path $pkgDir)) {
+    $pkgDir = Split-Path (Split-Path $wizardSrc -Parent) -Parent
+}
+[Environment]::SetEnvironmentVariable("WIZARD_ROOT", $pkgDir, "User")
+$env:WIZARD_ROOT = $pkgDir
 
 # 6. Add to User PATH persistently
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -140,7 +151,7 @@ if ($needsPathUpdate) {
 Write-Host ""
 Write-Host "[wizard-install] [OK] Wizard $tag installed successfully to $wizardExe!" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:" -ForegroundColor White
+Write-Host "Next steps (available from any directory):" -ForegroundColor White
 Write-Host "  1. Initialize workspace: " -NoNewline; Write-Host "wizard init" -ForegroundColor Green
 Write-Host "  2. Launch agent:         " -NoNewline; Write-Host "wizard start" -ForegroundColor Green
 Write-Host ""

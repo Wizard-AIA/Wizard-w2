@@ -68,15 +68,17 @@ WIZARD_CLI_SELFTEST=1 go test ./internal/daemon/... -run TestSupervisor -v
 
 ## Subcommands
 
-Run from inside a Wizard checkout (or any subdirectory of one) — `wizard`
-locates the checkout root by walking up looking for `backend/main.py` +
-`frontend/package.json`, the way `git`/`pnpm` locate their own project root.
+Installed release binaries work from any directory — the installers persist
+the bundled checkout in `WIZARD_ROOT`, and the CLI also resolves the stable
+`current` package link. When running a source-built binary, use it from inside
+a Wizard checkout (or set `WIZARD_ROOT` yourself).
 
 | Command | What it does |
 |---|---|
-| `wizard init` | Checks Python 3.12+/Node 20+/uv/pnpm (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama/uv/pnpm themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. `--provider`/`--data-mode`/key flags configure a local, hybrid or fully cloud setup in the same run — see [Local, hybrid and cloud setups](#local-hybrid-and-cloud-setups) below. |
+| `wizard init` | In a terminal, a bare run interactively configures provider, data mode, schema-only privacy, manager/worker models, embeddings, and the relevant endpoint/API key; press Enter to keep defaults. It then checks Python 3.12+/Node 20+/uv/pnpm (and optional Ollama) are on PATH; copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Detects and instructs — it never invokes a package manager to install Python/Node/Ollama/uv/pnpm themselves. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. `--provider`/`--data-mode`/key flags configure a local, hybrid or fully cloud setup in the same run — see [Local, hybrid and cloud setups](#local-hybrid-and-cloud-setups) below. `--non-interactive` disables prompts for automation; `--interactive` forces them. |
 | `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits here in the foreground until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` override the 8000/3000 defaults; `--no-browser` skips opening one. |
 | `wizard stop` | Idempotent. Asks the supervisor to stop and waits for it to clean up; falls back to a forced kill of the recorded pids if it doesn't. |
+| `wizard delete` | Stops Wizard and deletes its user-level config, credentials, connections, skills, logs, and managed venv, plus `backend/.env`. The checkout and CLI remain installed. Prompts for confirmation; use `--yes` for automation or `--keep-env` to preserve the checkout's `.env`. |
 | `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `API_PROVIDER`/`DATA_MODE`, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
@@ -90,6 +92,15 @@ Wizard is local-first, not local-only: `wizard init` sets up a plain Ollama
 install by default, but the same command also configures a hybrid or fully
 cloud install in one run, rather than leaving that to a hand-edit of
 `backend/.env` afterward.
+
+When run without configuration flags from a terminal, `wizard init` starts a
+setup questionnaire. It covers the settings most users need on first launch:
+provider, data mode, schema-only cloud sharing, manager/worker models,
+embedding provider/model, and the selected provider's API key and endpoint.
+Existing values are shown as defaults and are kept by pressing Enter. Use
+`wizard init --non-interactive` in scripts; the existing flags remain available
+for one-command configuration, and `--interactive` explicitly forces the
+questionnaire.
 
 ```bash
 # Local (default) -- nothing to add.

@@ -15,9 +15,10 @@ import (
 const usage = `wizard - manage the Wizard backend and frontend as a background service
 
 Usage:
-  wizard init     Check prerequisites, set up backend/.env, install dependencies.
+  wizard init     Configure setup, check prerequisites, and install dependencies.
   wizard start    Launch the backend and frontend in the background.
   wizard stop     Stop them.
+  wizard delete   Stop Wizard and delete its user-level data and configuration.
   wizard status   Show what's running (alias: doctor).
   wizard doctor   Same as status.
   wizard attach   Follow the backend/frontend logs live.
@@ -63,6 +64,8 @@ func run(args []string) int {
 		return commands.RunStart(env, rest)
 	case "stop":
 		return commands.RunStop(env, rest)
+	case "delete":
+		return commands.RunDelete(env, rest)
 	case "status", "doctor":
 		return commands.RunStatus(env, rest)
 	case "attach":
