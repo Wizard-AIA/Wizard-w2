@@ -210,8 +210,12 @@ def test_retrieval_metadata_and_page_filters_limit_the_citation_scope() -> None:
     rules = ContextDocument(name="rules.md", text="The approved refund is settled monthly.", source_format="md")
     rules.chunks.extend(
         [
-            DocumentChunk(document="rules.md", index=0, text="The approved refund is settled monthly.", page_start=1, page_end=1),
-            DocumentChunk(document="rules.md", index=1, text="The approved refund is settled monthly.", page_start=2, page_end=2),
+            DocumentChunk(
+                document="rules.md", index=0, text="The approved refund is settled monthly.", page_start=1, page_end=1
+            ),
+            DocumentChunk(
+                document="rules.md", index=1, text="The approved refund is settled monthly.", page_start=2, page_end=2
+            ),
         ]
     )
     notes = ContextDocument(name="notes.txt", text="The approved refund is settled monthly.", source_format="txt")

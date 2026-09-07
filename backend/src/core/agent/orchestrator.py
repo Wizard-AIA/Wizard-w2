@@ -1266,9 +1266,7 @@ class AnalysisOrchestrator:
             chars=len(summary),
         )
 
-    async def _consult_skills(
-        self, state: RunState, session: Session, emitter: Emitter | None, query: str = ""
-    ) -> str:
+    async def _consult_skills(self, state: RunState, session: Session, emitter: Emitter | None, query: str = "") -> str:
         """Ranks the installed skills against the question and reports what matched.
 
         Returns the rendered prompt block, and records every match on

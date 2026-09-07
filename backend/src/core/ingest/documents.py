@@ -77,7 +77,11 @@ class Citation:
     def label(self) -> str:
         page = ""
         if self.page_start is not None:
-            page = f", p. {self.page_start}" if self.page_start == self.page_end else f", pp. {self.page_start}-{self.page_end}"
+            page = (
+                f", p. {self.page_start}"
+                if self.page_start == self.page_end
+                else f", pp. {self.page_start}-{self.page_end}"
+            )
         return f"{self.document}{page} (chunk {self.chunk_index + 1})"
 
     def to_dict(self) -> dict[str, Any]:
@@ -462,7 +466,9 @@ def search_documents(
     selected = fused[: max(top_k * 3, top_k)]
     reranked = False
     if settings.RAG_RERANK_ENABLED and selected:
-        rerank_results = get_reranker().rerank(query, [chunks[int(index)][1].text for index, _ in selected], top_k=top_k)
+        rerank_results = get_reranker().rerank(
+            query, [chunks[int(index)][1].text for index, _ in selected], top_k=top_k
+        )
         positions = [(selected[result.original_index][0], result.score) for result in rerank_results]
         reranked = True
     else:

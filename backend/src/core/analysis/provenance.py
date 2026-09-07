@@ -18,7 +18,17 @@ from typing import Any, Literal
 
 
 NodeKind = Literal[
-    "question", "objective", "hypothesis", "dataset", "source", "step", "code", "execution", "result", "validation", "claim"
+    "question",
+    "objective",
+    "hypothesis",
+    "dataset",
+    "source",
+    "step",
+    "code",
+    "execution",
+    "result",
+    "validation",
+    "claim",
 ]
 
 #: Edges read source -> target, e.g. ("code-0", "execution-0", "produced").

@@ -149,6 +149,7 @@ async def record_http_metrics(request: Request, call_next):
         endpoint = getattr(route, "path", None) or "unmatched"
         metrics.record_request(request.method, endpoint, status, time.monotonic() - started)
 
+
 try:
     from src.core.infra.telemetry import setup_telemetry
 
