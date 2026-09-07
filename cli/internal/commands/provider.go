@@ -15,6 +15,17 @@ var cloudProviders = map[string]bool{
 	"anthropic": true, "openai": true, "gemini": true, "custom_gateway": true,
 }
 
+// embeddingProviders mirrors the backend embedding transport. Anthropic's
+// Messages API does not provide an embeddings endpoint, so it must not be
+// offered as EMBEDDING_PROVIDER even though it is a valid chat provider.
+var embeddingProviders = map[string]bool{
+	"ollama": true, "lmstudio": true, "openai": true, "gemini": true, "custom_gateway": true,
+}
+
+func embeddingProviderOptions() []string {
+	return []string{"auto", "ollama", "lmstudio", "openai", "gemini", "custom_gateway"}
+}
+
 var validDataModes = map[string]bool{
 	"local-only": true, "hybrid": true, "cloud-only": true,
 }

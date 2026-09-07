@@ -26,7 +26,7 @@ func RunInit(env *Env, args []string) int {
 	noInstallPrerequisites := fs.Bool("no-install-prerequisites", false, "Only check prerequisites; never install missing tools.")
 	managerModel := fs.String("manager-model", "qwen3:8b", "Model to pull for the manager role with --pull-models.")
 	workerModel := fs.String("worker-model", "qwen2.5-coder:7b", "Model to pull for the worker role with --pull-models.")
-	embeddingProvider := fs.String("embedding-provider", "", "Pin EMBEDDING_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty follows --provider.")
+	embeddingProvider := fs.String("embedding-provider", "", "Pin EMBEDDING_PROVIDER: ollama | lmstudio | openai | gemini | custom_gateway. Empty follows --provider; Anthropic does not support embeddings.")
 	embeddingModel := fs.String("embedding-model", "", "Model to use for embeddings (e.g. nomic-embed-text, bge-m3, text-embedding-3-small).")
 	provider := fs.String("provider", "", "Pin API_PROVIDER: ollama | lmstudio | anthropic | openai | gemini | custom_gateway. Empty leaves backend/.env's existing/default value.")
 	dataMode := fs.String("data-mode", "", "Pin DATA_MODE: local-only | hybrid | cloud-only. Empty leaves it to derive -- see backend/.env.example.")
@@ -74,6 +74,10 @@ func RunInit(env *Env, args []string) int {
 	}
 	if *dataMode != "" && !validDataModes[*dataMode] {
 		fmt.Fprintf(env.Err, "invalid --data-mode %q; must be one of: local-only, hybrid, cloud-only\n", *dataMode)
+		return 2
+	}
+	if *embeddingProvider != "" && !embeddingProviders[*embeddingProvider] {
+		fmt.Fprintf(env.Err, "invalid --embedding-provider %q; must be one of: ollama, lmstudio, openai, gemini, custom_gateway (Anthropic does not provide embeddings)\n", *embeddingProvider)
 		return 2
 	}
 

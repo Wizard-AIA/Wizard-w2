@@ -36,3 +36,24 @@ func TestRequiredPrerequisitesReturnsOnlyFailedChecks(t *testing.T) {
 		t.Fatalf("requiredPrerequisites returned %#v, want Node.js and pnpm", missing)
 	}
 }
+
+func TestEmbeddingProviderOptionsExcludeUnsupportedCloudProviders(t *testing.T) {
+	options := embeddingProviderOptions()
+	for _, option := range options {
+		if option == "anthropic" {
+			t.Fatal("Anthropic must not be offered as an embedding provider")
+		}
+	}
+	for _, option := range []string{"auto", "ollama", "lmstudio", "openai", "gemini", "custom_gateway"} {
+		found := false
+		for _, candidate := range options {
+			if candidate == option {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("embedding provider option %q is missing from %v", option, options)
+		}
+	}
+}

@@ -129,9 +129,11 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if embeddingDefault == "" {
 		embeddingDefault = "auto"
 	}
-	embeddingProvider, err := promptChoiceForInput(env.Out, input, reader, "Embedding provider", []string{
-		"auto", "ollama", "lmstudio", "anthropic", "openai", "gemini", "custom_gateway",
-	}, embeddingDefault)
+	if embeddingDefault != "auto" && !embeddingProviders[embeddingDefault] {
+		fmt.Fprintf(env.Out, "\nSaved embedding provider %q does not support embeddings; defaulting to auto.\n", embeddingDefault)
+		embeddingDefault = "auto"
+	}
+	embeddingProvider, err := promptChoiceForInput(env.Out, input, reader, "Embedding provider", embeddingProviderOptions(), embeddingDefault)
 	if err != nil {
 		return err
 	}
