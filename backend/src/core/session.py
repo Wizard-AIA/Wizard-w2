@@ -38,7 +38,7 @@ from src.core.data_mode import DataPolicy, normalize as normalize_data_mode
 from src.core.database import db_mgr
 from src.core.execution import CodeExecutor, isolation_for
 from src.core.infra.session_bus import session_bus
-from src.core.ingest.documents import ContextDocument, search_documents as rank_document_chunks
+from src.core.ingest.documents import ContextDocument, DocumentHit, search_documents as rank_document_chunks
 from src.core.ingest.loader import safe_write_feather
 from src.core.llm.usage import usage_ledger
 from src.core.permissions import PermissionState
@@ -434,7 +434,7 @@ class Session:
         with self._lock:
             return self.documents.pop(name, None) is not None
 
-    def search_documents(self, query: str, limit: int | None = None) -> list[tuple[str, str]]:
+    def search_documents(self, query: str, limit: int | None = None) -> list[DocumentHit]:
         """Passages from the attached references that bear on ``query``."""
         if not self.documents:
             return []

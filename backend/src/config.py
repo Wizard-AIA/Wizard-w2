@@ -633,6 +633,9 @@ class Settings(BaseSettings):
     RAG_ENABLED: bool = True
     RAG_TOP_K: int = 4
     RAG_MIN_SIMILARITY: float = 0.35
+    #: Cross-encoder reranking is optional because it increases local memory and
+    #: startup cost. Retrieval metadata always reports whether it ran.
+    RAG_RERANK_ENABLED: bool = False
     SEMANTIC_CACHE_THRESHOLD: float = 0.92
     TRAJECTORY_MIN_SIMILARITY: float = 0.90
 

@@ -1303,9 +1303,13 @@ class AnalysisOrchestrator:
         query = decision.goal or state.instruction
         passages = await asyncio.to_thread(session.search_documents, query, budget.doc_chunks)
 
-        sections = [f"From `{name}`:\n{text}" for name, text in passages]
-        for _, text in passages:
-            state.investigation.note_finding(text.strip().splitlines()[0][:200])
+        sections = [f"From `{hit.citation.label()}`:\n{hit.text}" for hit in passages]
+        for hit in passages:
+            state.investigation.note_finding(hit.text.strip().splitlines()[0][:200])
+            source_id = state.analysis.evidence.add_node(
+                "source", hit.citation.label(), **hit.citation.to_dict(), score=hit.score, methods=list(hit.methods)
+            )
+            state.analysis.evidence_refs.append(source_id)
 
         skill_matches = []
         if settings.SKILLS_ENABLED:

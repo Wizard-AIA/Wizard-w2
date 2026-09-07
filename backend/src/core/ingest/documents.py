@@ -24,15 +24,19 @@ for the dependency and an install without it still starts.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
 from src.config import settings
 from src.core.embeddings import embedding_service
+from src.core.rag.hybrid_search import reciprocal_rank_fusion
+from src.core.rag.reranker import get_reranker
+from src.core.rag.retriever import lexical_overlap, tokenize
 from src.utils.logging import logger
 
 
@@ -57,6 +61,36 @@ class DocumentExtractionError(RuntimeError):
     """Raised when a supported format is present but its parser is not installed."""
 
 
+@dataclass(frozen=True)
+class Citation:
+    """A stable, session-scoped locator for a retrieved source passage."""
+
+    document: str
+    content_hash: str
+    chunk_index: int
+    char_start: int
+    char_end: int
+    page_start: int | None = None
+    page_end: int | None = None
+
+    def label(self) -> str:
+        page = ""
+        if self.page_start is not None:
+            page = f", p. {self.page_start}" if self.page_start == self.page_end else f", pp. {self.page_start}-{self.page_end}"
+        return f"{self.document}{page} (chunk {self.chunk_index + 1})"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "document": self.document,
+            "content_hash": self.content_hash,
+            "chunk_index": self.chunk_index,
+            "char_start": self.char_start,
+            "char_end": self.char_end,
+            "page_start": self.page_start,
+            "page_end": self.page_end,
+        }
+
+
 @dataclass
 class DocumentChunk:
     """One retrievable passage."""
@@ -65,9 +99,32 @@ class DocumentChunk:
     index: int
     text: str
     embedding: list[float] | None = None
+    char_start: int = 0
+    char_end: int = 0
+    page_start: int | None = None
+    page_end: int | None = None
+
+    def __post_init__(self) -> None:
+        """Give manually-created chunks a useful source span as well.
+
+        A few integrations construct chunks directly instead of using
+        :func:`load_document`.  Treating an omitted end offset as the extent of
+        that passage preserves a valid citation for those callers without
+        changing their constructor contract.
+        """
+        if self.char_end == 0 and self.text:
+            self.char_end = self.char_start + len(self.text)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"document": self.document, "index": self.index, "text": self.text}
+        return {
+            "document": self.document,
+            "index": self.index,
+            "text": self.text,
+            "char_start": self.char_start,
+            "char_end": self.char_end,
+            "page_start": self.page_start,
+            "page_end": self.page_end,
+        }
 
 
 @dataclass
@@ -78,6 +135,11 @@ class ContextDocument:
     text: str
     chunks: list[DocumentChunk] = field(default_factory=list)
     source_format: str = "txt"
+    content_hash: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.content_hash:
+            self.content_hash = hashlib.sha256(self.text.encode("utf-8")).hexdigest()
 
     @property
     def char_count(self) -> int:
@@ -87,6 +149,7 @@ class ContextDocument:
         head = self.text.strip().splitlines()
         return {
             "name": self.name,
+            "content_hash": self.content_hash,
             "chars": self.char_count,
             "chunks": len(self.chunks),
             "source_format": self.source_format,
@@ -98,11 +161,17 @@ class ContextDocument:
 # Extraction
 # ---------------------------------------------------------------------- #
 def _extract_text(path: Path, suffix: str) -> str:
+    """Compatibility wrapper for callers that need plain extracted text."""
+    return _extract_document(path, suffix)[0]
+
+
+def _extract_document(path: Path, suffix: str) -> tuple[str, list[tuple[int, int, int]]]:
+    """Return text plus ``(page, start, end)`` ranges in that extracted text."""
     if suffix in TEXT_LIKE:
-        return _read_text(path)
+        return _read_text(path), []
 
     if suffix in HTML_LIKE:
-        return HTML_TAG.sub(" ", _read_text(path))
+        return HTML_TAG.sub(" ", _read_text(path)), []
 
     if suffix in PDF_LIKE:
         try:
@@ -126,8 +195,10 @@ def _extract_text(path: Path, suffix: str) -> str:
             )
 
         parts: list[str] = []
+        page_ranges: list[tuple[int, int, int]] = []
         total_chars = 0
-        for page in reader.pages:
+        offset = 0
+        for page_number, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
             total_chars += len(text)
             if total_chars > settings.CONTEXT_DOC_MAX_EXTRACTED_CHARS:
@@ -136,7 +207,9 @@ def _extract_text(path: Path, suffix: str) -> str:
                     f"(over {settings.CONTEXT_DOC_MAX_EXTRACTED_CHARS:,} characters)."
                 )
             parts.append(text)
-        return "\n\n".join(parts)
+            page_ranges.append((page_number, offset, offset + len(text)))
+            offset += len(text) + 2
+        return "\n\n".join(parts), page_ranges
 
     if suffix in DOCX_LIKE:
         try:
@@ -146,7 +219,7 @@ def _extract_text(path: Path, suffix: str) -> str:
                 "Reading .docx needs the `python-docx` package. Install it, or upload the document as Markdown or text."
             ) from exc
         document = docx.Document(str(path))
-        return "\n\n".join(paragraph.text for paragraph in document.paragraphs)
+        return "\n\n".join(paragraph.text for paragraph in document.paragraphs), []
 
     raise UnsupportedDocumentError(f"Unsupported document type '{suffix}'.")
 
@@ -168,6 +241,10 @@ def _read_text(path: Path) -> str:
 # ---------------------------------------------------------------------- #
 # Chunking
 # ---------------------------------------------------------------------- #
+def _normalise_text(text: str) -> str:
+    return WHITESPACE.sub(" ", (text or "").replace("\r\n", "\n")).strip()
+
+
 def chunk_text(text: str, size: int | None = None, overlap: int | None = None) -> list[str]:
     """Splits on paragraph boundaries, packing up to ``size`` characters.
 
@@ -178,7 +255,7 @@ def chunk_text(text: str, size: int | None = None, overlap: int | None = None) -
     limit = size or settings.CONTEXT_CHUNK_CHARS
     lap = overlap if overlap is not None else settings.CONTEXT_CHUNK_OVERLAP
 
-    normalised = WHITESPACE.sub(" ", (text or "").replace("\r\n", "\n")).strip()
+    normalised = _normalise_text(text)
     if not normalised:
         return []
 
@@ -251,12 +328,14 @@ def load_document(path: Path, name: str) -> ContextDocument:
             f"Unsupported document type '{suffix or name}'. Supported: {', '.join(supported_document_extensions())}"
         )
 
-    text = _extract_text(path, suffix)
+    text, page_ranges = _extract_document(path, suffix)
     if not text.strip():
         raise UnsupportedDocumentError(f"'{name}' parsed successfully but contains no readable text.")
 
-    document = ContextDocument(name=name, text=text, source_format=suffix.lstrip("."))
-    chunks_text = list(chunk_text(text))
+    normalised = _normalise_text(text)
+    content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    document = ContextDocument(name=name, text=normalised, source_format=suffix.lstrip("."), content_hash=content_hash)
+    chunks_text = list(chunk_text(normalised))
     embeddings: list[Any] = [None] * len(chunks_text)
     try:
         embeddings = list(embedding_service.encode_many(chunks_text))
@@ -267,39 +346,144 @@ def load_document(path: Path, name: str) -> ContextDocument:
                 embeddings[i] = embedding_service.encode(body)
             except Exception:
                 pass  # lexical fallback will be used
+    offset = 0
     for index, (body, emb) in enumerate(zip(chunks_text, embeddings, strict=False)):
-        document.chunks.append(DocumentChunk(document=name, index=index, text=body, embedding=emb))
+        start = normalised.find(body, offset)
+        if start < 0:
+            start = offset
+        end = start + len(body)
+        offset = end
+        pages = [page for page, page_start, page_end in page_ranges if page_start < end and page_end > start]
+        document.chunks.append(
+            DocumentChunk(
+                document=name,
+                index=index,
+                text=body,
+                embedding=emb,
+                char_start=start,
+                char_end=end,
+                page_start=min(pages) if pages else None,
+                page_end=max(pages) if pages else None,
+            )
+        )
 
     logger.info("Context document loaded", document=name, chars=len(text), chunks=len(document.chunks))
     return document
+
+
+@dataclass(frozen=True)
+class DocumentHit:
+    """A retrieved passage with citation and ranking evidence.
+
+    Tuple-style access remains intentionally supported while callers migrate to
+    typed citations: ``hit[0]`` is the document name and ``hit[1]`` the text.
+    """
+
+    text: str
+    citation: Citation
+    score: float
+    methods: tuple[str, ...]
+
+    @property
+    def document(self) -> str:
+        return self.citation.document
+
+    def __iter__(self) -> Iterable[str]:
+        return iter((self.document, self.text))
+
+    def __getitem__(self, index: int) -> str:
+        return (self.document, self.text)[index]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "citation": self.citation.to_dict(),
+            "score": round(self.score, 6),
+            "methods": list(self.methods),
+        }
 
 
 def search_documents(
     documents: dict[str, ContextDocument],
     query: str,
     limit: int | None = None,
-) -> list[tuple[str, str]]:
-    """Ranks every chunk across every document. Returns ``(document, passage)``.
+    *,
+    document_names: set[str] | None = None,
+    source_formats: set[str] | None = None,
+    page_range: tuple[int, int] | None = None,
+) -> list[DocumentHit]:
+    """Rank eligible chunks with hybrid retrieval and return cited passages.
 
-    Ranking goes through :mod:`~src.core.embeddings`, which uses a transformer
-    when one is loaded and falls back to lexical overlap when none is -- so
-    retrieval works in an air-gapped install, just less well.
+    Dense and lexical rankings are fused by reciprocal-rank fusion.  The
+    optional cross-encoder operates only on this bounded first-stage set.  If
+    either optional model is unavailable, the lexical path keeps retrieval
+    deterministic and usable offline.
     """
     top_k = limit or settings.CONTEXT_TOP_K
-    chunks = [chunk for document in documents.values() for chunk in document.chunks]
+    allowed_names = document_names or set(documents)
+    chunks = [
+        (document, chunk)
+        for document in documents.values()
+        if document.name in allowed_names and (source_formats is None or document.source_format in source_formats)
+        for chunk in document.chunks
+        if page_range is None
+        or chunk.page_start is None
+        or (chunk.page_start <= page_range[1] and (chunk.page_end or chunk.page_start) >= page_range[0])
+    ]
     if not chunks or not query.strip():
         return []
 
     candidates: list[tuple[str, np.ndarray | None]] = [
         (chunk.text, np.asarray(chunk.embedding, dtype=np.float32) if chunk.embedding is not None else None)
-        for chunk in chunks
+        for _, chunk in chunks
     ]
-    ranked = embedding_service.rank(query, candidates)
+    dense = embedding_service.rank(query, candidates)
+    query_tokens = tokenize(query)
+    lexical = sorted(
+        ((index, lexical_overlap(query_tokens, chunk.text)) for index, (_, chunk) in enumerate(chunks)),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    dense_rank = [(str(index), score) for score, index in dense if score >= settings.RAG_MIN_SIMILARITY]
+    lexical_rank = [(str(index), score) for index, score in lexical if score > 0]
+    if not dense_rank and not lexical_rank:
+        return []
 
-    results: list[tuple[str, str]] = []
-    for score, index in ranked[:top_k]:
-        if score < settings.RAG_MIN_SIMILARITY:
-            continue
-        chunk = chunks[index]
-        results.append((chunk.document, chunk.text))
+    fused = reciprocal_rank_fusion(dense_rank, lexical_rank)
+    method_by_index = {
+        index: tuple(
+            method
+            for method, rank in (("dense", dense_rank), ("lexical", lexical_rank))
+            if any(candidate_index == index for candidate_index, _ in rank)
+        )
+        for index, _ in fused
+    }
+    selected = fused[: max(top_k * 3, top_k)]
+    reranked = False
+    if settings.RAG_RERANK_ENABLED and selected:
+        rerank_results = get_reranker().rerank(query, [chunks[int(index)][1].text for index, _ in selected], top_k=top_k)
+        positions = [(selected[result.original_index][0], result.score) for result in rerank_results]
+        reranked = True
+    else:
+        positions = selected[:top_k]
+
+    results: list[DocumentHit] = []
+    for index, score in positions:
+        document, chunk = chunks[int(index)]
+        results.append(
+            DocumentHit(
+                text=chunk.text,
+                citation=Citation(
+                    document=document.name,
+                    content_hash=document.content_hash,
+                    chunk_index=chunk.index,
+                    char_start=chunk.char_start,
+                    char_end=chunk.char_end,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                ),
+                score=score,
+                methods=method_by_index[index] + (("rerank",) if reranked else ()),
+            )
+        )
     return results
