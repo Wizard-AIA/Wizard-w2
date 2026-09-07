@@ -631,6 +631,9 @@ class Settings(BaseSettings):
     # download is both slow and a network-flakiness dependency.
     EMBEDDINGS_FORCE_FALLBACK: bool = False
     RAG_ENABLED: bool = True
+    #: Release kill switch for dense+lexical fusion. When disabled, retrieval
+    #: remains available through the deterministic lexical path.
+    FEATURE_HYBRID_RETRIEVAL: bool = True
     RAG_TOP_K: int = 4
     RAG_MIN_SIMILARITY: float = 0.35
     #: Cross-encoder reranking is optional because it increases local memory and

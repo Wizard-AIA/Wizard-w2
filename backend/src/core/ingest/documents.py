@@ -437,7 +437,7 @@ def search_documents(
         (chunk.text, np.asarray(chunk.embedding, dtype=np.float32) if chunk.embedding is not None else None)
         for _, chunk in chunks
     ]
-    dense = embedding_service.rank(query, candidates)
+    dense = embedding_service.rank(query, candidates) if settings.FEATURE_HYBRID_RETRIEVAL else []
     query_tokens = tokenize(query)
     lexical = sorted(
         ((index, lexical_overlap(query_tokens, chunk.text)) for index, (_, chunk) in enumerate(chunks)),

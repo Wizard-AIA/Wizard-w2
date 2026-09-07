@@ -230,6 +230,21 @@ def test_retrieval_metadata_and_page_filters_limit_the_citation_scope() -> None:
     assert hits[0].citation.page_start == 2
 
 
+def test_hybrid_retrieval_flag_removes_the_dense_live_path(monkeypatch) -> None:
+    document = _document("rules.md", "Refund policy requires monthly settlement.")
+
+    def dense_path_must_not_run(*args, **kwargs):
+        raise AssertionError("dense retrieval ran while the hybrid feature was disabled")
+
+    monkeypatch.setattr("src.core.ingest.documents.settings.FEATURE_HYBRID_RETRIEVAL", False)
+    monkeypatch.setattr("src.core.ingest.documents.embedding_service.rank", dense_path_must_not_run)
+
+    hits = search_documents({document.name: document}, "refund policy monthly settlement")
+
+    assert hits
+    assert hits[0].methods == ("lexical",)
+
+
 def test_retrieval_uses_the_optional_reranker_after_hybrid_candidate_selection(monkeypatch) -> None:
     from src.core.rag.reranker import RerankResult
 
