@@ -29,20 +29,29 @@ class SemanticCache:
         self._inflight_lock = threading.Lock()
 
     @staticmethod
-    def _exact_key(query: str, columns: list[str]) -> str:
+    def _exact_key(query: str, columns: list[str], scope: str = "") -> str:
         digest = hashlib.blake2b(
-            f"{query.strip().lower()}|{','.join(sorted(columns))}".encode(), digest_size=16
+            f"{query.strip().lower()}|{','.join(sorted(columns))}|{scope}".encode(), digest_size=16
         ).hexdigest()
         return f"semcache:{digest}"
 
+    @staticmethod
+    def _scoped_columns(active_columns: list[str], scope: str) -> list[str]:
+        """Persist a scope discriminator without changing the cache schema."""
+        if not scope:
+            return list(active_columns)
+        digest = hashlib.blake2b(scope.encode("utf-8"), digest_size=12).hexdigest()
+        return [*active_columns, f"__wizard_cache_scope_{digest}"]
+
     # ------------------------------------------------------------------ #
-    def lookup(self, query: str, active_columns: list[str]) -> str | None:
+    def lookup(self, query: str, active_columns: list[str], *, scope: str = "") -> str | None:
         """Returns cached code for a semantically equivalent query on the same schema."""
         if not query or not active_columns:
             return None
 
         cache = get_cache()
-        key = self._exact_key(query, active_columns)
+        cache_columns = self._scoped_columns(active_columns, scope)
+        key = self._exact_key(query, cache_columns, scope)
         exact = cache.get(key)
         if isinstance(exact, str) and exact:
             logger.info("Semantic cache hit (exact)")
@@ -60,11 +69,11 @@ class SemanticCache:
                 logger.info("Semantic cache hit (exact)")
                 return exact
 
-            entries = db_mgr.get_cache_entries(active_columns)
+            entries = db_mgr.get_cache_entries(cache_columns)
             if not entries:
                 return None
 
-            active = sorted(active_columns)
+            active = sorted(cache_columns)
             # Schema equality is a hard precondition: code written for one column set
             # is not valid for another even if the questions are worded identically.
             candidates = [entry for entry in entries if sorted(entry.get("columns", [])) == active]
@@ -87,14 +96,15 @@ class SemanticCache:
             cache.set(key, best["code"], ttl=3600)
             return best["code"]
 
-    def add(self, query: str, active_columns: list[str], code: str):
+    def add(self, query: str, active_columns: list[str], code: str, *, scope: str = ""):
         """Stores successful code against the query that produced it."""
         if not query or not code or not active_columns:
             return
         try:
             normalized = query.strip().lower()
-            db_mgr.save_cache_entry(normalized, active_columns, code, embedding_service.encode(normalized))
-            get_cache().set(self._exact_key(query, active_columns), code, ttl=3600)
+            cache_columns = self._scoped_columns(active_columns, scope)
+            db_mgr.save_cache_entry(normalized, cache_columns, code, embedding_service.encode(normalized))
+            get_cache().set(self._exact_key(query, cache_columns, scope), code, ttl=3600)
             self._evict_if_needed()
         except Exception as exc:
             logger.error("Failed to store semantic cache entry", error=str(exc))

@@ -754,6 +754,19 @@ class AnalysisOrchestrator:
     # ------------------------------------------------------------------ #
     # Orientation: the opening plan
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _cache_scope(session: Session) -> str:
+        """Identity dimensions that must never share a generated-code cache.
+
+        The scope intentionally contains hashes and policy booleans only. It
+        prevents a code path selected under one dataset version or cloud
+        redaction policy from becoming a cache hit under another.
+        """
+        handle = session.active_handle
+        dataset_hash = handle.content_hash if handle is not None else "no-dataset"
+        policy = handle and session.data_policy.schema_only_for(handle.name, handle.origin)
+        return f"dataset={dataset_hash}|mode={session.data_mode}|schema_only={bool(policy)}"
+
     async def _orient(
         self,
         state: RunState,
@@ -773,7 +786,7 @@ class AnalysisOrchestrator:
         self._ensure_understanding(state, session)
 
         # 1. Exact/semantic cache: a verified solution for this exact question.
-        cached = semantic_cache.lookup(state.instruction, columns)
+        cached = semantic_cache.lookup(state.instruction, columns, scope=self._cache_scope(session))
         if cached:
             state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
@@ -2637,7 +2650,7 @@ class AnalysisOrchestrator:
         columns = [str(c) for c in session.df.columns] if session.df is not None else []
 
         if state.code and not state.error and not state.blocked:
-            semantic_cache.add(state.instruction, columns, state.code)
+            semantic_cache.add(state.instruction, columns, state.code, scope=self._cache_scope(session))
 
             if state.retry_count > 0 and state.failed_code:
                 try:
