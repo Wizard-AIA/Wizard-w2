@@ -17,6 +17,7 @@ from src.api.routes import chat, connections, datasets, dlq, export, meta, sandb
 from src.config import settings
 from src.core.embeddings import embedding_service
 from src.core.infra.queue import get_queue
+from src.core.infra.backup_scheduler import BackupScheduler
 from src.core.llm import llm_provider
 from src.core.session import session_manager
 from src.core.tools import runtime as runtime_backend
@@ -98,12 +99,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         llm_provider.warm()
 
     task = asyncio.ensure_future(_maintenance_loop())
+    backups = BackupScheduler(
+        backup_interval_hours=settings.BACKUP_INTERVAL_HOURS,
+        checkpoint_interval_hours=settings.BACKUP_CHECKPOINT_INTERVAL_HOURS,
+        max_retained=settings.BACKUP_RETAINED_COUNT,
+    )
+    if settings.BACKUPS_ENABLED:
+        await backups.start()
     try:
         yield
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             _ = await task
+        if settings.BACKUPS_ENABLED:
+            await backups.stop()
         await get_queue().shutdown()
         await asyncio.to_thread(session_manager.shutdown)
         await asyncio.to_thread(sandbox_pool.shutdown)

@@ -643,6 +643,10 @@ class Settings(BaseSettings):
     # (or the redis package is missing) an in-process implementation is used.
     REDIS_URL: str = ""
     QUEUE_MAX_WORKERS: int = 2
+    BACKUPS_ENABLED: bool = True
+    BACKUP_INTERVAL_HOURS: float = 24.0
+    BACKUP_CHECKPOINT_INTERVAL_HOURS: float = 6.0
+    BACKUP_RETAINED_COUNT: int = 7
     JOB_RESULT_TTL_SECONDS: int = 3600
 
     # HTTP / transport security
