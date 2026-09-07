@@ -226,10 +226,18 @@ production image can start an unsandboxed generated-code runtime by accident.
 - Require signed/versioned release artifacts, migration compatibility checks,
   backup verification before destructive migrations, and post-deploy smoke
   tests through the public API.
+- Bring CLI release updates into this phase: stamp each binary with its build
+  version; publish a signed manifest and checksums; implement an explicit
+  `wizard update --check`; and implement a platform-aware `wizard update
+  --self` that verifies, stages, health-checks, atomically switches, and can
+  roll back a release installation. The existing checkout updater remains a
+  separate source-update path.
 
 **Acceptance:** a test deployment proves an image-digest rollback after an SLO
 or quality breach; disabled flags remove the live code path; release records
-contain artifact, migration, environment, health, benchmark, and rollback data.
+contain artifact, migration, environment, health, benchmark, and rollback data;
+CLI tests reject an invalid manifest/checksum and prove that a failed self-update
+leaves the active binary unchanged.
 
 ## Phase 8: Scale only within the supported local-first profile
 

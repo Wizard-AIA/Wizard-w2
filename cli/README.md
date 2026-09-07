@@ -45,10 +45,11 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/wizard-windows-amd64.ex
 ```
 
 `CGO_ENABLED=0` gives a true static binary on every target — no shared libc
-dependency at runtime, no target sysroot needed to build. There is
-deliberately no release pipeline publishing these yet (Milestone 8 scopes
-that out — see the "binary self-update" note below); building from source is
-the documented way to get the binary for now.
+dependency at runtime, no target sysroot needed to build. Tagged releases use
+the same target matrix to publish platform archives. Building from source
+remains supported; release-awareness and verified binary updates are in scope
+as described below, but are not implemented by the current `wizard update`
+command.
 
 ### Running the tests
 
@@ -82,7 +83,7 @@ a Wizard checkout (or set `WIZARD_ROOT` yourself).
 | `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `API_PROVIDER`/`DATA_MODE`, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
-| `wizard update` | `git pull --ff-only`, reinstalls dependencies (the same steps as `init`), re-checks the compat marker. Restarts the daemon afterward if it was running before. Scoped to the checkout only this milestone — see below. |
+| `wizard update` | `git pull --ff-only`, reinstalls dependencies (the same steps as `init`), re-checks the compat marker. Restarts the daemon afterward if it was running before. This is currently a source-checkout update, not a binary self-update. |
 | `wizard skills add/list/update/discard/remove/token` | Fronts `backend/main.py skills` — the same install machinery (fetch, pin to a commit, show every skill's full contents, ask before writing) the REST routes and web UI's install-from-GitHub flow use, now also reachable from the compiled binary. Runs in the wizard-managed venv from `wizard init`; `add`/`update` prompt on a real terminal unless `--yes` is given. |
 | `wizard version` | Prints this binary's compiled-in compat version. |
 
@@ -162,22 +163,41 @@ A few things this does for you beyond writing the flag values into
   touches with these flags. A cloud provider only changes where the
   reasoning/code-writing model calls go.
 
+## Release updates and version awareness (in scope)
+
+The existing tagged-release workflow is the delivery channel for the compiled
+CLI. The following work is explicitly in scope for the production CLI; it is
+not yet available in the current binary:
+
+- Add an explicit, bounded `wizard update --check` release query that reports
+  the installed build version, available version, installation channel, and
+  whether an update is applicable. Ordinary CLI invocations must not make a
+  silent network request.
+- Stamp release binaries with an immutable CLI build version, publish a signed
+  manifest and SHA-256 checksums alongside every platform archive, and reject
+  unsigned, malformed, incompatible, or mismatched artifacts before staging.
+- Add `wizard update --self` for release-installed binaries. It must select the
+  current OS/architecture archive, download to a staging directory, verify the
+  manifest/checksum and compatibility marker, health-check the staged release,
+  atomically switch the installed release, and retain a known-good prior
+  release for rollback. Windows replacement needs a helper process so the
+  running executable is never overwritten in place.
+- Keep source and binary updates deliberately separate: the existing `wizard
+  update` continues to update a checkout, while `--self` only operates on a
+  recognized release installation. Both paths must be idempotent, clearly
+  report their action, and leave the active installation unchanged on failure.
+
 ## What's deliberately out of scope this milestone
 
-- **Binary self-update.** `wizard update` updates the backend/frontend
-  checkout only. Updating the `wizard` binary itself via GitHub Releases
-  needs a release pipeline (build matrix, checksums, a way to fetch and
-  atomically replace a running binary) that doesn't exist yet. Flagged as a
-  follow-up, not silently dropped.
 - **Unattended system changes.** A bare interactive `wizard init` asks before
   installing missing prerequisites. Scripts must explicitly pass
   `--install-prerequisites`; use `--no-install-prerequisites` to disable all
   installation. Package availability still depends on the host OS and its
   configured package manager.
 - **Owning the Docker daemon's lifecycle.** `wizard start`/`doctor` only
-  probe reachability and pass `EXECUTION_BACKEND` through — an unreachable
-  Docker under `docker` mode still degrades to `host` the way the backend
-  already handles it (see `core/tools/runtime.py`).
+  probe reachability and pass `EXECUTION_BACKEND` through — when Docker is
+  unavailable, the backend selects its supported in-process fallback (see
+  `core/tools/runtime.py`).
 - **Remote access.** The daemon binds to `127.0.0.1` only, on both the
   backend and frontend sides. No tailscale-style remote reach is planned —
   confirmed out of scope by the evolution spec.
