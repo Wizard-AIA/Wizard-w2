@@ -15,6 +15,18 @@ def test_understanding_cache_round_trips(session: Session) -> None:
     assert session.get_cached_understanding("key") == {"grain": {}}
 
 
+def test_semantic_cache_scope_prevents_cross_policy_exact_hits() -> None:
+    from src.core.semantic_cache import SemanticCache
+
+    cache = SemanticCache()
+    columns = ["revenue"]
+    cache.add("sum revenue", columns, "print(df['revenue'].sum())", scope="dataset=v1|schema_only=True")
+
+    assert cache.lookup("sum revenue", columns, scope="dataset=v1|schema_only=True") is not None
+    assert cache.lookup("sum revenue", columns, scope="dataset=v1|schema_only=False") is None
+    assert cache.lookup("sum revenue", columns, scope="dataset=v2|schema_only=True") is None
+
+
 def test_validations_cache_round_trips(session: Session) -> None:
     assert session.get_cached_validations("key") is None
     session.cache_validations("key", [{"validator": "data", "severity": "info", "message": "ok"}])

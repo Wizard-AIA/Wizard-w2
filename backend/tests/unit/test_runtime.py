@@ -24,19 +24,12 @@ from src.core.tools.daemon import PROBE_MODULES, render_daemon
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     ("setting", "expected"),
-    [("inprocess", "inprocess"), ("host", "host"), ("docker", "host")],
+    [("inprocess", "inprocess"), ("host", "host"), ("docker", "inprocess")],
 )
 def test_backend_selection_follows_the_setting(monkeypatch, setting: str, expected: str) -> None:
-    """`docker` with no reachable daemon now degrades to `host`, not `inprocess`.
-
-    This reverses an earlier pin. That one resolved an unreachable Docker to the
-    in-process interpreter so a weaker guarantee could not be substituted
-    silently -- but `inprocess` is the *least* contained runtime there is, so the
-    old rule answered "your container is missing" by removing the isolation that
-    remained. `host` is more contained than `inprocess` on every axis, and the
-    substitution is announced rather than silent: it is logged, and `/settings`
-    renders the setting and the runtime separately so `docker` resolving to
-    something else is visible on screen.
+    """An unavailable Docker daemon falls back to the requested compatibility
+    mode, in-process execution, and readiness separately reports that it is
+    unsafe for the production confinement profile.
     """
     monkeypatch.setattr("src.config.settings.EXECUTION_BACKEND", setting, raising=False)
     assert runtime_backend.active_backend() == expected

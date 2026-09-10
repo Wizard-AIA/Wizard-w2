@@ -14,6 +14,7 @@ import pytest
 from src.core.ingest.documents import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     ContextDocument,
+    DocumentChunk,
     DocumentExtractionError,
     UnsupportedDocumentError,
     chunk_text,
@@ -180,6 +181,103 @@ def test_retrieval_returns_the_document_it_came_from() -> None:
     assert "Refunds" in passage
 
 
+def test_retrieval_exposes_a_stable_citation_and_hybrid_ranking_evidence() -> None:
+    document = ContextDocument(name="rules.md", text="Refunds are netted against gross volume monthly.")
+    document.chunks.append(
+        DocumentChunk(
+            document="rules.md",
+            index=4,
+            text=document.text,
+            char_start=12,
+            page_start=3,
+            page_end=3,
+        )
+    )
+
+    hit = search_documents({document.name: document}, "refunds netted gross volume")[0]
+
+    assert hit.citation.document == "rules.md"
+    assert hit.citation.content_hash == document.content_hash
+    assert hit.citation.chunk_index == 4
+    assert hit.citation.char_start == 12
+    assert hit.citation.char_end == 12 + len(document.text)
+    assert hit.citation.page_start == hit.citation.page_end == 3
+    assert hit.citation.label() == "rules.md, p. 3 (chunk 5)"
+    assert "lexical" in hit.methods
+
+
+def test_retrieval_metadata_and_page_filters_limit_the_citation_scope() -> None:
+    rules = ContextDocument(name="rules.md", text="The approved refund is settled monthly.", source_format="md")
+    rules.chunks.extend(
+        [
+            DocumentChunk(
+                document="rules.md", index=0, text="The approved refund is settled monthly.", page_start=1, page_end=1
+            ),
+            DocumentChunk(
+                document="rules.md", index=1, text="The approved refund is settled monthly.", page_start=2, page_end=2
+            ),
+        ]
+    )
+    notes = ContextDocument(name="notes.txt", text="The approved refund is settled monthly.", source_format="txt")
+    notes.chunks.append(DocumentChunk(document="notes.txt", index=0, text=notes.text))
+
+    hits = search_documents(
+        {rules.name: rules, notes.name: notes},
+        "approved refund settled monthly",
+        document_names={"rules.md"},
+        source_formats={"md"},
+        page_range=(2, 2),
+    )
+
+    assert len(hits) == 1
+    assert hits[0].citation.document == "rules.md"
+    assert hits[0].citation.page_start == 2
+
+
+def test_hybrid_retrieval_flag_removes_the_dense_live_path(monkeypatch) -> None:
+    document = _document("rules.md", "Refund policy requires monthly settlement.")
+
+    def dense_path_must_not_run(*args, **kwargs):
+        raise AssertionError("dense retrieval ran while the hybrid feature was disabled")
+
+    monkeypatch.setattr("src.core.ingest.documents.settings.FEATURE_HYBRID_RETRIEVAL", False)
+    monkeypatch.setattr("src.core.ingest.documents.embedding_service.rank", dense_path_must_not_run)
+
+    hits = search_documents({document.name: document}, "refund policy monthly settlement")
+
+    assert hits
+    assert hits[0].methods == ("lexical",)
+
+
+def test_retrieval_uses_the_optional_reranker_after_hybrid_candidate_selection(monkeypatch) -> None:
+    from src.core.rag.reranker import RerankResult
+
+    document = ContextDocument(name="rules.md", text="placeholder")
+    document.chunks.extend(
+        [
+            DocumentChunk(document="rules.md", index=0, text="refund policy monthly settlement"),
+            DocumentChunk(document="rules.md", index=1, text="refund policy monthly exception"),
+            DocumentChunk(document="rules.md", index=2, text="refund policy monthly approval"),
+        ]
+    )
+
+    class _Reranker:
+        def rerank(self, query: str, candidates: list[str], top_k: int):
+            assert query == "refund policy monthly"
+            assert len(candidates) == 3
+            assert top_k == 1
+            return [RerankResult(text=candidates[-1], score=0.97, original_index=2)]
+
+    monkeypatch.setattr("src.core.ingest.documents.settings.RAG_RERANK_ENABLED", True)
+    monkeypatch.setattr("src.core.ingest.documents.get_reranker", lambda: _Reranker())
+
+    hits = search_documents({document.name: document}, "refund policy monthly", limit=1)
+
+    assert hits[0].citation.chunk_index == 2
+    assert hits[0].score == 0.97
+    assert "rerank" in hits[0].methods
+
+
 def test_searching_with_no_documents_is_empty_not_an_error() -> None:
     assert search_documents({}, "anything") == []
 
@@ -197,6 +295,7 @@ def test_summary_reports_what_the_ui_needs() -> None:
     assert summary["chunks"] == len(document.chunks)
     assert summary["chars"] > 0
     assert summary["preview"]
+    assert len(summary["content_hash"]) == 64
 
 
 # --------------------------------------------------------------------------- #
@@ -251,3 +350,6 @@ def test_a_pdf_within_bounds_still_parses(tmp_path: Path, monkeypatch) -> None:
 
     document = load_document(path, "small.pdf")
     assert "A rule." in document.text
+    assert document.content_hash
+    assert document.chunks[0].page_start == 1
+    assert document.chunks[0].page_end == 2

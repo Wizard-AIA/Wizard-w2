@@ -82,6 +82,16 @@ async def health_ready() -> JSONResponse:
     checks: dict[str, str] = {}
     is_ready = True
 
+    # A host subprocess prevents a generated-code crash from taking down the
+    # API process, but it is not equivalent to the container confinement this
+    # production profile promises. Keep it useful for development while making
+    # the production readiness contract precise and fail-closed.
+    if settings.ENV == "prod" and backend != "docker":
+        checks["execution_confinement"] = "docker backend required for production readiness"
+        is_ready = False
+    else:
+        checks["execution_confinement"] = "ok" if backend == "docker" else "development host subprocess"
+
     try:
         with db_mgr._read() as conn:
             conn.execute("SELECT 1")

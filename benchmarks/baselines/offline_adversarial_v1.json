@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "suite": "offline-adversarial",
+  "scenarios": {
+    "ambiguous_question": {
+      "fixture_sha256": "c9619a5dd58df484909a18542d839a380ddfccab489abe7344199cb68b7c836f",
+      "kind": "deterministic",
+      "required_test": "test_ambiguous_question"
+    },
+    "dirty_join_key": {
+      "fixture_sha256": "3035414bfc8ffdc38b5cf6343e7f315e4f13b090640368059cada13c56dbbb14",
+      "kind": "orchestrator",
+      "required_test": "test_dirty_join_key"
+    },
+    "insufficient_evidence": {
+      "fixture_sha256": "dc3de6773bfaf91fe33392b2ee144baa322f347cd6bb093ad8a6a66e7b0e432d",
+      "kind": "deterministic",
+      "required_test": "test_insufficient_evidence"
+    },
+    "missingness_flips_the_conclusion": {
+      "fixture_sha256": "8bd5c30381a594f773685c114b7d7ce16acdab9dde940e39e5acda04f13df02b",
+      "kind": "orchestrator",
+      "required_test": "test_missingness_flips_the_conclusion"
+    },
+    "multi_step_investigation": {
+      "fixture_sha256": "2c71608f046cea873601aa5edf957937690f62fc2426744617d884894ab8c05b",
+      "kind": "orchestrator",
+      "required_test": "test_multi_step_investigation"
+    },
+    "obvious_analysis_wrong": {
+      "fixture_sha256": "d555e5183e3f1490f2e8748c566d894ea53696e1d2d37c817849850ee2351fa3",
+      "kind": "orchestrator",
+      "required_test": "test_obvious_analysis_wrong"
+    },
+    "simpsons_paradox": {
+      "fixture_sha256": "9e5b076ca35a57543638dc3dc1ac9e3a5b05e1302f17ac2871cf3e7cbd6a4623",
+      "kind": "orchestrator",
+      "required_test": "test_simpsons_paradox"
+    },
+    "statistically_inappropriate_request": {
+      "fixture_sha256": "d311186d711c2d96ffb09d2b4fef11027aa45ec779c5468641602c70046e911a",
+      "kind": "orchestrator",
+      "required_test": "test_statistically_inappropriate_request"
+    },
+    "target_leakage": {
+      "fixture_sha256": "7833cb693006f97997eb0352d80e1dc38f17be7c65c24739f3e41192f2c06392",
+      "kind": "orchestrator",
+      "required_test": "test_target_leakage"
+    },
+    "two_methods_disagree": {
+      "fixture_sha256": "e5e9c740a7b69e2a79931b274b596f3b3c9c9ae5e3d2ed9d424a837f8ac4de6c",
+      "kind": "orchestrator",
+      "required_test": "test_two_methods_disagree"
+    }
+  }
+}
