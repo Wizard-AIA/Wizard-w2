@@ -4,6 +4,15 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.11] - 2026-09-10
+
+### Fixed
+- Shipped optional cloud-provider dependencies in release archives.
+- Corrected detached-daemon PID tracking, duplicate starts, and orphan cleanup.
+- Hid interactive API-key entry and made embedding-model reset reliable.
+- Preserved currency-formatted values during deterministic dataset ingestion.
+- Updated release metadata and frontend security dependencies.
+
 ## [v1.0.10] - 2026-09-07
 
 ### Added
@@ -205,6 +214,7 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
+[v1.0.11]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.10...v1.0.11
 [v1.0.10]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.9...v1.0.10
 [v1.0.9]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.8...v1.0.9
 [v1.0.6]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.5...v1.0.6
