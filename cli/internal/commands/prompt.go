@@ -24,6 +24,7 @@ type initSettings struct {
 	workerModelFlagSet     bool
 	dataModeClear          bool
 	embeddingProviderClear bool
+	embeddingModelClear    bool
 }
 
 // shouldPromptInit enables the setup flow for a bare init from a real
@@ -153,9 +154,10 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	}
 	if set {
 		settings.embeddingModel = embeddingModel
+		settings.embeddingModelClear = embeddingModel == ""
 	}
 
-	if err := promptProviderCredentials(env.Out, reader, env, settings, provider); err != nil {
+	if err := promptProviderCredentials(env.Out, reader, input, env, settings, provider); err != nil {
 		return err
 	}
 
@@ -163,7 +165,7 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	return nil
 }
 
-func promptProviderCredentials(out io.Writer, reader *bufio.Reader, env *Env, settings *initSettings, provider string) error {
+func promptProviderCredentials(out io.Writer, reader *bufio.Reader, input io.Reader, env *Env, settings *initSettings, provider string) error {
 	if provider == "custom_gateway" {
 		gatewayURLCurrent := envValue(env, "GATEWAY_API_URL")
 		if settings.gatewayURL != "" {
@@ -180,7 +182,7 @@ func promptProviderCredentials(out io.Writer, reader *bufio.Reader, env *Env, se
 		if settings.gatewayKey != "" {
 			gatewayKeyCurrent = settings.gatewayKey
 		}
-		value, set, err = promptOptional(out, reader, "Gateway API key", gatewayKeyCurrent, false)
+		value, set, err = promptSecretOptional(out, reader, input, "Gateway API key", gatewayKeyCurrent)
 		if err != nil {
 			return err
 		}
@@ -210,7 +212,7 @@ func promptProviderCredentials(out io.Writer, reader *bufio.Reader, env *Env, se
 		if *keyName.value != "" {
 			current = *keyName.value
 		}
-		value, set, err := promptOptional(out, reader, keyName.label, current, false)
+		value, set, err := promptSecretOptional(out, reader, input, keyName.label, current)
 		if err != nil {
 			return err
 		}
@@ -227,6 +229,41 @@ func promptProviderCredentials(out io.Writer, reader *bufio.Reader, env *Env, se
 		settings.baseURL = value
 	}
 	return nil
+}
+
+// promptSecretOptional keeps API keys out of a normal terminal transcript.
+// Piped/non-terminal input deliberately retains the line-oriented fallback so
+// `wizard init --interactive` remains testable and usable from a wrapper; a
+// real terminal always gets term.ReadPassword's no-echo behavior.
+func promptSecretOptional(out io.Writer, reader *bufio.Reader, input io.Reader, label, current string) (string, bool, error) {
+	defaultText := "not set"
+	if current != "" {
+		defaultText = "saved"
+	}
+	fmt.Fprintf(out, "%s [%s]: ", label, defaultText)
+
+	if file, ok := input.(*os.File); ok && readerIsTerminal(file) && reader.Buffered() == 0 {
+		value, err := term.ReadPassword(int(file.Fd()))
+		fmt.Fprintln(out)
+		if err != nil {
+			return "", false, err
+		}
+		trimmed := strings.TrimSpace(string(value))
+		if trimmed == "" {
+			return current, false, nil
+		}
+		return trimmed, true, nil
+	}
+
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", false, err
+	}
+	value := strings.TrimSpace(line)
+	if value == "" {
+		return current, false, nil
+	}
+	return value, true, nil
 }
 
 func promptModel(out io.Writer, reader *bufio.Reader, label, current string) (string, bool, error) {

@@ -70,6 +70,22 @@ func TestPromptInitSettingsKeepsAutoDefaults(t *testing.T) {
 	}
 }
 
+func TestPromptInitSettingsClearsSavedEmbeddingModelWhenAutoSelected(t *testing.T) {
+	backendDir := filepath.Join(t.TempDir(), "backend")
+	writeBackendEnv(t, backendDir, "API_PROVIDER=gemini\nDATA_MODE=cloud-only\nEMBEDDING_REMOTE_MODEL=old-model\n")
+	env := newTestEnv(t, backendDir)
+	env.In = strings.NewReader("\n\n\n\n\n\nauto\n\n")
+	env.Out = &bytes.Buffer{}
+	settings := initSettings{}
+
+	if err := promptInitSettings(env, &settings); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !settings.embeddingModelClear || settings.embeddingModel != "" {
+		t.Fatalf("expected auto selection to clear the saved embedding model: %#v", settings)
+	}
+}
+
 func TestApplyTerminalKeyMovesAndAcceptsChoices(t *testing.T) {
 	tests := []struct {
 		name     string

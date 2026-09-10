@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -17,6 +18,27 @@ func TestIsAliveFalseForImplausiblePid(t *testing.T) {
 	// never valid on any of the three target platforms.
 	if IsAlive(999999999) {
 		t.Fatal("expected an implausible pid to be reported not alive")
+	}
+}
+
+func TestStartDetachedReturnsTheStartedPid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep invocation is platform-specific")
+	}
+
+	logPath := filepath.Join(t.TempDir(), "daemon.log")
+	pid, err := StartDetached("sleep", []string{"5"}, t.TempDir(), os.Environ(), logPath)
+	if err != nil {
+		t.Fatalf("StartDetached: %v", err)
+	}
+	if pid <= 1 {
+		t.Fatalf("StartDetached returned pid %d; want the child pid, not a released-process sentinel", pid)
+	}
+	if !IsAlive(pid) {
+		t.Fatalf("StartDetached returned pid %d, but it is not alive", pid)
+	}
+	if err := KillPID(pid); err != nil {
+		t.Fatalf("KillPID(%d): %v", pid, err)
 	}
 }
 

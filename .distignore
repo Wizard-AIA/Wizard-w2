@@ -68,9 +68,6 @@ frontend/tsconfig.tsbuildinfo
 # === Dev scripts ===
 backend/scripts/
 
-# === Optional/experimental deps ===
-requirements-optional.txt
-
 # === Git internals ===
 .git/
 .gitattributes

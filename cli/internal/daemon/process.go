@@ -88,8 +88,9 @@ func StartDetached(name string, args []string, dir string, env []string, logPath
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	pid := cmd.Process.Pid
 	// Release rather than Wait: this process's job is to hand off and exit,
 	// not to babysit the supervisor it just started.
 	_ = cmd.Process.Release()
-	return cmd.Process.Pid, nil
+	return pid, nil
 }

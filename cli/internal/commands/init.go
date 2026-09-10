@@ -252,6 +252,12 @@ func RunInit(env *Env, args []string) int {
 			return 1
 		}
 	}
+	if settings.embeddingModelClear {
+		if err := setEnvValue(env.BackendEnvPath(), "EMBEDDING_REMOTE_MODEL", ""); err != nil {
+			fmt.Fprintf(env.Err, "Could not clear embedding model in backend/.env: %v\n", err)
+			return 1
+		}
+	}
 	finalProvider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
 	finalEmbeddingProvider, _, _ := readEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER")
 	warnMissingCloudConfig(env, finalProvider)

@@ -75,7 +75,7 @@ done < "$REPO_ROOT/.distignore"
 # is left untouched, since those pin the wheel's actual bytes, not where it
 # came from, and Safety's proxy is a passthrough of the same public wheels.
 echo "Rewriting requirements files to drop the internal package index..."
-for req_file in requirements.txt requirements.lock.txt requirements-local.txt; do
+for req_file in requirements.txt requirements.lock.txt requirements-local.txt requirements-optional.txt; do
   path="$BASE_STAGE/$req_file"
   [ -f "$path" ] || continue
   sed -i.bak -E '/^(-i |--index-url|--extra-index-url)/d' "$path"
