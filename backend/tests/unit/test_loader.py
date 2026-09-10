@@ -17,6 +17,7 @@ from src.core.ingest.loader import (
     categorize_low_cardinality,
     downcast_numeric,
     json_safe_records,
+    normalize_currency_columns,
     safe_write_feather,
     sanitize_columns,
 )
@@ -243,6 +244,13 @@ def test_downcast_skips_currency_named_columns() -> None:
     df = pd.DataFrame({"total_price": np.array([1.5, 2.5, 3.5], dtype="float64")})
     result = downcast_numeric(df.copy())
     assert result["total_price"].dtype == np.float64
+
+
+def test_normalize_currency_values_preserves_amounts() -> None:
+    df = pd.DataFrame({"revenue": ["$125.50", "1,250.75", "(10.00)", ""]})
+    result = normalize_currency_columns(df.copy())
+    assert result["revenue"].iloc[:3].tolist() == [125.5, 1250.75, -10.0]
+    assert pd.isna(result["revenue"].iloc[3])
 
 
 def test_categorize_low_cardinality_converts_repetitive_columns() -> None:

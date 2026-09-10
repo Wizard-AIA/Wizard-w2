@@ -133,6 +133,38 @@ def sanitize_columns(columns: list[Any]) -> tuple[list[str], dict[str, str]]:
 _CURRENCY_COLUMN_HINTS = ("price", "amount", "balance", "cost", "salary", "revenue", "total")
 
 
+def normalize_currency_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse currency-formatted values without asking a model to guess.
+
+    Currency symbols and thousands separators are presentation, not data. A
+    model-authored cleaning pass is allowed to impute missing values, but it
+    must not reinterpret an existing amount; doing this deterministic step
+    before that pass prevents values such as ``$125.50`` from being corrupted.
+    Columns are changed only when their names look financial and at least 80%
+    of their non-empty values parse as numbers.
+    """
+    for column in df.columns:
+        name = str(column).lower()
+        if not any(hint in name for hint in _CURRENCY_COLUMN_HINTS):
+            continue
+        series = df[column]
+        if not (pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype)):
+            continue
+        text = series.astype("string").str.strip()
+        candidates = text.notna() & text.ne("")
+        if not candidates.any():
+            continue
+        normalised = (
+            text.str.replace(r"^([$€£¥])\s*", "", regex=True)
+            .str.replace(",", "", regex=False)
+            .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+        )
+        numeric = pd.to_numeric(normalised, errors="coerce")
+        if numeric[candidates].notna().mean() >= 0.8:
+            df[column] = numeric
+    return df
+
+
 def downcast_numeric(df: pd.DataFrame) -> pd.DataFrame:
     """Shrinks numeric dtypes in place where it is lossless.
 
@@ -259,6 +291,7 @@ class DatasetLoader:
             warnings.append(f"Dropped {len(empty_columns)} fully-empty column(s).")
 
         df = df.reset_index(drop=True)
+        df = normalize_currency_columns(df)
         df = downcast_numeric(df)
         df = categorize_low_cardinality(df)
 
