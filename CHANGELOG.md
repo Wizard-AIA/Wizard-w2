@@ -4,7 +4,7 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
-## [Unreleased]
+## [v1.0.12] - 2026-09-11
 
 ### Fixed
 - Reused any usable Python 3.12+ interpreter, including versioned Python
@@ -225,6 +225,7 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
+[v1.0.12]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.11...v1.0.12
 [v1.0.11]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.10...v1.0.11
 [v1.0.10]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.9...v1.0.10
 [v1.0.9]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.8...v1.0.9

@@ -138,7 +138,7 @@ async def health_ready() -> JSONResponse:
         content=HealthDetailResponse(
             status=status,
             version=API_VERSION,
-            app_version="1.0.11",
+            app_version="1.0.12",
             sandbox_available=sandbox_available,
             execution_backend=backend,
             model_provider=settings.API_PROVIDER,
@@ -269,7 +269,7 @@ async def server_config() -> ServerConfig:
     return ServerConfig(
         app_name=settings.APP_NAME,
         version=API_VERSION,
-        app_version="1.0.11",
+        app_version="1.0.12",
         plot_format=settings.PLOT_FORMAT,
         sandbox_available=backend == "docker",
         sandbox_enabled=settings.SANDBOX_ENABLED,
