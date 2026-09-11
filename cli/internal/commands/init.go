@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"wizard/internal/hostinfo"
 )
@@ -189,6 +190,9 @@ func RunInit(env *Env, args []string) int {
 			}
 		}
 		if len(missing) > 0 {
+			if shouldInstall && runtime.GOOS == "windows" {
+				fmt.Fprintln(env.Err, "\nWindows did not expose one or more newly installed tools to this process. Open a new PowerShell window and re-run `wizard init`.")
+			}
 			fmt.Fprintln(env.Err, "\nOne or more required prerequisites are still missing or too old. Install them and re-run `wizard init`.")
 			return 1
 		}

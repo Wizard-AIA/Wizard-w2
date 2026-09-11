@@ -261,19 +261,7 @@ func privilegedCommand(packageManager string) (string, error) {
 func refreshToolPath() {
 	entries := filepath.SplitList(os.Getenv("PATH"))
 	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "windows" {
-		entries = append(entries,
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Python", "Python312"),
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Python", "Python312", "Scripts"),
-			filepath.Join(os.Getenv("ProgramFiles"), "nodejs"),
-			filepath.Join(os.Getenv("APPDATA"), "npm"),
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "WinGet", "Links"),
-			filepath.Join(home, ".local", "bin"),
-			filepath.Join(home, ".cargo", "bin"),
-		)
-	} else {
-		entries = append(entries, filepath.Join(home, ".local", "bin"), filepath.Join(home, ".cargo", "bin"), "/usr/local/bin", "/opt/homebrew/bin")
-	}
+	entries = append(entries, platformToolPaths(home)...)
 	seen := make(map[string]bool, len(entries))
 	clean := make([]string, 0, len(entries))
 	for _, entry := range entries {

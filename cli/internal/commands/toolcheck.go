@@ -3,10 +3,13 @@ package commands
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,6 +28,7 @@ type ToolCheck struct {
 }
 
 var versionPattern = regexp.MustCompile(`(\d+)\.(\d+)`)
+var versionedPythonPattern = regexp.MustCompile(`^python3(?:\.\d+|\d+)$`)
 
 // CheckPython tries `python3` then `python` -- the former is the common
 // POSIX name, the latter what Windows installs (and what venvs create on
@@ -33,7 +37,7 @@ var versionPattern = regexp.MustCompile(`(\d+)\.(\d+)`)
 // Microsoft Store's "App Execution Alias" stub, which is a real, findable
 // executable that prints a redirect notice instead of a version -- stopping
 // at the first *found* name would report Python missing/broken on a machine
-// where `python` itself is a perfectly good 3.11+.
+// where `python` itself is a perfectly good 3.12+.
 func CheckPython(minMajor, minMinor int) ToolCheck {
 	var best ToolCheck
 	haveBest := false
@@ -42,12 +46,7 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 		if err != nil {
 			continue
 		}
-		version, parsed := parseVersion(runVersion(name, "--version"))
-		c := finishCheck(ToolCheck{
-			Name: "Python", Found: true, Path: path, Version: version,
-			MinMajor: minMajor, MinMinor: minMinor,
-			InstallHint: pythonInstallHint(),
-		}, parsed, version, minMajor, minMinor)
+		c := checkPythonCandidate(name, path, minMajor, minMinor, "--version")
 		if c.OK {
 			return c
 		}
@@ -55,10 +54,79 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 			best, haveBest = c, true
 		}
 	}
+	for _, path := range versionedPythonCandidates() {
+		c := checkPythonCandidate(path, path, minMajor, minMinor, "--version")
+		if c.OK {
+			return c
+		}
+		if !haveBest {
+			best, haveBest = c, true
+		}
+	}
+	for _, path := range platformPythonCandidates() {
+		c := checkPythonCandidate(path, path, minMajor, minMinor, "--version")
+		if c.OK {
+			return c
+		}
+		if !haveBest {
+			best, haveBest = c, true
+		}
+	}
+	if runtime.GOOS == "windows" {
+		// The Windows Store App Execution Alias can occupy python3.exe while
+		// the real interpreter is available through the Python launcher. Try
+		// that launcher before reporting the alias as the best candidate.
+		if launcherPath, err := exec.LookPath("py"); err == nil {
+			c := checkPythonCandidate("py", launcherPath, minMajor, minMinor, "-3", "--version")
+			if c.OK {
+				if interpreter := pythonLauncherInterpreter(); interpreter != "" {
+					c.Path = interpreter
+				}
+				return c
+			}
+			if !haveBest {
+				best, haveBest = c, true
+			}
+		}
+	}
 	if haveBest {
 		return best
 	}
 	return ToolCheck{Name: "Python", Found: false, MinMajor: minMajor, MinMinor: minMinor, InstallHint: pythonInstallHint()}
+}
+
+// versionedPythonCandidates finds interpreters such as python3.14 when a
+// platform does not provide a generic python3 symlink. It only scans the
+// process PATH; Windows-specific install roots are handled separately by
+// platformPythonCandidates.
+func versionedPythonCandidates() []string {
+	candidates := make([]string, 0, 4)
+	for _, directory := range filepath.SplitList(os.Getenv("PATH")) {
+		if directory == "" {
+			continue
+		}
+		matches, _ := filepath.Glob(filepath.Join(directory, "python3*"))
+		for _, path := range matches {
+			info, err := os.Stat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			name := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".exe")
+			if versionedPythonPattern.MatchString(name) {
+				candidates = append(candidates, path)
+			}
+		}
+	}
+	return candidates
+}
+
+func checkPythonCandidate(name, path string, minMajor, minMinor int, args ...string) ToolCheck {
+	version, parsed := parseVersion(runVersion(name, args...))
+	return finishCheck(ToolCheck{
+		Name: "Python", Found: true, Path: path, Version: version,
+		MinMajor: minMajor, MinMinor: minMinor,
+		InstallHint: pythonInstallHint(),
+	}, parsed, version, minMajor, minMinor)
 }
 
 // CheckNode looks for `node` on PATH.
@@ -86,7 +154,7 @@ func CheckOllama() ToolCheck {
 
 // CheckUV and CheckPnpm are presence-only, like CheckOllama: installDependencies
 // shells out to whatever `uv`/`pnpm` a user has, and there is no minimum this
-// project pins against -- only Python 3.11 and Node 20 have a real version floor.
+// project pins against -- only Python 3.12 and Node 20 have a real version floor.
 func CheckUV() ToolCheck {
 	path, err := exec.LookPath("uv")
 	if err != nil {
@@ -111,6 +179,10 @@ func CheckPnpm() ToolCheck {
 // A timeout is treated the same as unparsable output -- an unknown version,
 // not a crash.
 func runVersion(name string, args ...string) string {
+	return runCommandOutput(name, args...)
+}
+
+func runCommandOutput(name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -121,6 +193,20 @@ func runVersion(name string, args ...string) string {
 		return ""
 	}
 	return out.String()
+}
+
+// pythonLauncherInterpreter resolves the Python launcher to the concrete
+// interpreter path that uv should use for the managed venv. Passing py.exe
+// itself would let the launcher choose a different interpreter later.
+func pythonLauncherInterpreter() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	path := strings.TrimSpace(runCommandOutput("py", "-3", "-c", "import sys; print(sys.executable)"))
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return ""
 }
 
 func parseVersion(raw string) (string, [2]int) {

@@ -4,6 +4,17 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [Unreleased]
+
+### Fixed
+- Reused any usable Python 3.12+ interpreter, including versioned Python
+  commands such as `python3.14`, instead of reinstalling a compatible version.
+- Improved Windows prerequisite discovery after Winget installs by refreshing
+  user/system PATH values, checking common installation roots, and resolving
+  the Python launcher to the concrete interpreter passed to `uv`.
+- Added an actionable new-PowerShell hint when Windows still cannot expose a
+  newly installed prerequisite to the running process.
+
 ## [v1.0.11] - 2026-09-10
 
 ### Fixed

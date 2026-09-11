@@ -46,6 +46,13 @@ func TestFinishCheckOKOnNewerMinor(t *testing.T) {
 	}
 }
 
+func TestFinishCheckAcceptsPython314(t *testing.T) {
+	c := finishCheck(ToolCheck{Name: "Python"}, [2]int{3, 14}, "3.14", minPythonMajor, minPythonMinor)
+	if !c.OK {
+		t.Fatal("expected Python 3.14 to satisfy the Python 3.12 minimum")
+	}
+}
+
 func TestFinishCheckNotOKOnOlderMinor(t *testing.T) {
 	c := finishCheck(ToolCheck{Name: "Python"}, [2]int{3, 10}, "3.10", 3, 11)
 	if c.OK {

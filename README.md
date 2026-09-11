@@ -83,7 +83,7 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 Downloaded a [release zip](#download)? You already have a prebuilt `wizard` binary — skip straight to:
 
 ```bash
-./cli/wizard init                  # checks Python 3.12+/Node 20+, installs dependencies
+./cli/wizard init                  # reuses Python 3.12+ (including 3.14); checks Node 20+ and installs dependencies
 ./cli/wizard start                 # launches both in the background, opens a browser
 ./cli/wizard status                # what's running, host sizing, sandbox capability
 ./cli/wizard stop
