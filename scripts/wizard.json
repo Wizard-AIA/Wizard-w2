@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/Wizard-AIA/Wizard-w2/releases/download/v1.0.12/Wizard-v1.0.12-windows-amd64.zip",
-      "hash": "ca31f1d08337684c3228e3d9e0edb5f2093d5a601d3b46027dc2ce027065db3c",
+      "hash": "e75673303b4f9785607f4efbbb7e30e999f4b53651d2cd134d056856849f8a01",
       "extract_dir": "Wizard-v1.0.12-windows-amd64",
       "bin": "cli/wizard.exe"
     }
