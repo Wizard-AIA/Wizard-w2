@@ -37,7 +37,7 @@ httpx==0.28.1
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
 pandas==3.0.5
-numpy==2.5.2
+numpy==2.5.3
 pyarrow==25.0.1
 scipy==1.18.1
 matplotlib==3.11.1
@@ -46,9 +46,9 @@ tabulate==0.10.0
 openpyxl==3.1.5
 
 # Model access
-langchain>=1.3.18,<1.4.0
+langchain>=1.4.0,<1.5.0
 langchain-ollama==1.1.0
-langchain-openai>=1.6.0
+langchain-openai>=1.6.1
 
 # Execution sandbox
 docker==7.2.0
