@@ -95,3 +95,6 @@ dist/
 # TypeScript incremental build cache
 frontend/tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# npx skills lock file (local skill install state, not shared)
+skills-lock.json
