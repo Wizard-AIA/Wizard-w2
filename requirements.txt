@@ -24,7 +24,7 @@
 
 # Web layer
 fastapi==0.141.1
-uvicorn==0.52.4
+uvicorn==0.53.0
 python-multipart==0.0.32
 pydantic==2.13.5
 pydantic-settings==2.15.0
@@ -40,7 +40,7 @@ pandas==3.0.5
 numpy==2.5.3
 pyarrow==25.0.1
 scipy==1.18.1
-matplotlib==3.11.1
+matplotlib==3.11.2
 tabulate==0.10.0
 # Required to ingest .xlsx/.xls uploads.
 openpyxl==3.1.5
@@ -48,7 +48,7 @@ openpyxl==3.1.5
 # Model access
 langchain>=1.4.0,<1.5.0
 langchain-ollama==1.1.0
-langchain-openai>=1.6.1
+langchain-openai>=1.6.2
 
 # Execution sandbox
 docker==7.2.0
