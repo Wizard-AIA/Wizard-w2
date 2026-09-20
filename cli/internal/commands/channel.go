@@ -93,10 +93,29 @@ func saveChannel(env *Env, ch Channel) error {
 	if path == "" {
 		return fmt.Errorf("no Wizard config directory to save the channel in")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(string(ch)+"\n"), 0o600)
+	// Write beside the file and rename over it. WriteFile truncates first, so a
+	// `wizard update` or `wizard doctor` in another terminal could read the file
+	// empty, call it "not a channel name" and fall back to stable for that run.
+	tmp, err := os.CreateTemp(dir, ".update-channel-*") // created 0600
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.WriteString(string(ch) + "\n")
+	cerr := tmp.Close()
+	if werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return werr
 }
 
 func describeChannel(ch Channel) string {

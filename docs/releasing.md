@@ -20,9 +20,12 @@ The tag's `X.Y.Z` must equal `VERSION`: a pre-release is a candidate for the
 version in `VERSION`, published early. Ordering is SemVer's:
 `1.0.14-alpha.1 < 1.0.14-beta.1 < 1.0.14-beta.10 < 1.0.14-rc.1 < 1.0.14`.
 
-The grammar is enforced in four places that share one test table:
+The grammar is enforced in four places, each with its own accept/reject tests:
 `scripts/release.py` (`tag-info`, `check`), the CLI (`cli/internal/relver`),
-`scripts/install.sh` and `scripts/install.ps1`. Change it in all four.
+`scripts/install.sh` and `scripts/install.ps1`. There is no shared table, so
+change it in all four and keep their edge cases level: leading zeros, `N = 0`,
+build metadata, upper-case kinds, a `V` or `vv` prefix, a second line, and
+non-ASCII digits are all refused everywhere.
 
 ## Cutting a stable release
 

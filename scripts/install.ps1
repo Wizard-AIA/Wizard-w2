@@ -132,12 +132,20 @@ function Save-Url([string]$Url, [string]$Destination) {
 # The release grammar, shared with scripts/release.py, the CLI and install.sh:
 #   X.Y.Z             a stable release
 #   X.Y.Z-KIND.N      a pre-release (KIND is alpha, beta or rc; N starts at 1)
-# No leading zeros, no build metadata, nothing else. Matching is case-sensitive.
-$script:ReleaseVersionPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(alpha|beta|rc)\.[1-9]\d*)?$'
-$script:PreReleaseTagPattern = '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|beta|rc)\.[1-9]\d*$'
+# No leading zeros, no build metadata, nothing else. Matching is case-sensitive,
+# digits are ASCII only, and \z (not $) means nothing may follow the version.
+$script:ReleaseVersionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?\z'
+$script:PreReleaseTagPattern = '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)\.[1-9][0-9]*\z'
+
+# Remove-TagPrefix: trim, then drop at most one lowercase v (V and vv are not tags).
+function Remove-TagPrefix([string]$Raw) {
+    $v = $Raw.Trim()
+    if ($v.StartsWith('v', [System.StringComparison]::Ordinal)) { $v = $v.Substring(1) }
+    return $v
+}
 
 function ConvertTo-Tag([string]$Raw) {
-    $v = $Raw.Trim().TrimStart('v', 'V')
+    $v = Remove-TagPrefix $Raw
     if (-not ($v -cmatch $script:ReleaseVersionPattern)) {
         Fail 2 "not a release version: '$Raw' (expected X.Y.Z or X.Y.Z-beta.N, for example 1.0.13 or 1.0.14-beta.1)"
     }
@@ -148,8 +156,8 @@ function ConvertTo-Tag([string]$Raw) {
 # numbers, then 9 for a stable release or 1/2/3 for alpha/beta/rc, so
 # 1.0.14-rc.1 sorts below 1.0.14.
 function Get-ReleaseKey([string]$Tag) {
-    $v = $Tag.Trim().TrimStart('v', 'V')
-    if (-not ($v -cmatch '^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$')) { Fail 2 "not a release version: '$Tag'" }
+    $v = Remove-TagPrefix $Tag
+    if (-not ($v -cmatch $script:ReleaseVersionPattern)) { Fail 2 "not a release version: '$Tag'" }
     $rank = 9; $n = 0
     if ($Matches[4]) { $rank = @{ alpha = 1; beta = 2; rc = 3 }[$Matches[4]]; $n = [int]$Matches[5] }
     return ('{0:D9}.{1:D9}.{2:D9}.{3}.{4:D9}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $rank, $n)
@@ -377,6 +385,11 @@ function Install-Wizard {
         } else {
             Step 'Finding the latest release'
             $tag = ConvertTo-Tag (Resolve-LatestTag $baseOverride $temp)
+            # The release workflow keeps pre-releases out of GitHub's "latest"; a release
+            # made by hand with the pre-release box unticked would not be.
+            if ($tag.Contains('-')) {
+                Fail 4 "the latest release ($tag) is a pre-release, so it was not installed.`n       Name a release explicitly:  -Version X.Y.Z    or opt in:  -PreRelease"
+            }
         }
         $pkg = "Wizard-$tag-$target"
         $asset = "$pkg.zip"

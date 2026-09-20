@@ -58,6 +58,8 @@ die()   { code=$1; shift; printf '%serror%s %s\n' "$RED" "$RESET" "$*" >&2; exit
 
 VERSION_ARG="${WIZARD_VERSION:-}"
 CHANNEL="${WIZARD_CHANNEL:-}"   # "" (not chosen), stable or pre-release
+PRE_FLAG=0                      # --pre-release was given
+CHANNEL_FLAG=""                 # the value of --channel, if given
 INSTALL_DIR="${WIZARD_INSTALL_DIR:-${WIZARD_HOME:-}}"
 NO_MODIFY_PATH="${WIZARD_NO_MODIFY_PATH:-0}"
 VERBOSE="${WIZARD_VERBOSE:-0}"
@@ -97,9 +99,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --version)         [ $# -ge 2 ] || die 2 "--version needs a value (for example 1.0.13)"; VERSION_ARG=$2; shift 2 ;;
     --version=*)       VERSION_ARG=${1#--version=}; shift ;;
-    --pre-release)     CHANNEL=pre-release; shift ;;
-    --channel)         [ $# -ge 2 ] || die 2 "--channel needs a value (stable or pre-release)"; CHANNEL=$2; shift 2 ;;
-    --channel=*)       CHANNEL=${1#--channel=}; shift ;;
+    --pre-release)     PRE_FLAG=1; shift ;;
+    --channel)         [ $# -ge 2 ] || die 2 "--channel needs a value (stable or pre-release)"; CHANNEL_FLAG=$2; shift 2 ;;
+    --channel=*)       CHANNEL_FLAG=${1#--channel=}; shift ;;
     --install-dir)     [ $# -ge 2 ] || die 2 "--install-dir needs a directory"; INSTALL_DIR=$2; shift 2 ;;
     --install-dir=*)   INSTALL_DIR=${1#--install-dir=}; shift ;;
     --no-modify-path)  NO_MODIFY_PATH=1; shift ;;
@@ -110,6 +112,17 @@ while [ $# -gt 0 ]; do
     *)                 die 2 "unknown option: $1 (see --help)" ;;
   esac
 done
+
+# A flag beats WIZARD_CHANNEL, but two flags that disagree are an error, as in install.ps1.
+if [ "$PRE_FLAG" = 1 ]; then
+  case "$CHANNEL_FLAG" in
+    ""|pre-release|prerelease) ;;
+    *) die 2 "--pre-release and --channel $CHANNEL_FLAG contradict each other" ;;
+  esac
+  CHANNEL=pre-release
+elif [ -n "$CHANNEL_FLAG" ]; then
+  CHANNEL=$CHANNEL_FLAG
+fi
 
 case "$CHANNEL" in
   ""|stable|pre-release) ;;
@@ -216,6 +229,9 @@ trap 'exit 130' INT TERM
 # No leading zeros, no build metadata, nothing else.
 normalize_tag() {
   raw=${1#v}
+  nl='
+'
+  case $raw in *"$nl"*) die 2 "not a release version: '$1' (expected X.Y.Z or X.Y.Z-beta.N, for example 1.0.13 or 1.0.14-beta.1)" ;; esac
   if ! printf '%s\n' "$raw" | awk '/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$/ { ok=1 } END { exit(ok ? 0 : 1) }'; then
     die 2 "not a release version: '$1' (expected X.Y.Z or X.Y.Z-beta.N, for example 1.0.13 or 1.0.14-beta.1)"
   fi
@@ -275,16 +291,18 @@ published_prereleases() {
 }
 
 # fetch_api URL DEST: like fetch, for api.github.com, with GITHUB_TOKEN when set
-# (the anonymous limit is 60 requests an hour per address).
+# (the anonymous limit is 60 requests an hour per address). With curl the token
+# travels on stdin as a config line, so it never appears in an argument list that
+# other users can read with `ps`. wget has no equivalent, so it never gets the
+# token and the rate limit applies.
 fetch_api() {
   if [ "$DL" = curl ]; then
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-      curl -fSL --proto '=https' --tlsv1.2 --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" -o "$2" "$1"
+      printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
+        curl -fSL --proto '=https' --tlsv1.2 --retry 3 -K - -o "$2" "$1"
     else
       curl -fSL --proto '=https' --tlsv1.2 --retry 3 -o "$2" "$1"
     fi
-  elif [ -n "${GITHUB_TOKEN:-}" ]; then
-    wget -q --tries=3 --header="Authorization: Bearer $GITHUB_TOKEN" -O "$2" "$1"
   else
     wget -q --tries=3 -O "$2" "$1"
   fi
@@ -293,7 +311,7 @@ fetch_api() {
 # newest_tag: the pre-release channel. The stable release, unless a published
 # pre-release is newer than it.
 newest_tag() {
-  stable="$(latest_tag)"
+  stable="$(latest_tag)" || exit $?
   candidates="$stable"
   if [ -n "$BASE_OVERRIDE" ]; then
     # A mirror may publish LATEST-PRERELEASE beside LATEST.
@@ -304,7 +322,7 @@ newest_tag() {
     fetch_api "https://api.github.com/repos/$REPO/releases?per_page=30" "$TMP/releases.json" 2>"$TMP/fetch.err" || {
       [ "$VERBOSE" = 1 ] && cat "$TMP/fetch.err" >&2
       die 4 "could not list Wizard pre-releases from GitHub (a rate limit is the usual cause).
-       Set GITHUB_TOKEN (any token, no scopes) and re-run, or name one:  --version 1.0.14-beta.1"
+       Set GITHUB_TOKEN (any token, no scopes; used with curl only) and re-run, or name one:  --version 1.0.14-beta.1"
     }
     candidates="$candidates $(published_prereleases "$TMP/releases.json" | tr '\n' ' ')"
   fi
@@ -324,6 +342,10 @@ else
   # own message and exit code instead of being reported as a bad version.
   LATEST="$(latest_tag)"
   TAG="$(normalize_tag "$LATEST")"
+  case $TAG in
+    *-*) die 4 "the latest release ($TAG) is a pre-release, so it was not installed.
+       Name a release explicitly:  --version X.Y.Z    or opt in:  --pre-release" ;;
+  esac
 fi
 
 PKG="Wizard-$TAG-$OS-$ARCH"
@@ -443,10 +465,18 @@ chmod +x "$STAGE/$PKG/cli/wizard"
 # Run the new binary before anything is switched over: a wrong-architecture or
 # blocked binary fails here, with the old installation untouched.
 REPORTED="$("$STAGE/$PKG/cli/wizard" --version 2>&1)" || die 1 "the downloaded program does not run on this machine: $REPORTED"
-case "$REPORTED" in
-  *"$TAG"*) ;;
-  *) die 1 "the downloaded program reports '$REPORTED' but $TAG was requested" ;;
-esac
+# The tag must appear as a whole version: v1.0.14 is not v1.0.14-beta.1, and
+# v1.0.14-beta.1 is not v1.0.14-beta.10.
+if ! printf '%s\n' "$REPORTED" | awk -v tag="$TAG" '{
+    rest = $0; offset = 0
+    while ((i = index(rest, tag)) > 0) {
+      next_char = substr(rest, i + length(tag), 1)
+      if (next_char !~ /[-.0-9A-Za-z]/) { ok = 1; break }
+      rest = substr(rest, i + 1)
+    }
+  } END { exit(ok ? 0 : 1) }'; then
+  die 1 "the downloaded program reports '$REPORTED' but $TAG was requested"
+fi
 
 # ---- switch over -------------------------------------------------------------
 

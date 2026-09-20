@@ -40,10 +40,12 @@ from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 # No leading zeros, matching the Go CLI's parser: 1.0.13 is a version, 1.0.013 is a typo.
-_NUM = r"(?:0|[1-9]\d*)"
-SEMVER = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
+# [0-9], not \d (which matches other scripts' digits), and \Z, not $ (which allows a
+# trailing newline): the same strictness as the Go, sh and PowerShell parsers.
+_NUM = r"(?:0|[1-9][0-9]*)"
+SEMVER = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}\Z")
 # vX.Y.Z or vX.Y.Z-KIND.N. Group 1 is the base version, group 2 the pre-release part.
-TAG = re.compile(rf"^v({_NUM}\.{_NUM}\.{_NUM})(?:-((?:alpha|beta|rc)\.[1-9]\d*))?$")
+TAG = re.compile(rf"^v({_NUM}\.{_NUM}\.{_NUM})(?:-((?:alpha|beta|rc)\.[1-9][0-9]*))?\Z")
 CHECKSUM_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(?:\./)?(\S.*)$")
 # In frontend/lib/api-types.generated.ts: "App Version" then its "@default X.Y.Z".
 APP_VERSION_DEFAULT = re.compile(r"(App Version\s*\n\s*\* @default )\d+\.\d+\.\d+")

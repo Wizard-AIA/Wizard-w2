@@ -280,10 +280,12 @@ write_curl_stub() {
   cat > "$STUBS/curl" <<'STUB'
 #!/bin/sh
 out=""; fmt=""; url=""
+echo "$*" >> "$STUB_LOG.argv"
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift 2 ;;
     -w) fmt=$2; shift 2 ;;
+    -K) [ "$2" != - ] || cat > "$STUB_LOG.stdin"; shift 2 ;;
     --proto|--retry|--retry-delay|-H) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
@@ -372,6 +374,41 @@ pre_release_cases() {
   exit_is 0 "a channel that cannot be saved does not fail the install" --pre-release
   expect "it says how to set it by hand" grep -q 'wizard channel pre-release' "$OUT"
 
+  # -- edges the grammar and the flags must refuse ----------------------------
+  new_case; exit_is 2 "a version with a second line is not a release version" --version "9.9.9
+x"
+  new_case; exit_is 2 "--pre-release and --channel stable contradict each other" --pre-release --channel stable
+  new_case; exit_is 2 "...in either order" --channel stable --pre-release
+  new_case; exit_is 0 "--pre-release with --channel pre-release is not a contradiction" --pre-release --channel pre-release
+
+  # A hand-made release with the pre-release box unticked becomes GitHub's
+  # "latest". The default path must not install it.
+  echo v9.9.10-beta.1 > "$SERVER_ROOT/LATEST"
+  new_case
+  exit_is 4 "a pre-release named as the latest release is not installed by default" --yes
+  expect "nothing was installed" sh -c "! test -e '$INSTALL/current'"
+  expect "it says how to opt in or name a version" sh -c "grep -q -- '--pre-release' '$OUT' && grep -q -- '--version' '$OUT'"
+  echo v9.9.9 > "$SERVER_ROOT/LATEST"
+
+  # bash does not carry errexit into $(...): a failing stable lookup must still
+  # stop the pre-release lookup instead of letting a pre-release win unchecked.
+  new_case; TEST_BASE="$BASE/no-such-mirror"
+  exit_is 4 "a failing stable lookup stops the --pre-release lookup" --pre-release
+  expect "nothing was installed" sh -c "! test -e '$INSTALL/current'"
+  TEST_BASE=""
+
+  # The unpacked program must report exactly the requested version, not one that
+  # merely starts with it.
+  make_release v9.9.11 v9.9.11-beta.1
+  new_case; exit_is 1 "a program reporting v9.9.11-beta.1 is not v9.9.11" --version 9.9.11
+  expect "nothing was installed" sh -c "! test -e '$INSTALL/current'"
+  make_release v9.9.12-beta.1 v9.9.12-beta.10
+  new_case; exit_is 1 "a program reporting beta.10 is not beta.1" --version 9.9.12-beta.1
+  make_release v9.9.13-beta.1
+  new_case; exit_is 0 "a program reporting exactly the requested pre-release is accepted" --version 9.9.13-beta.1
+  make_release v9.9.9
+  make_release v9.9.10-beta.1
+
   # -- the pure functions ------------------------------------------------------
   new_case
   sed -n '/^semver_key() {/,/^}/p; /^newest_of() {/,/^}/p; /^published_prereleases() {/,/^}/p' "$INSTALLER" > "$WORK/fns.sh"
@@ -409,6 +446,8 @@ v1.0.14-alpha.1'
   new_case; write_curl_stub; github_env "GITHUB_TOKEN=ghp_notarealtoken0000000000000000000000000"
   exit_is 0 "GitHub path: a GITHUB_TOKEN is accepted" --pre-release
   expect "the token is never printed" sh -c "! grep -q ghp_notarealtoken '$OUT'"
+  expect "the token reached curl on stdin, as an Authorization header" grep -q 'Authorization: Bearer ghp_notarealtoken' "$WORK/case$CASE/curl.log.stdin"
+  expect "the token is not in any curl argument list (ps would show it)" sh -c "! grep -q ghp_notarealtoken '$WORK/case$CASE/curl.log.argv'"
 
   new_case; write_curl_stub; github_env; rm -f "$WORK/releases-pretty.json"
   exit_is 4 "GitHub path: an unreachable releases list is a network error, not a silent stable install" --pre-release

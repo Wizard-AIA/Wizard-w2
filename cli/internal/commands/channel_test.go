@@ -99,6 +99,59 @@ func TestSaveChannelRoundTripsAndCreatesTheDirectory(t *testing.T) {
 	}
 }
 
+func TestSaveChannelReplacesTheFileWholeAndLeavesNothingBehind(t *testing.T) {
+	withBuild(t, "v1.0.13")
+	dir := filepath.Join(t.TempDir(), "wizard")
+	env := &Env{ConfigDir: dir}
+	for _, ch := range []Channel{ChannelPreRelease, ChannelStable, ChannelPreRelease} {
+		if err := saveChannel(env, ch); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(env.channelPath())
+		if err != nil || string(data) != string(ch)+"\n" {
+			t.Fatalf("file after saving %q = %q, %v", ch, data, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the config directory should hold only the channel file, got %d entries", len(entries))
+	}
+	info, err := entries[0].Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.PathSeparator == '/' && info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("the channel file must not be readable by others: %v", info.Mode())
+	}
+}
+
+func TestSaveChannelFailureLeavesNoTempFile(t *testing.T) {
+	withBuild(t, "v1.0.13")
+	dir := filepath.Join(t.TempDir(), "wizard")
+	env := &Env{ConfigDir: dir}
+	// A non-empty directory where the file should go: the rename cannot succeed.
+	if err := os.MkdirAll(env.channelPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.channelPath(), "keep"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveChannel(env, ChannelPreRelease); err == nil {
+		t.Fatal("expected an error when the channel path is a non-empty directory")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		names := []string{}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("a failed save left extra files behind: %v", names)
+	}
+}
+
 func TestRememberChannelSavesOnceAndSaysSo(t *testing.T) {
 	withBuild(t, "v1.0.13")
 	out := &bytes.Buffer{}

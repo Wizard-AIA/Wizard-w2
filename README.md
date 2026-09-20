@@ -118,7 +118,7 @@ Releases are either **stable** or **pre-release** (a beta or release candidate, 
 | Go back to stable | `wizard channel stable` |
 | See which channel I am on | `wizard channel` (`wizard doctor` and `wizard update --check` show it too) |
 
-The pre-release channel follows the newest release of any kind, and a stable release wins as soon as it is newer than the pre-release you are on. Wizard never downgrades by itself: if you switch to stable while running a pre-release that is ahead of it, you stay on that build until a stable release passes it. Homebrew and Scoop follow the stable channel only; to try a pre-release on a machine that has Wizard from Homebrew, use the installer script instead.
+The pre-release channel follows the newest release of any kind, and a stable release wins as soon as it is newer than the pre-release you are on. `wizard update` never downgrades: if you switch to stable while running a pre-release that is ahead of it, you stay on that build until a stable release passes it. Re-running the installer is different, because you are asking for a specific install: without `--pre-release` it installs the latest stable release, which moves you back to stable. The `--pre-release` installer option is served by the website's `install.sh` once a stable release that contains it exists; until then, use the installer attached to the pre-release itself (see `docs/releasing.md`). Homebrew and Scoop follow the stable channel only; to try a pre-release on a machine that has Wizard from Homebrew, use the installer script instead.
 
 ### Uninstall
 

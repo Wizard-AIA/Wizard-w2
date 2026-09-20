@@ -273,12 +273,26 @@ try {
 
     # 11. the pure functions, taken from the installer itself
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
-    $wanted = @('Fail', 'Get-ReleaseKey', 'Get-NewestTag', 'Select-PublishedPreReleases')
+    $wanted = @('Fail', 'Remove-TagPrefix', 'ConvertTo-Tag', 'Get-ReleaseKey', 'Get-NewestTag', 'Select-PublishedPreReleases')
     $definitions = $ast.FindAll({ param($node) ($node -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $node.Name) }, $true)
-    Assert-True (@($definitions).Count -eq 4) 'the helper functions were found in the installer' "found $(@($definitions).Count)"
+    Assert-True (@($definitions).Count -eq 6) 'the helper functions were found in the installer' "found $(@($definitions).Count)"
     foreach ($definition in $definitions) { Invoke-Expression $definition.Extent.Text }
-    $script:PreReleaseTagPattern = [regex]::Match((Get-Content -LiteralPath $installer -Raw), "PreReleaseTagPattern = '([^']+)'").Groups[1].Value
-    Assert-True ($script:PreReleaseTagPattern.Length -gt 10) 'the pre-release tag pattern was found in the installer' $script:PreReleaseTagPattern
+    $installerText = Get-Content -LiteralPath $installer -Raw
+    $script:PreReleaseTagPattern = [regex]::Match($installerText, "PreReleaseTagPattern = '([^']+)'").Groups[1].Value
+    $script:ReleaseVersionPattern = [regex]::Match($installerText, "ReleaseVersionPattern = '([^']+)'").Groups[1].Value
+    Assert-True (($script:PreReleaseTagPattern.Length -gt 10) -and ($script:ReleaseVersionPattern.Length -gt 10)) 'the tag patterns were found in the installer' "$script:PreReleaseTagPattern | $script:ReleaseVersionPattern"
+
+    # The grammar, at its edges. The other three implementations reject every one
+    # of these; this one has to agree.
+    foreach ($good in @('1.0.14', 'v1.0.14', '1.0.14-beta.1', 'v10.20.30-rc.12', ' v1.0.14 ')) {
+        $accepted = try { $null = ConvertTo-Tag $good; $true } catch { $false }
+        Assert-True $accepted "the grammar accepts '$good'"
+    }
+    $arabicDigit = "1.0.1$([char]0x0664)"
+    foreach ($bad in @('V1.0.14', 'vv1.0.14', "1.0.14`nx", '1.0.14 x', '01.0.14', '1.0.14-beta', '1.0.14-beta.0', '1.0.14-Beta.1', '1.0.14+build', '1.0', $arabicDigit, '')) {
+        $accepted = try { $null = ConvertTo-Tag $bad; $true } catch { $false }
+        Assert-True (-not $accepted) "the grammar rejects $($bad -replace "`n", '<LF>')"
+    }
 
     Assert-True ((Get-NewestTag @('v1.0.13', 'v1.0.14-beta.2', 'v1.0.14-beta.10')) -eq 'v1.0.14-beta.10') 'beta.10 outranks beta.2 (numeric, not text)'
     Assert-True ((Get-NewestTag @('v1.0.14-rc.9', 'v1.0.14', 'v1.0.14-beta.1')) -eq 'v1.0.14') 'a stable release outranks its own candidates'

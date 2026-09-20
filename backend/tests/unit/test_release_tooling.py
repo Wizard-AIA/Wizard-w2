@@ -235,6 +235,12 @@ class TestPreReleaseTags:
         "v1.0.14-beta.x",
         "latest",
         "nightly",
+        # `$` would accept a trailing newline and `\d` would accept other scripts'
+        # digits; the Go, sh and PowerShell parsers accept neither.
+        "v1.0.14\n",
+        "v1.0.14-beta.1\n",
+        "v1.0.1\u0664",
+        "v1.0.14-beta.\u0661",
     ]
 
     @pytest.mark.parametrize("tag", list(GOOD))
@@ -253,6 +259,8 @@ class TestPreReleaseTags:
         assert release.SEMVER.match("1.0.13")
         assert not release.SEMVER.match("1.0.013")
         assert not release.SEMVER.match("1.0.13-beta.1")  # VERSION is the base; the suffix lives on the tag
+        assert not release.SEMVER.match("1.0.13\n")
+        assert not release.SEMVER.match("1.0.1\u0664")
 
     def test_a_pre_release_of_the_current_version_is_consistent(self):
         version = release.read_version()
