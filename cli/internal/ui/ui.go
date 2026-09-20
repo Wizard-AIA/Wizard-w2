@@ -33,34 +33,40 @@ const (
 type Theme struct {
 	Color   bool
 	Unicode bool
-	Width   int
+	// Cursor is true when ANSI cursor movement works, which is what an
+	// in-place menu needs. It is independent of Color: NO_COLOR turns colour
+	// off but must not break a menu's redraw.
+	Cursor bool
+	Width  int
+	Height int
 }
 
 // Detect decides the theme for w from the environment. getenv is injected so
 // tests need not touch the process environment.
 func Detect(w io.Writer, getenv func(string) string, goos string) Theme {
-	t := Theme{Width: 100}
+	t := Theme{Width: 100, Height: 24}
 	f, isFile := w.(*os.File)
 	tty := isFile && term.IsTerminal(int(f.Fd()))
 	if tty {
-		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
-			t.Width = width
+		if width, height, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+			t.Width, t.Height = width, height
 		}
 	}
 	dumb := getenv("TERM") == "dumb"
 
-	t.Color = tty && !dumb && getenv("NO_COLOR") == "" && getenv("WIZARD_NO_COLOR") == ""
-	if getenv("FORCE_COLOR") != "" && getenv("NO_COLOR") == "" && getenv("WIZARD_NO_COLOR") == "" {
+	// vt: the terminal understands ANSI escapes (Windows may need them
+	// switched on first). Colour, Unicode and cursor movement all need it.
+	vt := tty && !dumb && enableVT(w)
+	noColor := getenv("NO_COLOR") != "" || getenv("WIZARD_NO_COLOR") != ""
+	t.Cursor = vt
+	t.Color = vt && !noColor
+	if getenv("FORCE_COLOR") != "" && !noColor {
 		t.Color = true
 	}
 
-	t.Unicode = tty && !dumb && getenv("WIZARD_ASCII") == ""
+	t.Unicode = vt && getenv("WIZARD_ASCII") == ""
 	if goos == "windows" && getenv("WT_SESSION") == "" && getenv("TERM_PROGRAM") == "" && getenv("ConEmuANSI") == "" {
 		// Legacy conhost fonts lack many of these glyphs.
-		t.Unicode = false
-	}
-	if t.Color && !enableVT(w) {
-		t.Color = false
 		t.Unicode = false
 	}
 	if t.Width > 120 {

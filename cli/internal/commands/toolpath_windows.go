@@ -35,6 +35,23 @@ func platformToolPaths(home string) []string {
 	add(home, ".local", "bin")
 	add(home, ".cargo", "bin")
 
+	// Node version managers. Appended after the user's own PATH, so a Node that
+	// is already reachable always wins; these only rescue a shell that does not
+	// have the manager loaded (nvm-windows, Volta, fnm).
+	add(os.Getenv("NVM_SYMLINK"))
+	add(localAppData, "Volta", "bin")
+	if nvmHome := firstNonEmpty(os.Getenv("NVM_HOME"), filepath.Join(appData, "nvm")); nvmHome != "" {
+		matches, _ := filepath.Glob(filepath.Join(nvmHome, "v*"))
+		sortVersionDirsDesc(matches)
+		paths = append(paths, matches...)
+	}
+	if fnmMatches, _ := filepath.Glob(filepath.Join(localAppData, "fnm_multishells", "*")); len(fnmMatches) > 0 {
+		paths = append(paths, fnmMatches...)
+	}
+	fnmVersions, _ := filepath.Glob(filepath.Join(localAppData, "fnm", "node-versions", "*", "installation"))
+	sortVersionDirsDesc(fnmVersions)
+	paths = append(paths, fnmVersions...)
+
 	for _, match := range windowsPythonInstallDirs() {
 		paths = append(paths, match, filepath.Join(match, "Scripts"))
 	}

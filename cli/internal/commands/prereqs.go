@@ -340,13 +340,18 @@ func privilegedCommand(packageManager string) (string, error) {
 	return "", fmt.Errorf("%s requires sudo, but sudo was not found; use the install commands printed above", packageManager)
 }
 
+// toolPathHook supplies the extra directories refreshToolPath appends. It is a
+// variable so tests can keep the machine they run on (which may have Node, pnpm
+// or Homebrew in these places) out of their results.
+var toolPathHook = platformToolPaths
+
 // refreshToolPath makes tools installed during this init visible to the same
 // process. Package managers update the user's shell startup files, but child
 // processes cannot mutate the environment of the already-running wizard.
 func refreshToolPath() {
 	entries := filepath.SplitList(os.Getenv("PATH"))
 	home, _ := os.UserHomeDir()
-	entries = append(entries, platformToolPaths(home)...)
+	entries = append(entries, toolPathHook(home)...)
 	seen := make(map[string]bool, len(entries))
 	clean := make([]string, 0, len(entries))
 	for _, entry := range entries {

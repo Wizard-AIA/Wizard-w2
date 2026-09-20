@@ -29,7 +29,18 @@ func fakeCheckout(t *testing.T) string {
 	t.Setenv("WIZARD_ROOT", root)
 	t.Setenv("WIZARD_CONFIG_DIR", filepath.Join(t.TempDir(), "cfg"))
 	t.Setenv("PATH", t.TempDir())
+	isolateToolSearch(t)
 	return root
+}
+
+// isolateToolSearch stops the well-known-locations fallback from finding the
+// real tools installed on the machine running the tests.
+func isolateToolSearch(t *testing.T) {
+	t.Helper()
+	old := toolPathHook
+	toolPathHook = func(string) []string { return nil }
+	t.Cleanup(func() { toolPathHook = old })
+	resetShellFallbackCache()
 }
 
 func TestDoctorReportsMissingToolsAsFailWithFixAndExitsEnvironment(t *testing.T) {
@@ -80,6 +91,7 @@ func TestDoctorWorksWithoutACheckout(t *testing.T) {
 	t.Setenv("WIZARD_ROOT", filepath.Join(t.TempDir(), "nope"))
 	t.Setenv("WIZARD_CONFIG_DIR", filepath.Join(t.TempDir(), "cfg"))
 	t.Setenv("PATH", t.TempDir())
+	isolateToolSearch(t)
 	t.Chdir(t.TempDir())
 	var out, errb bytes.Buffer
 	code := RunDoctor(&out, &errb, nil)

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -211,6 +212,11 @@ func checkRunnable(name, hint string) ToolCheck {
 		return ToolCheck{Name: name, Found: false, InstallHint: hint}
 	}
 	out, runErr := runCommandOutputErr(name, "--version")
+	if runErr != nil && errors.Is(runErr, syscall.ENOEXEC) && runtime.GOOS != "windows" {
+		// exec(2) refuses it but a shell can run it (see runtool.go): usable.
+		name2, args2 := toolExec(name, []string{"--version"})
+		out, runErr = runCommandOutputErr(name2, args2...)
+	}
 	if runErr != nil {
 		return ToolCheck{Name: name, Found: true, Path: path, Version: "unusable: " + runErr.Error(), InstallHint: hint}
 	}

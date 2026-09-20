@@ -107,6 +107,7 @@ func renderDoctor(p *ui.Printer, r *doctorReport) {
 func displayVersion() string { return strings.TrimPrefix(compat.BuildVersion, "v") }
 
 func collectDoctor(network, verbose bool) *doctorReport {
+	refreshToolPath() // same lookup as init, so doctor and init always agree
 	r := &doctorReport{Version: compat.BuildVersion, Platform: platform.Current().String()}
 
 	// Version.

@@ -134,6 +134,11 @@ func RunInit(env *Env, args []string) int {
 	// (auto-select on that provider), same as .env.example's own default.
 	pureCloud := configuredProvider != "" && cloudProviders[configuredProvider] && configuredDataMode != "hybrid"
 
+	// Look in the well-known places (Homebrew, user bins, Node version managers)
+	// as well as PATH before calling anything missing: a shell that loads nvm
+	// lazily, or a GUI launch, would otherwise report an installed Node as absent
+	// and offer to install a second copy. Appended last, so PATH still wins.
+	refreshToolPath()
 	fmt.Fprintln(env.Out, "Checking prerequisites...")
 	python := CheckPython(minPythonMajor, minPythonMinor)
 	node := CheckNode(minNodeMajor)

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -54,6 +55,53 @@ func TestDiscoverModelsGeminiUsesHeaderKeyAndMethods(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Chat, []string{"gemini-2.5-flash"}) || !reflect.DeepEqual(got.Embedding, []string{"gemini-embedding-001"}) {
 		t.Fatalf("got %+v; models that cannot generate or embed (aqa) must be hidden", got)
+	}
+}
+
+// These are names Gemini's live model list actually returned, all of which
+// report "generateContent". Only the first group can be a manager or worker.
+func TestGeminiCatalogHidesImageSpeechMusicAndSpecialistModels(t *testing.T) {
+	usable := []string{"gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-flash-lite",
+		"gemini-flash-latest", "gemini-pro-latest", "gemma-4-31b-it", "gemini-3-flash-preview", "gemini-3.1-pro-preview"}
+	unusable := []string{"gemini-2.5-flash-image", "gemini-2.5-flash-preview-tts", "gemini-3-pro-image-preview",
+		"gemini-3.1-flash-tts-preview", "gemini-3.5-transcribe", "lyria-3-clip-preview", "lyria-3-pro-preview",
+		"nano-banana-pro-preview", "gemini-robotics-er-2-preview", "gemini-2.5-computer-use-preview-10-2025",
+		"deep-research-pro-preview-12-2025", "antigravity-preview-09-2026"}
+	var models []string
+	for _, id := range append(append([]string{}, usable...), unusable...) {
+		models = append(models, fmt.Sprintf(`{"name":"models/%s","supportedGenerationMethods":["generateContent"]}`, id))
+	}
+	got, err := parseModelList("gemini", []byte(`{"models":[`+strings.Join(models, ",")+`]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range unusable {
+		if hasString(got.Chat, id) {
+			t.Errorf("%s cannot be a manager/worker and must not be offered", id)
+		}
+	}
+	for _, id := range usable {
+		if !hasString(got.Chat, id) {
+			t.Errorf("%s is a usable chat model and must be offered", id)
+		}
+	}
+}
+
+// Stable releases come first so the dependable choice is at the top.
+func TestModelListPutsStableReleasesBeforePreviews(t *testing.T) {
+	got := sortedUnique([]string{"z-preview", "b-model", "a-preview", "a-model"})
+	want := []string{"a-model", "b-model", "a-preview", "z-preview"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// Local servers list only what the user installed on purpose; a model named
+// like a filtered cloud family (here "llava-image-tools") must still be offered.
+func TestLocalModelsAreNeverFilteredByName(t *testing.T) {
+	got, err := parseModelList("ollama", []byte(`{"models":[{"name":"llava-image-tools:7b"},{"name":"qwen3:8b"}]}`))
+	if err != nil || len(got.Chat) != 2 {
+		t.Fatalf("got (%+v, %v)", got, err)
 	}
 }
 

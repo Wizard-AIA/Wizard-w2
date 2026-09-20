@@ -12,7 +12,7 @@ func platformToolPaths(home string) []string {
 	// bin/, so the fallback `node@<min>` install is only reachable through its
 	// own opt/ directory.
 	nodeKeg := fmt.Sprintf("opt/node@%d/bin", minNodeMajor)
-	return []string{
+	paths := []string{
 		filepath.Join(home, ".local", "bin"),
 		filepath.Join(home, ".cargo", "bin"),
 		filepath.Join(home, ".local", "share", "pnpm"), // pnpm's standalone installer (Linux)
@@ -23,6 +23,9 @@ func platformToolPaths(home string) []string {
 		"/usr/local/" + nodeKeg,
 		"/home/linuxbrew/.linuxbrew/" + nodeKeg,
 	}
+	// Node version managers (nvm, fnm, volta, asdf, mise): last, so anything
+	// already on the user's PATH wins.
+	return append(paths, versionManagerBins(home)...)
 }
 
 func platformPythonCandidates() []string { return nil }

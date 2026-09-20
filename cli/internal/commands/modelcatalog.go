@@ -174,7 +174,7 @@ func parseModelList(provider string, body []byte) (modelList, error) {
 			switch {
 			case hasString(m.Methods, "embedContent"):
 				out.Embedding = append(out.Embedding, id)
-			case hasString(m.Methods, "generateContent"):
+			case hasString(m.Methods, "generateContent") && isChatModel("gemini", id):
 				out.Chat = append(out.Chat, id)
 			}
 		}
@@ -211,6 +211,8 @@ func tidyModelList(m modelList) modelList {
 	return m
 }
 
+// sortedUnique de-duplicates and orders models: stable releases first, then
+// previews, each alphabetical, so the dependable choices are at the top.
 func sortedUnique(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
@@ -220,7 +222,13 @@ func sortedUnique(in []string) []string {
 			out = append(out, s)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		pi, pj := isPreviewModel(out[i]), isPreviewModel(out[j])
+		if pi != pj {
+			return !pi
+		}
+		return out[i] < out[j]
+	})
 	return out
 }
 
@@ -240,16 +248,21 @@ func isEmbeddingModel(id string) bool {
 	return strings.Contains(id, "embed") || strings.HasPrefix(id, "bge-") || strings.HasPrefix(id, "all-minilm")
 }
 
-// nonChatFamilies are model families that a provider lists next to its chat
-// models but that cannot serve as a manager or worker.
+// nonChatFamilies are model families that a cloud provider lists next to its
+// chat models (Gemini reports image, speech and music models as able to
+// "generateContent" too) but that cannot serve as a manager or worker.
+// Showing them would offer choices that fail the first time they are used.
 var nonChatFamilies = []string{
 	"whisper", "tts", "dall-e", "moderation", "davinci", "babbage", "audio",
 	"realtime", "transcribe", "image", "sora", "search-preview", "computer-use", "codex-mini",
+	"lyria", "nano-banana", "robotics", "deep-research", "antigravity", "veo", "imagen", "live", "learnlm", "aqa",
 }
 
 // isChatModel reports whether id can be picked as a manager/worker model.
+// Local servers (Ollama, LM Studio) list only what the user installed on
+// purpose, so those are never filtered by name.
 func isChatModel(provider, id string) bool {
-	if provider != "openai" {
+	if provider == "ollama" || provider == "lmstudio" {
 		return true
 	}
 	lower := strings.ToLower(id)
@@ -258,7 +271,16 @@ func isChatModel(provider, id string) bool {
 			return false
 		}
 	}
-	return strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "chatgpt-") ||
-		strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") ||
-		strings.HasPrefix(lower, "o5")
+	if provider == "openai" {
+		return strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "chatgpt-") ||
+			strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") ||
+			strings.HasPrefix(lower, "o5")
+	}
+	return true
+}
+
+// isPreviewModel marks experimental releases, which are listed after stable ones.
+func isPreviewModel(id string) bool {
+	lower := strings.ToLower(id)
+	return strings.Contains(lower, "preview") || strings.Contains(lower, "-exp") || strings.Contains(lower, "experimental")
 }
