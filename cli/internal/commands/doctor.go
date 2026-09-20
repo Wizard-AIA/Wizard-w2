@@ -118,6 +118,18 @@ func collectDoctor(network, verbose bool) *doctorReport {
 		r.add("version", "Wizard CLI", ui.OK, fmt.Sprintf("%s, backend API compat v%s", compat.BuildVersion, compat.CompatAPIVersion), "")
 	}
 
+	// Update channel: which releases `wizard update` follows.
+	channelEnv := &Env{}
+	if dir, err := appdir.ConfigDir(); err == nil {
+		channelEnv.ConfigDir = dir
+	}
+	if ch, source, problem := resolveChannel(channelEnv); problem != nil {
+		r.add("channel", "Update channel", ui.Warn, fmt.Sprintf("%s (%s); %v", ch, source, problem),
+			"Set it again with `wizard channel stable` or `wizard channel pre-release`.")
+	} else {
+		r.add("channel", "Update channel", ui.OK, fmt.Sprintf("%s (%s)", ch, source), "")
+	}
+
 	// Platform.
 	cur := platform.Current()
 	if cur.Supported() {

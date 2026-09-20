@@ -10,6 +10,8 @@
 #   tag defaults to v<contents of VERSION>. A tag that disagrees with VERSION is
 #   refused: a release built from one version and labelled with another is how
 #   `wizard --version` ends up lying. "dev" is allowed for local test builds.
+#   A pre-release tag (v1.0.14-beta.1) is built from a tree whose VERSION is
+#   1.0.14; its archives are stamped with the full 1.0.14-beta.1.
 #
 # The target matrix comes from packaging/release.json, the same file the
 # installers' tests, the packaging renderer and the CLI's own test read.
@@ -28,9 +30,15 @@ done
 
 FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
 VERSION="${1:-v$FILE_VERSION}"
-if [ "$VERSION" != "dev" ] && [ "$VERSION" != "v$FILE_VERSION" ]; then
-  echo "error: tag '$VERSION' does not match VERSION ($FILE_VERSION). Bump VERSION (scripts/release.py set-version) or fix the tag." >&2
-  exit 1
+if [ "$VERSION" != "dev" ]; then
+  # tag-info checks the tag grammar (vX.Y.Z or vX.Y.Z-beta.N) and names the
+  # version the tag is for. A pre-release of X.Y.Z is built from a tree whose
+  # VERSION says X.Y.Z.
+  TAG_BASE="$(python3 scripts/release.py tag-info "$VERSION" | sed -n 's/^base=//p')" || exit 1
+  if [ "$TAG_BASE" != "$FILE_VERSION" ]; then
+    echo "error: tag '$VERSION' does not match VERSION ($FILE_VERSION). Bump VERSION (scripts/release.py set-version) or fix the tag." >&2
+    exit 1
+  fi
 fi
 DIST_DIR="$REPO_ROOT/dist"
 BASE_STAGE="$DIST_DIR/_base"
@@ -88,6 +96,14 @@ done < "$REPO_ROOT/.distignore"
 # CLAUDE.md is excluded above. The installers and `wizard update` refuse any
 # archive that contains a link, so none may reach the zip.
 find "$BASE_STAGE" -type l -delete
+
+# A pre-release archive carries its full version (1.0.14-beta.1) in the packaged
+# VERSION file. The backend reads its version from there, so the backend a beta
+# ships reports the same identity as the tag and the CLI, instead of claiming to
+# be the stable release it precedes. The repository's own VERSION is untouched.
+if [ "$VERSION" != "dev" ] && [ "$VERSION" != "v$FILE_VERSION" ]; then
+  printf '%s\n' "${VERSION#v}" > "$BASE_STAGE/VERSION"
+fi
 
 # requirements.txt/.lock.txt/-local.txt pin this org's own Safety.dev
 # vulnerability-scanning proxy as their package index (see

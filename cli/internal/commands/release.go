@@ -18,21 +18,30 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"wizard/internal/platform"
+	"wizard/internal/relver"
 )
 
 const (
+	// defaultReleaseAPIURL is GitHub's "latest release", which never returns a
+	// pre-release or a draft. Every stable install, and every CLI built before
+	// pre-releases existed, follows it, so publishing a pre-release cannot
+	// reach anyone who did not ask for one.
 	defaultReleaseAPIURL = "https://api.github.com/repos/Wizard-AIA/Wizard-w2/releases/latest"
-	checksumAssetName    = "SHA256SUMS"
-	maxReleaseMetadata   = 1 << 20
-	maxChecksumFile      = 4 << 20
-	maxReleaseArchive    = int64(2 << 30)
-	maxArchiveFiles      = 20000
-	maxArchiveExtracted  = int64(4 << 30)
+	// defaultReleaseListURL lists recent releases, pre-releases included, for
+	// the pre-release channel. Newest-created first, but not necessarily the
+	// highest version, so the caller picks the maximum itself.
+	defaultReleaseListURL = "https://api.github.com/repos/Wizard-AIA/Wizard-w2/releases?per_page=30"
+	checksumAssetName     = "SHA256SUMS"
+	maxReleaseMetadata    = 1 << 20
+	maxReleaseList        = 4 << 20
+	maxChecksumFile       = 4 << 20
+	maxReleaseArchive     = int64(2 << 30)
+	maxArchiveFiles       = 20000
+	maxArchiveExtracted   = int64(4 << 30)
 )
 
 const (
@@ -49,7 +58,8 @@ const (
 var errNetwork = errors.New("network error")
 
 var (
-	releaseAPIURL = defaultReleaseAPIURL
+	releaseAPIURL  = defaultReleaseAPIURL
+	releaseListURL = defaultReleaseListURL
 	// The default transport honors HTTPS_PROXY/HTTP_PROXY/NO_PROXY and, on
 	// Unix, SSL_CERT_FILE, which is what corporate proxies need. No overall
 	// Client.Timeout: it would include the response body read.
@@ -63,42 +73,106 @@ type releaseAsset struct {
 }
 
 type latestRelease struct {
-	TagName string         `json:"tag_name"`
-	HTMLURL string         `json:"html_url"`
-	Assets  []releaseAsset `json:"assets"`
+	TagName    string         `json:"tag_name"`
+	HTMLURL    string         `json:"html_url"`
+	Draft      bool           `json:"draft"`
+	Prerelease bool           `json:"prerelease"`
+	Assets     []releaseAsset `json:"assets"`
 }
 
-func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
+// getReleaseJSON GETs a GitHub release endpoint and decodes at most limit bytes
+// of JSON into out. Failures that mean "the service was unreachable or said no"
+// wrap errNetwork so callers exit with the network code.
+func getReleaseJSON(ctx context.Context, url string, limit int64, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, metadataTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPIURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return latestRelease{}, fmt.Errorf("creating release request: %w", err)
+		return fmt.Errorf("creating release request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wizard-cli-update")
 	setGitHubAuth(req)
 	resp, err := releaseHTTPClient.Do(req)
 	if err != nil {
-		return latestRelease{}, fmt.Errorf("checking for the latest Wizard release: %w: %v", errNetwork, err)
+		return fmt.Errorf("checking for the latest Wizard release: %w: %v", errNetwork, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			return latestRelease{}, fmt.Errorf("GitHub's anonymous rate limit for this network is used up: %w. Try again later, or set GITHUB_TOKEN (any token, no scopes) to raise it", errNetwork)
+			return fmt.Errorf("GitHub's anonymous rate limit for this network is used up: %w. Try again later, or set GITHUB_TOKEN (any token, no scopes) to raise it", errNetwork)
 		}
-		return latestRelease{}, fmt.Errorf("release service returned %s: %w: %s", resp.Status, errNetwork, strings.TrimSpace(string(body)))
+		return fmt.Errorf("release service returned %s: %w: %s", resp.Status, errNetwork, strings.TrimSpace(string(body)))
 	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, limit+1)).Decode(out); err != nil {
+		return fmt.Errorf("reading release metadata: %w", err)
+	}
+	return nil
+}
+
+// fetchLatestRelease is the stable channel: GitHub's latest release, which must
+// carry a full-release tag. A pre-release here would mean the service is
+// misconfigured, and installing it silently is the one thing this must not do.
+func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 	var release latestRelease
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxReleaseMetadata+1))
-	if err := decoder.Decode(&release); err != nil {
-		return latestRelease{}, fmt.Errorf("reading release metadata: %w", err)
+	if err := getReleaseJSON(ctx, releaseAPIURL, maxReleaseMetadata, &release); err != nil {
+		return latestRelease{}, err
 	}
-	if _, err := parseReleaseVersion(release.TagName); err != nil {
+	v, err := relver.Parse(release.TagName)
+	if err != nil {
 		return latestRelease{}, fmt.Errorf("release service returned an invalid tag %q: %w", release.TagName, err)
 	}
+	if !v.Stable() {
+		return latestRelease{}, fmt.Errorf("release service returned the pre-release %q as the latest release; refusing it on the stable channel", release.TagName)
+	}
 	return release, nil
+}
+
+// fetchNewestRelease is the pre-release channel: the stable release, unless a
+// published pre-release is newer than it.
+//
+// It deliberately does not take the highest version among everything listed.
+// This repository still carries releases from an earlier v2.x line, published
+// and unflagged, that outrank v1.0.x numerically; "highest wins" would send
+// every pre-release user to v2.2.1. So the stable release comes from GitHub's
+// own "latest" answer, and from the list only releases GitHub itself flags as
+// pre-releases, carrying a tag in the release grammar, count. Drafts, odd tags
+// and unflagged tags are ignored, so none of them can break updates.
+func fetchNewestRelease(ctx context.Context) (latestRelease, error) {
+	best, err := fetchLatestRelease(ctx)
+	if err != nil {
+		return latestRelease{}, err
+	}
+	bestVersion, err := relver.Parse(best.TagName)
+	if err != nil {
+		return latestRelease{}, err // unreachable: fetchLatestRelease validated it
+	}
+	var releases []latestRelease
+	if err := getReleaseJSON(ctx, releaseListURL, maxReleaseList, &releases); err != nil {
+		return latestRelease{}, err
+	}
+	for _, release := range releases {
+		if release.Draft || !release.Prerelease {
+			continue
+		}
+		v, err := relver.Parse(release.TagName)
+		if err != nil || v.Stable() {
+			continue
+		}
+		if relver.Compare(v, bestVersion) > 0 {
+			best, bestVersion = release, v
+		}
+	}
+	return best, nil
+}
+
+// fetchRelease returns the release a channel points at.
+func fetchRelease(ctx context.Context, ch Channel) (latestRelease, error) {
+	if ch == ChannelPreRelease {
+		return fetchNewestRelease(ctx)
+	}
+	return fetchLatestRelease(ctx)
 }
 
 // setGitHubAuth attaches GITHUB_TOKEN / GH_TOKEN to a request for GitHub's API,
@@ -131,57 +205,28 @@ func releaseArchiveName(tag string) string {
 	return platform.ArtifactName(tag, platform.Current())
 }
 
-// versionParts intentionally accepts only stable numeric release tags. A
-// preview should be installed deliberately rather than silently selected by
-// "latest", and a malformed tag must never be treated as newer.
-func parseReleaseVersion(raw string) ([]int, error) {
-	v := strings.TrimPrefix(strings.TrimSpace(raw), "v")
-	if v == "" || strings.ContainsAny(v, "+-") {
-		return nil, fmt.Errorf("expected a stable vMAJOR.MINOR.PATCH tag")
-	}
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("expected three numeric components")
-	}
-	out := make([]int, len(parts))
-	for i, part := range parts {
-		if part == "" || (len(part) > 1 && part[0] == '0') {
-			return nil, fmt.Errorf("invalid component %q", part)
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 {
-			return nil, fmt.Errorf("invalid component %q", part)
-		}
-		out[i] = n
-	}
-	return out, nil
-}
-
 // releaseUpdateAvailable reports whether the published tag is newer than the
-// current binary. Development builds are deliberately considered updateable:
-// they have no immutable release identity to compare.
+// current binary, by SemVer precedence (a pre-release is older than its own
+// stable release). A malformed tag on either side is an error, never "newer".
+// Development builds are deliberately considered updateable: they have no
+// immutable release identity to compare.
 func releaseUpdateAvailable(current, latest string) (bool, error) {
 	if strings.TrimSpace(current) == "dev" {
 		return true, nil
 	}
-	currentParts, err := parseReleaseVersion(current)
+	installed, err := relver.Parse(current)
 	if err != nil {
-		return false, fmt.Errorf("current CLI build version %q is not a stable release: %w", current, err)
+		return false, fmt.Errorf("current CLI build version %q is not a release version: %w", current, err)
 	}
-	latestParts, err := parseReleaseVersion(latest)
+	published, err := relver.Parse(latest)
 	if err != nil {
 		return false, err
 	}
-	for i := range currentParts {
-		if currentParts[i] != latestParts[i] {
-			return currentParts[i] < latestParts[i], nil
-		}
-	}
-	return false, nil
+	return relver.Compare(installed, published) < 0, nil
 }
 
-func releaseCheck(ctx context.Context) (latestRelease, bool, error) {
-	release, err := fetchLatestRelease(ctx)
+func releaseCheck(ctx context.Context, ch Channel) (latestRelease, bool, error) {
+	release, err := fetchRelease(ctx, ch)
 	if err != nil {
 		return latestRelease{}, false, err
 	}

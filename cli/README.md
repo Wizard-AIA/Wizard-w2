@@ -83,7 +83,8 @@ command: `--no-color` (also `NO_COLOR`) and `--verbose`.
 | `wizard delete` | Stops Wizard and deletes its user-level config, credentials, connections, skills, logs, and managed venv, plus `backend/.env`. The checkout and CLI remain installed. Prompts for confirmation; use `--yes` for automation or `--keep-env` to preserve the checkout's `.env`. |
 | `wizard status` | What's running, log sizes, `API_PROVIDER`/`DATA_MODE`/`EXECUTION_BACKEND`, and, when the backend answers, a render of its own `GET /api/config` (host sizing, sandbox capability, performance notes). |
 | `wizard doctor` | A read-only health report of this installation with PASS / WARN / FAIL per check and a fix for anything that is not a pass: version, platform, install method, whether `wizard` is on PATH, the bundled files, the config directory, Python / Node / uv / pnpm (a tool that is present but cannot run is a failure, with the reason), configuration and credentials, the running service and its API compatibility. It works when the bundled files cannot be found, which is when it is needed. `--json` for scripts, `--network` to also test GitHub Releases and the configured model provider. Exits 3 if a check fails. |
-| `wizard update` | Updates a release install: checks GitHub Releases, verifies the archive's `SHA256SUMS` entry, stages the full package, preserves `backend/.env`, rebuilds it, then advances `current` while keeping the previous package. A git checkout uses `git pull --ff-only`. It **never overwrites files a package manager owns**: on Homebrew or Scoop it prints `brew upgrade wizard` / `scoop update wizard`. A failed update restarts the service it stopped. `--check` only reports (safe on any install). |
+| `wizard update` | Updates a release install: checks GitHub Releases, verifies the archive's `SHA256SUMS` entry, stages the full package, preserves `backend/.env`, rebuilds it, then advances `current` while keeping the previous package. A git checkout uses `git pull --ff-only`. It **never overwrites files a package manager owns**: on Homebrew or Scoop it prints `brew upgrade wizard` / `scoop update wizard`. A failed update restarts the service it stopped. `--check` only reports (safe on any install). Follows the [update channel](#update-channels): `--channel stable\|pre-release` (or `--pre-release`) picks one for this run and remembers it once the update lookup succeeds; with `--check` it is used but not saved. |
+| `wizard channel [stable\|pre-release]` | Shows or changes which releases `wizard update` follows. It reads and writes one small file, needs no checkout and makes no network request, which is why the installers can call it right after installing. `wizard doctor` and `wizard update --check` report the active channel too. |
 | `wizard uninstall` | Removes what the official installer created: the install directory's known contents (never `RemoveAll` on the directory itself), the shell startup blocks or fish drop-in, and on Windows the user PATH entry and `WIZARD_ROOT`. It keeps your data and backs up `backend/.env` to the config directory. **`--purge`** (alias `--all`) removes everything: program, config, API keys, logs and the managed Python environment, and lists exactly what it will delete before asking. Refuses git checkouts and unrecognised layouts, and on Homebrew/Scoop prints the package manager's own command. `--yes` skips the prompt; unattended runs without it are refused. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
@@ -245,6 +246,17 @@ use their explicit Git update path:
   rebuilds it before activation, then safely switches the launcher/current
   pointer, and retains the previous package for rollback. Windows uses a
   detached helper so it never overwrites the running executable in place.
+- <a id="update-channels"></a>**Update channels.** `stable` (the default) follows
+  GitHub's "latest release", which never returns a pre-release. `pre-release`
+  follows the stable release unless a release GitHub flags as a pre-release, with
+  a tag of the form `vX.Y.Z-alpha|beta|rc.N`, is newer than it. It deliberately
+  does not take the highest version among all releases: this repository still
+  carries an older v2.x line that outranks v1.0.x numerically. The effective
+  channel is, in order, the one you chose (`wizard channel`, saved in the config
+  directory as `update-channel`), the pre-release channel if the running build is
+  itself a pre-release, else stable. An update is offered only when the published
+  version is newer by SemVer precedence, so Wizard never downgrades: on a
+  pre-release that is ahead of stable, `--check` says so instead of "up to date".
 - Package managers own their installs. `internal/installkind` recognises a
   Homebrew keg, a Scoop app, the official installer's layout and a git
   checkout from the paths alone; `update` and `uninstall` refuse to touch the

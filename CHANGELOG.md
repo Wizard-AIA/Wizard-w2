@@ -4,6 +4,30 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [Unreleased]
+
+### Added
+- **Stable and pre-release channels.** A release tagged `vX.Y.Z-beta.N` (or
+  `alpha`, `rc`) is published as a GitHub pre-release. Nothing changes for
+  anyone who does not opt in: the installers, `wizard update`, Homebrew, Scoop
+  and the website all follow the latest stable release, which GitHub never
+  points at a pre-release, and a pre-release renders no package metadata,
+  notifies no downstream repository and does not move the container `latest`
+  tag. To opt in: `wizard channel pre-release`, `wizard update --pre-release`,
+  or `install.sh --pre-release` / `install.ps1 -PreRelease`. `wizard channel`
+  shows or changes the choice; `wizard doctor` and `wizard update --check`
+  report it. A stable release wins as soon as it is newer than the pre-release
+  you are on, and Wizard never downgrades. See "Stable and pre-release channels"
+  in the README.
+
+### Fixed
+- **A browser tab left open across a backend restart** (an upgrade, `wizard
+  stop` then `start`) showed four `404 Session not found` errors on load
+  (`/api/data-mode`, `/api/usage`, `/api/permissions`, `/api/session`) and kept
+  creating throwaway sessions. The frontend now replaces the dead session once
+  and replays the failed reads. Writes are not replayed, and only a "Session not
+  found" 404 counts, so a missing file no longer costs the session.
+
 ## [v1.0.13] - 2026-09-20
 
 ### Fixed

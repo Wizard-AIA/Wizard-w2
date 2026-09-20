@@ -49,6 +49,9 @@ func run(args []string) int {
 	case "doctor":
 		// Runs without a checkout: diagnosing a missing one is its job.
 		return commands.RunDoctor(os.Stdout, os.Stderr, rest)
+	case "channel":
+		// Also checkout-free: the installers call it right after installing.
+		return commands.RunChannel(os.Stdout, os.Stderr, rest)
 	}
 
 	if !isKnown(cmd) {

@@ -24,7 +24,8 @@ type commandInfo struct {
 var Commands = []commandInfo{
 	{"init", "Set up", "Choose a model provider, check prerequisites and install dependencies."},
 	{"doctor", "Set up", "Diagnose this installation (--json for scripts, --network for connectivity)."},
-	{"update", "Set up", "Update to the latest release (--check only reports)."},
+	{"update", "Set up", "Update to the latest release (--check only reports; --pre-release opts in to betas)."},
+	{"channel", "Set up", "Show or change which releases update follows: stable or pre-release."},
 	{"uninstall", "Set up", "Remove Wizard; add --purge to delete your data as well."},
 	{"start", "Run", "Launch the backend and frontend in the background."},
 	{"stop", "Run", "Stop them."},

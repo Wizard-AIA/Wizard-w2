@@ -199,3 +199,114 @@ class TestVerify:
         with (tmp_path / "SHA256SUMS").open("a", encoding="utf-8") as fh:
             fh.write("a" * 64 + "  surprise.zip\n")
         assert release.main(["verify", "--dir", str(tmp_path), "--tag", "v9.9.9"]) == 1
+
+
+class TestPreReleaseTags:
+    """A pre-release is tagged vX.Y.Z-KIND.N; only stable releases feed package managers.
+
+    The grammar is shared with the Go CLI (cli/internal/relver), install.sh and
+    install.ps1; each has its own test for the same table.
+    """
+
+    GOOD = {
+        "v1.0.14": ("1.0.14", None),
+        "v1.0.14-beta.1": ("1.0.14", "beta.1"),
+        "v1.0.14-alpha.3": ("1.0.14", "alpha.3"),
+        "v10.20.30-rc.12": ("10.20.30", "rc.12"),
+    }
+    BAD = [
+        "",
+        "v",
+        "1.0.14",
+        "v1.0",
+        "v1.0.14.1",
+        "v01.0.14",
+        "v1.0.014",
+        "v1.0.14-",
+        "v1.0.14-beta",
+        "v1.0.14-beta.",
+        "v1.0.14-beta.0",
+        "v1.0.14-beta.01",
+        "v1.0.14-beta.1.2",
+        "v1.0.14-preview.1",
+        "v1.0.14-Beta.1",
+        "v1.0.14-beta.1+build",
+        "v1.0.14+build",
+        "v1.0.14-beta.x",
+        "latest",
+        "nightly",
+        # `$` would accept a trailing newline and `\d` would accept other scripts'
+        # digits; the Go, sh and PowerShell parsers accept neither.
+        "v1.0.14\n",
+        "v1.0.14-beta.1\n",
+        "v1.0.1\u0664",
+        "v1.0.14-beta.\u0661",
+    ]
+
+    @pytest.mark.parametrize("tag", list(GOOD))
+    def test_valid_tags_parse(self, tag):
+        base, pre = self.GOOD[tag]
+        info = release.parse_tag(tag)
+        assert (info.base, info.prerelease) == (base, pre)
+        assert info.version == tag.removeprefix("v")
+
+    @pytest.mark.parametrize("tag", BAD)
+    def test_everything_else_is_refused(self, tag):
+        with pytest.raises(release.ReleaseError):
+            release.parse_tag(tag)
+
+    def test_the_version_file_rejects_leading_zeros_like_the_cli_does(self):
+        assert release.SEMVER.match("1.0.13")
+        assert not release.SEMVER.match("1.0.013")
+        assert not release.SEMVER.match("1.0.13-beta.1")  # VERSION is the base; the suffix lives on the tag
+        assert not release.SEMVER.match("1.0.13\n")
+        assert not release.SEMVER.match("1.0.1\u0664")
+
+    def test_a_pre_release_of_the_current_version_is_consistent(self):
+        version = release.read_version()
+        assert release.collect_problems(tag=f"v{version}-beta.1") == []
+        assert release.collect_problems(tag=f"v{version}-rc.2") == []
+
+    def test_a_pre_release_of_another_version_is_refused(self):
+        problems = release.collect_problems(tag="v0.0.1-beta.1")
+        assert any("does not match VERSION" in p for p in problems)
+
+    def test_a_malformed_tag_is_reported_not_crashed_on(self):
+        assert any("not a release tag" in p for p in release.collect_problems(tag="v1.0.14-preview.1"))
+
+    def test_only_a_stable_release_needs_a_changelog_section(self, monkeypatch):
+        monkeypatch.setattr(release, "read_version", lambda: "9.9.9")
+        stable = release.collect_problems(tag="v9.9.9", changelog=True)
+        pre = release.collect_problems(tag="v9.9.9-beta.1", changelog=True)
+        assert any("CHANGELOG.md has no" in p for p in stable)
+        assert not any("CHANGELOG" in p for p in pre)
+
+    def test_tag_info_prints_what_the_workflow_reads(self, capsys):
+        assert release.main(["tag-info", "v1.0.14-beta.2"]) == 0
+        lines = dict(line.split("=", 1) for line in capsys.readouterr().out.split())
+        assert lines == {"tag": "v1.0.14-beta.2", "version": "1.0.14-beta.2", "base": "1.0.14", "prerelease": "true"}
+        assert release.main(["tag-info", "v1.0.14"]) == 0
+        assert "prerelease=false" in capsys.readouterr().out
+
+    def test_tag_info_refuses_a_malformed_tag(self, capsys):
+        assert release.main(["tag-info", "v1.0.14-beta"]) == 1
+        assert "not a release tag" in capsys.readouterr().err
+
+    def test_archives_of_a_pre_release_verify_under_their_own_names(self, tmp_path):
+        TestVerify._make_dist(tmp_path, "v9.9.9-beta.1")
+        assert (tmp_path / "Wizard-v9.9.9-beta.1-linux-amd64.zip").exists()
+        assert release.main(["verify", "--dir", str(tmp_path), "--tag", "v9.9.9-beta.1"]) == 0
+
+    def test_verify_refuses_a_malformed_tag(self, tmp_path):
+        TestVerify._make_dist(tmp_path, "v9.9.9")
+        with pytest.raises(release.ReleaseError):
+            release.cmd_verify(release.argparse.Namespace(dir=str(tmp_path), tag="v9.9.9-preview"))
+
+    def test_package_metadata_is_never_rendered_for_a_pre_release(self, tmp_path, capsys):
+        sums_file = tmp_path / "SHA256SUMS"
+        sums_file.write_text(PUBLISHED_V1012, encoding="utf-8")
+        out = tmp_path / "out"
+        rc = release.main(["render", "--version", "1.0.14-beta.1", "--sums", str(sums_file), "--out", str(out)])
+        assert rc == 1
+        assert "pre-release" in capsys.readouterr().err
+        assert not out.exists(), "a pre-release must not leave a formula, manifest or release.json behind"
