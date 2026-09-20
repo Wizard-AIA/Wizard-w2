@@ -10,6 +10,7 @@ backend/tests/
 
 # === Benchmarks & scripts ===
 scripts/
+packaging/
 workspace/sessions/
 
 # === Documentation ===

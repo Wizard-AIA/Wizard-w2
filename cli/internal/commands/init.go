@@ -273,6 +273,11 @@ func RunInit(env *Env, args []string) int {
 	finalProvider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
 	finalEmbeddingProvider, _, _ := readEnvValue(env.BackendEnvPath(), "EMBEDDING_PROVIDER")
 	warnMissingCloudConfig(env, finalProvider)
+	// Keep a private copy outside the package directory so an upgrade or a
+	// reinstall that replaces it does not lose the configuration.
+	if err := backupEnvFile(env); err != nil {
+		fmt.Fprintf(env.Err, "note: could not save a backup of backend/.env (%v)\n", err)
+	}
 
 	if err := installDependencies(env, python); err != nil {
 		fmt.Fprintf(env.Err, "%v\n", err)
@@ -373,6 +378,15 @@ func printCheck(out io.Writer, c ToolCheck) {
 func ensureEnvFile(env *Env, applied bool, manager, worker string) error {
 	if _, err := os.Stat(env.BackendEnvPath()); err == nil {
 		fmt.Fprintln(env.Out, "\nbackend/.env already exists, leaving it as is.")
+		return nil
+	}
+	// A package manager (Homebrew) replaces the whole package directory on
+	// upgrade, taking backend/.env with it. Bring the previous configuration
+	// back rather than asking for every key again.
+	if restored, err := restoreEnvBackup(env); err != nil {
+		fmt.Fprintf(env.Err, "could not restore your previous configuration (%v); starting from the example file\n", err)
+	} else if restored {
+		fmt.Fprintf(env.Out, "\nRestored your previous configuration from %s.\n", envBackupPath(env))
 		return nil
 	}
 	src, err := os.Open(env.BackendEnvExamplePath())

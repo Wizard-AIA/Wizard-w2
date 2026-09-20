@@ -265,8 +265,13 @@ func removeInstallTree(root string) (removed, deferred []string, err error) {
 	return removed, deferred, nil
 }
 
+// envBackupPath is where backend/.env is kept outside the package directory.
+func envBackupPath(env *Env) string { return filepath.Join(env.ConfigDir, "backend.env.backup") }
+
 // backupEnvFile copies backend/.env, which holds API keys, into the config
-// directory (mode 0600) before the package that contains it is removed.
+// directory (mode 0600). `wizard init` refreshes it after every configuration,
+// and `wizard uninstall` writes it before the package is removed, so an upgrade
+// or a reinstall can restore it (see restoreEnvBackup).
 func backupEnvFile(env *Env) error {
 	data, err := os.ReadFile(env.BackendEnvPath())
 	if os.IsNotExist(err) {
@@ -278,5 +283,26 @@ func backupEnvFile(env *Env) error {
 	if err := os.MkdirAll(env.ConfigDir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(env.ConfigDir, "backend.env.backup"), data, 0o600)
+	return os.WriteFile(envBackupPath(env), data, 0o600)
+}
+
+// restoreEnvBackup recreates a missing backend/.env from the backup. It never
+// overwrites an existing file.
+func restoreEnvBackup(env *Env) (bool, error) {
+	data, err := os.ReadFile(envBackupPath(env))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	out, err := os.OpenFile(env.BackendEnvPath(), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return false, err
+	}
+	if _, err := out.Write(data); err != nil {
+		_ = out.Close()
+		return false, err
+	}
+	return true, out.Close()
 }

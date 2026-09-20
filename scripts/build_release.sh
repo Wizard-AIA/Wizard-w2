@@ -6,16 +6,32 @@
 # .distignore, with that platform's binary at cli/wizard (cli/wizard.exe on
 # Windows).
 #
-# Usage: scripts/build_release.sh [version]
-#   version defaults to the current commit's exact tag, or "dev" otherwise.
+# Usage: scripts/build_release.sh [tag]
+#   tag defaults to v<contents of VERSION>. A tag that disagrees with VERSION is
+#   refused: a release built from one version and labelled with another is how
+#   `wizard --version` ends up lying. "dev" is allowed for local test builds.
 #
-# Output: dist/Wizard-<version>-<goos>-<goarch>.zip, one per target.
+# The target matrix comes from packaging/release.json, the same file the
+# installers' tests, the packaging renderer and the CLI's own test read.
+#
+# Output: dist/Wizard-<tag>-<goos>-<goarch>.zip, one per target, and
+#         dist/SHA256SUMS listing bare file names (no "./" prefix: every CLI
+#         since v1.0.10 fails to parse "./name" entries).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-VERSION="${1:-$(git describe --tags --exact-match 2>/dev/null || echo dev)}"
+for tool in go git zip python3; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "error: '$tool' is required to build a release" >&2; exit 1; }
+done
+
+FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+VERSION="${1:-v$FILE_VERSION}"
+if [ "$VERSION" != "dev" ] && [ "$VERSION" != "v$FILE_VERSION" ]; then
+  echo "error: tag '$VERSION' does not match VERSION ($FILE_VERSION). Bump VERSION (scripts/release.py set-version) or fix the tag." >&2
+  exit 1
+fi
 DIST_DIR="$REPO_ROOT/dist"
 BASE_STAGE="$DIST_DIR/_base"
 
@@ -25,13 +41,15 @@ if [ -z "$API_VERSION" ]; then
   exit 1
 fi
 
-TARGETS=(
-  "darwin arm64"
-  "darwin amd64"
-  "linux amd64"
-  "linux arm64"
-  "windows amd64"
-)
+# "goos goarch" per line, straight from the shared target matrix.
+TARGETS=()
+while IFS= read -r line; do
+  TARGETS+=("$line")
+done < <(python3 -c 'import json; [print(t["os"], t["arch"]) for t in json.load(open("packaging/release.json"))["targets"]]')
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+  echo "error: packaging/release.json lists no targets" >&2
+  exit 1
+fi
 
 HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
@@ -102,13 +120,20 @@ for target in "${TARGETS[@]}"; do
 
   echo
   echo "Building cli/$binname for $goos/$goarch..."
-  (cd "$REPO_ROOT/cli" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+  # -trimpath and -buildvcs=false keep the binary independent of the build
+  # machine's paths and git state, so the same source builds the same bytes.
+  (cd "$REPO_ROOT/cli" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -buildvcs=false \
     -ldflags "-X wizard/internal/compat.CompatAPIVersion=$API_VERSION -X wizard/internal/compat.BuildVersion=$VERSION" \
     -o "$build_dir/$binname" ./cmd/wizard)
 
   if [ "$goos" = "$HOST_GOOS" ] && [ "$goarch" = "$HOST_GOARCH" ]; then
-    echo "Native target -- self-testing: $binname version"
-    "$build_dir/$binname" version
+    echo "Native target -- self-testing: $binname --version"
+    reported="$("$build_dir/$binname" --version)"
+    echo "$reported"
+    case "$reported" in
+      *"$VERSION"*) ;;
+      *) echo "error: the built binary reports '$reported', expected it to contain $VERSION" >&2; exit 1 ;;
+    esac
   else
     echo "Cross-compiled for $goos/$goarch; not runnable on this $HOST_GOOS/$HOST_GOARCH host, so skipping execution (build success is the only signal available)."
   fi
@@ -139,10 +164,18 @@ done
 # The updater verifies this file before unpacking an archive. Keep it a
 # release asset, not merely CI output, so every client receives the same
 # digest list as the publisher.
+#
+# Bare names on purpose. `sha256sum ./*.zip` writes "digest  ./name", which the
+# CLI's updater rejected ("checksum list does not contain ..."), so `wizard
+# update` failed on every platform from v1.0.10 to v1.0.12.
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$DIST_DIR" && sha256sum ./*.zip > SHA256SUMS)
+  (cd "$DIST_DIR" && sha256sum -- *.zip > SHA256SUMS)
 else
-  (cd "$DIST_DIR" && shasum -a 256 ./*.zip > SHA256SUMS)
+  (cd "$DIST_DIR" && shasum -a 256 -- *.zip > SHA256SUMS)
+fi
+
+if [ "$VERSION" != "dev" ]; then
+  python3 "$REPO_ROOT/scripts/release.py" verify --dir "$DIST_DIR" --tag "$VERSION"
 fi
 
 echo
