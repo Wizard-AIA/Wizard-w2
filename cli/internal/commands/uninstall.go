@@ -40,6 +40,7 @@ func RunUninstall(env *Env, args []string) int {
 
 	exe, _ := executablePath()
 	info := installkind.Detect(exe, env.RepoRoot)
+	env.adoptInstall(info)
 	p := ui.New(env.Out)
 
 	plan, err := buildUninstallPlan(env, info, *purge)

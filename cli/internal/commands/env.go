@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	"wizard/internal/appdir"
+	"wizard/internal/installkind"
 	"wizard/internal/repo"
 )
 
@@ -69,6 +70,22 @@ func NewEnv() (*Env, error) {
 		Out:         os.Stdout,
 		Err:         os.Stderr,
 	}, nil
+}
+
+// adoptInstall points e at the package the running binary belongs to when an
+// official layout (installer, Homebrew, Scoop) owns it. repo.Root follows the
+// working directory, which is right for `init` and `start` (run them inside the
+// checkout you mean), but update and uninstall manage the installation, so they
+// must act on it even when the shell happens to be inside some other checkout.
+func (e *Env) adoptInstall(info installkind.Info) {
+	switch info.Kind {
+	case installkind.Direct, installkind.Homebrew, installkind.Scoop:
+		if info.Root != "" {
+			e.RepoRoot = info.Root
+			e.BackendDir = repo.BackendDir(info.Root)
+			e.FrontendDir = repo.FrontendDir(info.Root)
+		}
+	}
 }
 
 func (e *Env) DaemonPIDPath() string         { return filepath.Join(e.RunDir, "daemon.pid") }

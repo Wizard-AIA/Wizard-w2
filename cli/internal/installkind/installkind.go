@@ -71,12 +71,30 @@ func (k Kind) UninstallCommand() string {
 
 // Detect classifies the installation. exe is the running binary, root the
 // checkout directory repo.Root resolved; either may be empty.
+//
+// The running binary's own location decides who owns it, ahead of root. root
+// follows the working directory, so a person who runs an installed Wizard while
+// standing in a git checkout would otherwise be told "this is a git checkout",
+// and `wizard uninstall --purge` would plan to delete that checkout's
+// backend/.env. For an installed binary Info.Root is the package the binary
+// belongs to, not the directory it was started from.
 func Detect(exe, root string) Info {
 	info := Info{Kind: Unknown, Exe: resolve(exe), Root: resolve(root)}
+	own := ownPackageRoot(info.Exe)
 	switch {
-	case hasSegments(info.Exe, "Cellar", "wizard") || hasSegments(info.Root, "Cellar", "wizard"):
+	case hasSegments(info.Exe, "Cellar", "wizard"):
 		info.Kind = Homebrew
-	case hasSegmentsFold(info.Exe, "scoop", "apps", "wizard") || hasSegmentsFold(info.Root, "scoop", "apps", "wizard"):
+		info.adopt(own)
+	case hasSegmentsFold(info.Exe, "scoop", "apps", "wizard"):
+		info.Kind = Scoop
+		info.adopt(own)
+	case own != "" && isManaged(own):
+		info.Kind = Direct
+		info.Root = own
+		info.InstallRoot, _ = ManagedInstallRoot(own)
+	case hasSegments(info.Root, "Cellar", "wizard"):
+		info.Kind = Homebrew
+	case hasSegmentsFold(info.Root, "scoop", "apps", "wizard"):
 		info.Kind = Scoop
 	default:
 		if installRoot, err := ManagedInstallRoot(info.Root); err == nil {
@@ -87,6 +105,43 @@ func Detect(exe, root string) Info {
 		}
 	}
 	return info
+}
+
+func (i *Info) adopt(packageRoot string) {
+	if packageRoot != "" {
+		i.Root = packageRoot
+	}
+}
+
+func isManaged(packageRoot string) bool {
+	_, err := ManagedInstallRoot(packageRoot)
+	return err == nil
+}
+
+// ownPackageRoot is the Wizard package the resolved executable belongs to:
+// <package>/cli/wizard everywhere, and <install>/bin/wizard.exe beside
+// <install>/current on Windows, where the launcher is a copy rather than a
+// link. It is "" when exe sits in neither layout.
+func ownPackageRoot(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	switch strings.ToLower(filepath.Base(dir)) {
+	case "cli":
+		if pkg := filepath.Dir(dir); hasPackageFiles(pkg) {
+			return pkg
+		}
+	case "bin":
+		if pkg, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(dir), "current")); err == nil && hasPackageFiles(pkg) {
+			return pkg
+		}
+	}
+	return ""
+}
+
+func hasPackageFiles(dir string) bool {
+	return exists(filepath.Join(dir, "backend", "main.py")) && exists(filepath.Join(dir, "frontend", "package.json"))
 }
 
 // ManagedInstallRoot recognizes only the layout the official installers

@@ -218,3 +218,36 @@ func TestRemoveInstallTreeDoesNotFollowCurrentIntoThePackage(t *testing.T) {
 		t.Fatal("removing current followed the link and deleted the target's contents")
 	}
 }
+
+// Regression: an installed Wizard run from inside a git checkout planned to
+// delete the checkout's backend/.env under --purge, and refused to remove
+// itself because it believed it was that checkout.
+func TestUninstallActsOnTheRunningInstallNotTheWorkingDirectoryCheckout(t *testing.T) {
+	root, env, out := managedLayout(t)
+	checkout := t.TempDir()
+	for _, f := range []string{".git/HEAD", "backend/main.py", "frontend/package.json", "backend/.env"} {
+		p := filepath.Join(checkout, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("KEY=checkout-secret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.RepoRoot = checkout
+	env.BackendDir = filepath.Join(checkout, "backend")
+	env.FrontendDir = filepath.Join(checkout, "frontend")
+
+	if code := RunUninstall(env, []string{"--purge", "--yes"}); code != exitcode.OK {
+		t.Fatalf("exit = %d\n%s", code, out)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "bin")); err == nil {
+		t.Fatalf("the installed program was not removed:\n%s", out)
+	}
+	if data, err := os.ReadFile(filepath.Join(checkout, "backend", ".env")); err != nil || !strings.Contains(string(data), "checkout-secret") {
+		t.Fatalf("the working-directory checkout's backend/.env must never be touched: %v\n%s", err, out)
+	}
+	if strings.Contains(out.String(), checkout) {
+		t.Fatalf("the plan mentions the working-directory checkout:\n%s", out)
+	}
+}

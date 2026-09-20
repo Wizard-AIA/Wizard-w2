@@ -44,6 +44,7 @@ func RunUpdate(env *Env, args []string) int {
 
 	exe, _ := executablePath()
 	info := installkind.Detect(exe, env.RepoRoot)
+	env.adoptInstall(info)
 	if info.Kind.PackageManaged() {
 		fmt.Fprintf(env.Err, "Wizard was installed with %s, which owns its files, so it must upgrade them.\n\n  %s\n\n", info.Kind, info.Kind.UpgradeCommand())
 		fmt.Fprintln(env.Err, "Then run `wizard init` to rebuild the dependencies for the new version.")

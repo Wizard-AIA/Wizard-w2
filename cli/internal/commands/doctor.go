@@ -130,6 +130,9 @@ func collectDoctor(network, verbose bool) *doctorReport {
 	exe, _ := os.Executable()
 	root, rootErr := repo.Root()
 	info := installkind.Detect(exe, root)
+	if info.Kind == installkind.Direct || info.Kind == installkind.Homebrew || info.Kind == installkind.Scoop {
+		root, rootErr = info.Root, nil // the binary's own package, not the directory the shell is in
+	}
 	r.add("install", "Installation", ui.OK, fmt.Sprintf("%s  (%s)", info.Kind, exe), "")
 
 	// PATH.
