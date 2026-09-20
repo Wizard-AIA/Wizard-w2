@@ -45,6 +45,7 @@ make_release() {
 case "\$1" in
   --version|version) echo "wizard CLI $reported, backend API compat v4.0.0" ;;
   --help) echo "Usage: wizard" ;;
+  channel) [ ! -f "\$HOME/.fail-channel" ] || exit 1; printf '%s\n' "\$2" > "\$HOME/.channel-called" ;;
   *) echo "fake wizard" ;;
 esac
 EOF
@@ -52,7 +53,12 @@ EOF
   rm -rf "$SERVER_ROOT/$tag"; mkdir -p "$SERVER_ROOT/$tag"   # fresh: zip would otherwise append to an old archive
   (cd "$build" && zip -qr "$SERVER_ROOT/$tag/$pkg.zip" "$pkg")
   (cd "$SERVER_ROOT/$tag" && if command -v sha256sum >/dev/null 2>&1; then sha256sum "$pkg.zip"; else shasum -a 256 "$pkg.zip"; fi > SHA256SUMS)
-  echo "$tag" > "$SERVER_ROOT/LATEST"
+  # A mirror names the newest stable release in LATEST and, optionally, the
+  # newest pre-release in LATEST-PRERELEASE. A pre-release never moves LATEST.
+  case "$tag" in
+    *-*) echo "$tag" > "$SERVER_ROOT/LATEST-PRERELEASE" ;;
+    *)   echo "$tag" > "$SERVER_ROOT/LATEST" ;;
+  esac
 }
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
@@ -96,6 +102,7 @@ count_blocks() { grep -c '>>> wizard (managed by the Wizard installer) >>>' "$1"
 run_suite() {
   UNDER=$1
   printf '\n== installer under %s ==\n' "$UNDER"
+  rm -f "$SERVER_ROOT/LATEST-PRERELEASE"
   make_release v9.9.9   # every pass starts from the same server state ("latest" is 9.9.9)
 
   new_case; TEST_SHELL=/bin/zsh
@@ -228,6 +235,186 @@ PY
 
   new_case
   exit_is 0 "install with SHELL unset (a container)" --yes
+
+  pre_release_cases
+}
+
+# ---- pre-releases and channels -------------------------------------------------
+
+check_eq() { # check_eq DESCRIPTION GOT WANT
+  printf '%s\n' "$2" > "$OUT"
+  if [ "$2" = "$3" ]; then t_pass "$1"; else printf '%s\n' "$2" > "$OUT"; t_fail "$1 (wanted: $3)"; fi
+}
+
+# A realistic slice of GitHub's releases list: nested objects, a draft, an
+# unflagged candidate, a tag outside the grammar, and the older v2.x line that
+# outranks v1.0.x numerically but is not a pre-release.
+write_releases_fixture() { # write_releases_fixture PRETTY COMPACT
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+
+def rel(tag, pre=False, draft=False):
+    return {"url": "https://api.github.com/x", "id": 1, "author": {"login": "bot", "type": "User"},
+            "tag_name": tag, "target_commitish": "master", "name": tag, "draft": draft, "prerelease": pre,
+            "assets": [{"name": "SHA256SUMS", "uploader": {"login": "bot"}, "size": 1}]}
+
+
+releases = [
+    rel("v1.0.14-beta.2", pre=True), rel("v1.0.14-beta.10", pre=True), rel("v1.0.13"),
+    rel("v1.0.14-rc.1"),
+    rel("v9.9.9-beta.1", pre=True, draft=True),
+    rel("nightly", pre=True),
+    rel("v2.2.1"), rel("v2.0.0-w2-planning"),
+    rel("v1.0.14-alpha.1", pre=True),
+]
+open(sys.argv[1], "w").write(json.dumps(releases, indent=2))
+open(sys.argv[2], "w").write(json.dumps(releases))
+PY
+}
+
+# A curl that plays GitHub: the /releases/latest redirect, the releases API, and
+# the release downloads, all served from $SERVER_ROOT. Anything else fails loudly.
+write_curl_stub() {
+  cat > "$STUBS/curl" <<'STUB'
+#!/bin/sh
+out=""; fmt=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;;
+    -w) fmt=$2; shift 2 ;;
+    --proto|--retry|--retry-delay|-H) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+echo "$url" >> "$STUB_LOG"
+case "$url" in
+  https://github.com/Wizard-AIA/Wizard-w2/releases/latest)
+    [ -z "$fmt" ] || printf 'https://github.com/Wizard-AIA/Wizard-w2/releases/tag/%s' "$(cat "$SERVER_ROOT/LATEST")" ;;
+  https://api.github.com/repos/Wizard-AIA/Wizard-w2/releases?per_page=30)
+    [ -f "$FAKE_RELEASES_JSON" ] || exit 22
+    cp "$FAKE_RELEASES_JSON" "$out" ;;
+  https://github.com/Wizard-AIA/Wizard-w2/releases/download/*)
+    cp "$SERVER_ROOT/${url#https://github.com/Wizard-AIA/Wizard-w2/releases/download/}" "$out" ;;
+  *) echo "unexpected URL: $url" >&2; exit 22 ;;
+esac
+STUB
+  chmod +x "$STUBS/curl"
+}
+
+pre_release_cases() {
+  # -- the release grammar ----------------------------------------------------
+  for bad in 9.9.9-beta 9.9.9-beta.0 9.9.9-beta.01 9.9.9-preview.1 9.9.9-Beta.1 9.9.9-beta.1.2 9.9.9-beta.1+x 9.9.9+x 09.9.9 9.9.9.1 9.9 latest; do
+    new_case; exit_is 2 "--version $bad is not a release version" --version "$bad"
+  done
+  new_case; exit_is 2 "an unknown channel is a usage error" --channel beta
+  new_case; exit_is 2 "--channel needs a value" --channel
+
+  # -- against a mirror (LATEST, and optionally LATEST-PRERELEASE) -------------
+  make_release v9.9.9
+  make_release v9.9.10-beta.1   # LATEST stays v9.9.9; LATEST-PRERELEASE names the beta
+
+  new_case
+  exit_is 0 "a default install ignores a newer pre-release" --yes
+  expect "it installed the stable release" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.9-$OS-$ARCH"
+  expect "no channel was written, none was chosen" sh -c "! test -e '$HOME_DIR/.channel-called'"
+
+  new_case
+  exit_is 0 "--pre-release installs a pre-release that is newer than stable" --pre-release
+  expect "current is the beta" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.10-beta.1-$OS-$ARCH"
+  expect "bin/wizard reports the pre-release" sh -c "'$INSTALL/bin/wizard' --version | grep -q v9.9.10-beta.1"
+  expect "the pre-release channel was saved" test "$(cat "$HOME_DIR/.channel-called")" = pre-release
+  expect "the closing note says it is a pre-release and how to leave" sh -c "grep -q 'pre-release' '$OUT' && grep -q 'wizard channel stable' '$OUT'"
+
+  new_case; EXTRA_ENV="WIZARD_CHANNEL=pre-release"
+  exit_is 0 "WIZARD_CHANNEL=pre-release does the same" --yes
+  expect "it installed the beta" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.10-beta.1-$OS-$ARCH"
+  EXTRA_ENV=""
+
+  new_case
+  exit_is 0 "--channel pre-release is the same as --pre-release" --channel pre-release
+  expect "it installed the beta" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.10-beta.1-$OS-$ARCH"
+
+  new_case
+  exit_is 0 "--version names a pre-release directly" --version 9.9.10-beta.1
+  expect "it installed exactly that pre-release" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.10-beta.1-$OS-$ARCH"
+  expect "naming a version chooses no channel" sh -c "! test -e '$HOME_DIR/.channel-called'"
+
+  new_case
+  exit_is 0 "--channel stable with a pre-release version keeps the stable choice" --channel stable --version 9.9.10-beta.1
+  expect "the stable channel was saved" test "$(cat "$HOME_DIR/.channel-called")" = stable
+
+  # A pre-release older than the stable release is not offered.
+  make_release v9.9.9
+  make_release v9.9.8-beta.1
+  new_case
+  exit_is 0 "--pre-release with only an older pre-release installs the stable release" --pre-release
+  expect "it installed the stable release" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.9-$OS-$ARCH"
+  expect "the channel choice is still saved" test "$(cat "$HOME_DIR/.channel-called")" = pre-release
+
+  # A pre-release of the same version ranks below its stable release.
+  make_release v9.9.9-rc.3
+  new_case
+  exit_is 0 "a release candidate of the current stable version does not replace it" --pre-release
+  expect "it installed the stable release" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.9-$OS-$ARCH"
+
+  # A mirror with no pre-release at all.
+  rm -f "$SERVER_ROOT/LATEST-PRERELEASE"
+  new_case
+  exit_is 0 "--pre-release against a mirror without pre-releases installs stable" --pre-release
+  expect "it installed the stable release" test "$(readlink "$INSTALL/current")" = "Wizard-v9.9.9-$OS-$ARCH"
+
+  # Saving the channel is best effort: the install already worked.
+  make_release v9.9.10-beta.1
+  new_case; : > "$HOME_DIR/.fail-channel"
+  exit_is 0 "a channel that cannot be saved does not fail the install" --pre-release
+  expect "it says how to set it by hand" grep -q 'wizard channel pre-release' "$OUT"
+
+  # -- the pure functions ------------------------------------------------------
+  new_case
+  sed -n '/^semver_key() {/,/^}/p; /^newest_of() {/,/^}/p; /^published_prereleases() {/,/^}/p' "$INSTALLER" > "$WORK/fns.sh"
+  expect "the helper functions were found in the installer" test "$(grep -c '() {' "$WORK/fns.sh")" = 3
+  fn() { env -i PATH="$TOOLS" "$UNDER" -c ". '$WORK/fns.sh'; $*"; }
+  check_eq "beta.10 outranks beta.2 (numeric, not text)"   "$(fn newest_of v1.0.13 v1.0.14-beta.2 v1.0.14-beta.10)" v1.0.14-beta.10
+  check_eq "a stable release outranks its own candidates"  "$(fn newest_of v1.0.14-rc.9 v1.0.14 v1.0.14-beta.1)" v1.0.14
+  check_eq "rc outranks beta outranks alpha"               "$(fn newest_of v1.0.14-beta.9 v1.0.14-rc.1 v1.0.14-alpha.20)" v1.0.14-rc.1
+  check_eq "1.0.10 outranks 1.0.9 (numeric, not text)"     "$(fn newest_of v1.0.9 v1.0.10)" v1.0.10
+  check_eq "a pre-release of a later version outranks stable" "$(fn newest_of v1.0.13 v1.0.14-alpha.1)" v1.0.14-alpha.1
+  check_eq "a later stable outranks an earlier pre-release" "$(fn newest_of v2.0.0 v1.9.9-rc.1)" v2.0.0
+
+  write_releases_fixture "$WORK/releases-pretty.json" "$WORK/releases-compact.json"
+  want='v1.0.14-beta.2
+v1.0.14-beta.10
+v1.0.14-alpha.1'
+  check_eq "published pre-releases are read from pretty JSON (drafts, unflagged, odd tags and v2.x excluded)" "$(fn published_prereleases "$WORK/releases-pretty.json")" "$want"
+  check_eq "and from compact single-line JSON" "$(fn published_prereleases "$WORK/releases-compact.json")" "$want"
+
+  # -- the real GitHub code path, through a curl that plays GitHub --------------
+  make_release v1.0.13
+  make_release v1.0.14-beta.10
+  github_env() { EXTRA_ENV="WIZARD_RELEASE_BASE_URL= SERVER_ROOT=$SERVER_ROOT STUB_LOG=$WORK/case$CASE/curl.log FAKE_RELEASES_JSON=$WORK/releases-pretty.json ${1:-}"; }
+
+  new_case; write_curl_stub; github_env
+  exit_is 0 "GitHub path: a default install resolves the stable release" --yes
+  expect "it installed v1.0.13" test "$(readlink "$INSTALL/current")" = "Wizard-v1.0.13-$OS-$ARCH"
+  expect "it never asked for the releases list" sh -c "! grep -q 'api.github.com' '$WORK/case$CASE/curl.log'"
+
+  new_case; write_curl_stub; github_env
+  exit_is 0 "GitHub path: --pre-release picks the newest flagged pre-release, not v2.2.1" --pre-release
+  expect "it installed v1.0.14-beta.10" test "$(readlink "$INSTALL/current")" = "Wizard-v1.0.14-beta.10-$OS-$ARCH"
+  expect "it asked for the releases list once" sh -c "test \$(grep -c 'api.github.com' '$WORK/case$CASE/curl.log') = 1"
+
+  new_case; write_curl_stub; github_env "GITHUB_TOKEN=ghp_notarealtoken0000000000000000000000000"
+  exit_is 0 "GitHub path: a GITHUB_TOKEN is accepted" --pre-release
+  expect "the token is never printed" sh -c "! grep -q ghp_notarealtoken '$OUT'"
+
+  new_case; write_curl_stub; github_env; rm -f "$WORK/releases-pretty.json"
+  exit_is 4 "GitHub path: an unreachable releases list is a network error, not a silent stable install" --pre-release
+  expect "it names GITHUB_TOKEN and --version" sh -c "grep -q GITHUB_TOKEN '$OUT' && grep -q -- '--version' '$OUT'"
+  expect "nothing was installed" sh -c "! test -e '$INSTALL/current'"
+  EXTRA_ENV=""
 }
 
 # ---- run ---------------------------------------------------------------------

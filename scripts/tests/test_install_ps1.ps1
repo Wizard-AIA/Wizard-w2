@@ -1,6 +1,7 @@
 # Tests for scripts/install.ps1 against a local fake release server.
 #
 #   $env:WIZARD_TEST_EXE = 'C:\path\to\wizard.exe'   # a wizard.exe built with -X ...BuildVersion=v9.9.9
+#   $env:WIZARD_TEST_EXE_BETA = 'C:\path\to\wizard-beta.exe'   # the same, with BuildVersion=v9.9.10-beta.1
 #   powershell -NoProfile -File scripts\tests\test_install_ps1.ps1     # Windows PowerShell 5.1
 #   pwsh -NoProfile -File scripts\tests\test_install_ps1.ps1           # PowerShell 7+
 #
@@ -11,6 +12,9 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $env:WIZARD_TEST_EXE -or -not (Test-Path -LiteralPath $env:WIZARD_TEST_EXE)) {
     throw 'set WIZARD_TEST_EXE to a wizard.exe built with -X wizard/internal/compat.BuildVersion=v9.9.9'
+}
+if (-not $env:WIZARD_TEST_EXE_BETA -or -not (Test-Path -LiteralPath $env:WIZARD_TEST_EXE_BETA)) {
+    throw 'set WIZARD_TEST_EXE_BETA to a wizard.exe built with -X wizard/internal/compat.BuildVersion=v9.9.10-beta.1'
 }
 $installer = (Resolve-Path (Join-Path $PSScriptRoot '..\install.ps1')).Path
 $psExe = (Get-Process -Id $PID).Path
@@ -25,21 +29,24 @@ function Assert-True([bool]$Condition, [string]$Description, [string]$Detail = '
 }
 
 # --- fake release -------------------------------------------------------------
-function New-Release([string]$Tag, [string]$Reported = $Tag) {
+function New-Release([string]$Tag, [string]$Reported = $Tag, [string]$Exe = $env:WIZARD_TEST_EXE) {
     $pkg = "Wizard-$Tag-windows-amd64"
     $build = Join-Path $work "build-$Tag"
     if (Test-Path $build) { Remove-Item $build -Recurse -Force }
     foreach ($d in 'backend', 'frontend', 'cli') { [void](New-Item -ItemType Directory -Path (Join-Path $build "$pkg\$d") -Force) }
     Set-Content -LiteralPath (Join-Path $build "$pkg\backend\main.py") -Value ''
     Set-Content -LiteralPath (Join-Path $build "$pkg\frontend\package.json") -Value '{}'
-    Copy-Item -LiteralPath $env:WIZARD_TEST_EXE -Destination (Join-Path $build "$pkg\cli\wizard.exe")
+    Copy-Item -LiteralPath $Exe -Destination (Join-Path $build "$pkg\cli\wizard.exe")
     $out = Join-Path $server $Tag
     if (Test-Path $out) { Remove-Item $out -Recurse -Force }
     [void](New-Item -ItemType Directory -Path $out)
     Compress-Archive -LiteralPath (Join-Path $build $pkg) -DestinationPath (Join-Path $out "$pkg.zip")
     $hash = (Get-FileHash -LiteralPath (Join-Path $out "$pkg.zip") -Algorithm SHA256).Hash.ToLowerInvariant()
     Set-Content -LiteralPath (Join-Path $out 'SHA256SUMS') -Value "$hash  $pkg.zip" -Encoding Ascii
-    Set-Content -LiteralPath (Join-Path $server 'LATEST') -Value $Tag -Encoding Ascii
+    # A mirror names the newest stable release in LATEST and, optionally, the
+    # newest pre-release in LATEST-PRERELEASE. A pre-release never moves LATEST.
+    $marker = if ($Tag -like '*-*') { 'LATEST-PRERELEASE' } else { 'LATEST' }
+    Set-Content -LiteralPath (Join-Path $server $marker) -Value $Tag -Encoding Ascii
 }
 
 New-Release 'v9.9.9'
@@ -200,6 +207,98 @@ try {
     $unicode = New-Case ("W" + [char]0x00EF + "z" + [char]0x00E4 + "rd " + [char]0x00FC + "ser")
     $r = Invoke-Installer @('-InstallDir', $unicode)
     Assert-True ($r.Code -eq 0 -and (Test-Path "$unicode\bin\wizard.exe")) 'a Unicode path works' $r.Text
+
+    # 10. pre-releases and channels. The real wizard.exe does the channel saving, so
+    # WIZARD_CONFIG_DIR points each case at its own directory to read the result.
+    function Get-CurrentTarget([string]$Dir) { [string](@((Get-Item -LiteralPath "$Dir\current" -Force).Target)[0]) }
+
+    foreach ($bad in '9.9.9-beta', '9.9.9-beta.0', '9.9.9-beta.01', '9.9.9-preview.1', '9.9.9-Beta.1', '9.9.9-beta.1.2', '9.9.9-beta.1+x', '9.9.9+x', '09.9.9', '9.9.9.1', '9.9', 'latest') {
+        $r = Invoke-Installer @('-InstallDir', (New-Case), '-Version', $bad)
+        Assert-True ($r.Code -eq 2) "-Version $bad is not a release version (exit 2)" $r.Text
+    }
+    $r = Invoke-Installer @('-InstallDir', (New-Case), '-Channel', 'beta')
+    Assert-True ($r.Code -eq 2) 'an unknown channel is exit 2' $r.Text
+    $r = Invoke-Installer @('-InstallDir', (New-Case), '-PreRelease', '-Channel', 'stable')
+    Assert-True ($r.Code -eq 2) '-PreRelease with -Channel stable is a contradiction (exit 2)' $r.Text
+
+    New-Release 'v9.9.9'
+    New-Release 'v9.9.10-beta.1' 'v9.9.10-beta.1' $env:WIZARD_TEST_EXE_BETA   # LATEST stays v9.9.9; LATEST-PRERELEASE names the beta
+
+    $cfg = Join-Path $work 'cfg-default'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Yes') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.9-windows-amd64') 'a default install ignores a newer pre-release' "$(Get-CurrentTarget $dir)`n$($r.Text)"
+    Assert-True (-not (Test-Path "$cfg\update-channel")) 'no channel was written, none was chosen'
+
+    $cfg = Join-Path $work 'cfg-pre'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-PreRelease') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.10-beta.1-windows-amd64') '-PreRelease installs a pre-release that is newer than stable' "$(Get-CurrentTarget $dir)`n$($r.Text)"
+    Assert-True ((& "$dir\bin\wizard.exe" --version) -match 'v9\.9\.10-beta\.1') 'bin\wizard.exe reports the pre-release'
+    Assert-True ((Test-Path "$cfg\update-channel") -and ((Get-Content "$cfg\update-channel" -Raw).Trim() -eq 'pre-release')) 'the real wizard.exe saved the pre-release channel' $r.Text
+    Assert-True ($r.Text -match 'wizard channel stable') 'the closing note says how to leave the pre-release channel' $r.Text
+
+    $cfg = Join-Path $work 'cfg-env'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Yes') @{ WIZARD_CONFIG_DIR = $cfg; WIZARD_CHANNEL = 'pre-release' }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.10-beta.1-windows-amd64') 'WIZARD_CHANNEL=pre-release does the same' $r.Text
+
+    $cfg = Join-Path $work 'cfg-channel'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Channel', 'pre-release') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.10-beta.1-windows-amd64') '-Channel pre-release is the same as -PreRelease' $r.Text
+
+    $cfg = Join-Path $work 'cfg-version'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Version', '9.9.10-beta.1') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.10-beta.1-windows-amd64') '-Version names a pre-release directly' $r.Text
+    Assert-True (-not (Test-Path "$cfg\update-channel")) 'naming a version chooses no channel'
+
+    $cfg = Join-Path $work 'cfg-stable'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Channel', 'stable', '-Version', '9.9.10-beta.1') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Test-Path "$cfg\update-channel") -and ((Get-Content "$cfg\update-channel" -Raw).Trim() -eq 'stable')) '-Channel stable with a pre-release version keeps the stable choice' $r.Text
+
+    # A pre-release older than the stable release, or a candidate of the same
+    # version, is not offered.
+    New-Release 'v9.9.9'; New-Release 'v9.9.8-beta.1'
+    $cfg = Join-Path $work 'cfg-older'; $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-PreRelease') @{ WIZARD_CONFIG_DIR = $cfg }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.9-windows-amd64') '-PreRelease with only an older pre-release installs the stable release' $r.Text
+    Assert-True ((Test-Path "$cfg\update-channel") -and ((Get-Content "$cfg\update-channel" -Raw).Trim() -eq 'pre-release')) 'the channel choice is still saved' $r.Text
+
+    New-Release 'v9.9.9-rc.3'
+    $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-PreRelease') @{ WIZARD_CONFIG_DIR = (Join-Path $work 'cfg-rc') }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.9-windows-amd64') 'a release candidate of the current stable version does not replace it' $r.Text
+
+    Remove-Item -LiteralPath "$server\LATEST-PRERELEASE" -Force
+    $dir = New-Case
+    $r = Invoke-Installer @('-InstallDir', $dir, '-PreRelease') @{ WIZARD_CONFIG_DIR = (Join-Path $work 'cfg-nomirror') }
+    Assert-True ($r.Code -eq 0 -and (Get-CurrentTarget $dir) -like '*Wizard-v9.9.9-windows-amd64') '-PreRelease against a mirror without pre-releases installs stable' $r.Text
+
+    # 11. the pure functions, taken from the installer itself
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
+    $wanted = @('Fail', 'Get-ReleaseKey', 'Get-NewestTag', 'Select-PublishedPreReleases')
+    $definitions = $ast.FindAll({ param($node) ($node -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $node.Name) }, $true)
+    Assert-True (@($definitions).Count -eq 4) 'the helper functions were found in the installer' "found $(@($definitions).Count)"
+    foreach ($definition in $definitions) { Invoke-Expression $definition.Extent.Text }
+    $script:PreReleaseTagPattern = [regex]::Match((Get-Content -LiteralPath $installer -Raw), "PreReleaseTagPattern = '([^']+)'").Groups[1].Value
+    Assert-True ($script:PreReleaseTagPattern.Length -gt 10) 'the pre-release tag pattern was found in the installer' $script:PreReleaseTagPattern
+
+    Assert-True ((Get-NewestTag @('v1.0.13', 'v1.0.14-beta.2', 'v1.0.14-beta.10')) -eq 'v1.0.14-beta.10') 'beta.10 outranks beta.2 (numeric, not text)'
+    Assert-True ((Get-NewestTag @('v1.0.14-rc.9', 'v1.0.14', 'v1.0.14-beta.1')) -eq 'v1.0.14') 'a stable release outranks its own candidates'
+    Assert-True ((Get-NewestTag @('v1.0.14-beta.9', 'v1.0.14-rc.1', 'v1.0.14-alpha.20')) -eq 'v1.0.14-rc.1') 'rc outranks beta outranks alpha'
+    Assert-True ((Get-NewestTag @('v1.0.9', 'v1.0.10')) -eq 'v1.0.10') '1.0.10 outranks 1.0.9 (numeric, not text)'
+    Assert-True ((Get-NewestTag @('v1.0.13', 'v1.0.14-alpha.1')) -eq 'v1.0.14-alpha.1') 'a pre-release of a later version outranks stable'
+    Assert-True ((Get-NewestTag @('v2.0.0', 'v1.9.9-rc.1')) -eq 'v2.0.0') 'a later stable outranks an earlier pre-release'
+
+    $fixture = @(
+        [pscustomobject]@{ tag_name = 'v1.0.14-beta.2'; prerelease = $true; draft = $false },
+        [pscustomobject]@{ tag_name = 'v1.0.14-beta.10'; prerelease = $true; draft = $false },
+        [pscustomobject]@{ tag_name = 'v1.0.13'; prerelease = $false; draft = $false },
+        [pscustomobject]@{ tag_name = 'v1.0.14-rc.1'; prerelease = $false; draft = $false },
+        [pscustomobject]@{ tag_name = 'v9.9.9-beta.1'; prerelease = $true; draft = $true },
+        [pscustomobject]@{ tag_name = 'nightly'; prerelease = $true; draft = $false },
+        [pscustomobject]@{ tag_name = 'v2.2.1'; prerelease = $false; draft = $false },
+        [pscustomobject]@{ tag_name = 'v2.0.0-w2-planning'; prerelease = $false; draft = $false },
+        [pscustomobject]@{ tag_name = 'v1.0.14-alpha.1'; prerelease = $true; draft = $false })
+    $got = @(Select-PublishedPreReleases $fixture) -join ','
+    Assert-True ($got -eq 'v1.0.14-beta.2,v1.0.14-beta.10,v1.0.14-alpha.1') 'published pre-releases: drafts, unflagged, odd tags and the v2.x line are excluded' $got
 
     # 9. irm | iex must never close the caller's terminal, even on failure
     $script = (Get-Content -LiteralPath $installer -Raw)

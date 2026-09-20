@@ -19,11 +19,20 @@
     Every option also has an environment variable, for use with the one-liner:
         $env:WIZARD_VERSION = '1.0.13'; irm https://wizardw2.vercel.app/install.ps1 | iex
 
+    Pre-releases (betas and release candidates) are opt-in:
+        & ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -PreRelease
+
     Advanced: WIZARD_RELEASE_BASE_URL fetches <base>/<tag>/<files> from a mirror
     instead of GitHub Releases (an internal mirror, an air-gapped copy, or tests).
 
 .PARAMETER Version
-    Release to install, for example 1.0.13. Default: the latest release. (WIZARD_VERSION)
+    Release to install, for example 1.0.13, or 1.0.14-beta.1 for a pre-release.
+    Default: the latest release. (WIZARD_VERSION)
+.PARAMETER PreRelease
+    Install the newest pre-release if one is newer than the latest stable release,
+    and follow pre-releases from now on. (WIZARD_CHANNEL=pre-release)
+.PARAMETER Channel
+    stable (the default) or pre-release. (WIZARD_CHANNEL)
 .PARAMETER InstallDir
     Where to install. Default: %LOCALAPPDATA%\Wizard. (WIZARD_INSTALL_DIR)
 .PARAMETER NoModifyPath
@@ -40,6 +49,8 @@
 [CmdletBinding()]
 param(
     [string]$Version = $env:WIZARD_VERSION,
+    [switch]$PreRelease,
+    [string]$Channel = $env:WIZARD_CHANNEL,
     [string]$InstallDir = $(if ($env:WIZARD_INSTALL_DIR) { $env:WIZARD_INSTALL_DIR } else { $env:WIZARD_HOME }),
     [switch]$NoModifyPath,
     [switch]$Force,
@@ -118,10 +129,50 @@ function Save-Url([string]$Url, [string]$Destination) {
     }
 }
 
+# The release grammar, shared with scripts/release.py, the CLI and install.sh:
+#   X.Y.Z             a stable release
+#   X.Y.Z-KIND.N      a pre-release (KIND is alpha, beta or rc; N starts at 1)
+# No leading zeros, no build metadata, nothing else. Matching is case-sensitive.
+$script:ReleaseVersionPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(alpha|beta|rc)\.[1-9]\d*)?$'
+$script:PreReleaseTagPattern = '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|beta|rc)\.[1-9]\d*$'
+
 function ConvertTo-Tag([string]$Raw) {
     $v = $Raw.Trim().TrimStart('v', 'V')
-    if ($v -notmatch '^\d+\.\d+\.\d+$') { Fail 2 "not a release version: '$Raw' (expected something like 1.0.13)" }
+    if (-not ($v -cmatch $script:ReleaseVersionPattern)) {
+        Fail 2 "not a release version: '$Raw' (expected X.Y.Z or X.Y.Z-beta.N, for example 1.0.13 or 1.0.14-beta.1)"
+    }
     return "v$v"
+}
+
+# Get-ReleaseKey: a string that sorts, ordinally, in release order. Zero-padded
+# numbers, then 9 for a stable release or 1/2/3 for alpha/beta/rc, so
+# 1.0.14-rc.1 sorts below 1.0.14.
+function Get-ReleaseKey([string]$Tag) {
+    $v = $Tag.Trim().TrimStart('v', 'V')
+    if (-not ($v -cmatch '^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$')) { Fail 2 "not a release version: '$Tag'" }
+    $rank = 9; $n = 0
+    if ($Matches[4]) { $rank = @{ alpha = 1; beta = 2; rc = 3 }[$Matches[4]]; $n = [int]$Matches[5] }
+    return ('{0:D9}.{1:D9}.{2:D9}.{3}.{4:D9}' -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], $rank, $n)
+}
+
+# Get-NewestTag: the highest release among the tags given.
+function Get-NewestTag([string[]]$Tags) {
+    $best = $null; $bestKey = ''
+    foreach ($candidate in $Tags) {
+        $key = Get-ReleaseKey $candidate
+        if ($null -eq $best -or [string]::CompareOrdinal($key, $bestKey) -gt 0) { $best = $candidate; $bestKey = $key }
+    }
+    return $best
+}
+
+# Select-PublishedPreReleases: tags of the published pre-releases in a GitHub
+# releases list. Only releases GitHub itself flags as pre-releases count, never a
+# numerically higher tag from an older release line, and never a draft.
+function Select-PublishedPreReleases($Releases) {
+    foreach ($release in @($Releases)) {
+        $tag = [string]$release.tag_name
+        if ($release.prerelease -and -not $release.draft -and ($tag -cmatch $script:PreReleaseTagPattern)) { $tag }
+    }
 }
 
 function Resolve-LatestTag([string]$BaseOverride, [string]$Temp) {
@@ -151,6 +202,36 @@ function Resolve-LatestTag([string]$BaseOverride, [string]$Temp) {
         Fail 4 "could not determine the latest Wizard release: $($_.Exception.Message)`n       Pass -Version X.Y.Z, and check your network or proxy settings."
     }
     Fail 4 'could not determine the latest Wizard release. Pass -Version X.Y.Z.'
+}
+
+# Resolve-NewestTag is the pre-release channel: the stable release, unless a
+# published pre-release is newer than it.
+function Resolve-NewestTag([string]$BaseOverride, [string]$Temp) {
+    $candidates = @(Resolve-LatestTag $BaseOverride $Temp)
+    if ($BaseOverride) {
+        # A mirror may publish LATEST-PRERELEASE beside LATEST. One attempt: its
+        # absence is normal, not an error to retry.
+        $file = Join-Path $Temp 'LATEST-PRERELEASE'
+        try {
+            $extra = Get-DownloadArgs $BaseOverride
+            Invoke-WebRequest -Uri "$BaseOverride/LATEST-PRERELEASE" -OutFile $file @extra
+            $candidates += (Get-Content -LiteralPath $file -Raw).Trim()
+        } catch {
+            Debug-Line "mirror has no LATEST-PRERELEASE: $($_.Exception.Message)"
+        }
+    } else {
+        $extra = Get-DownloadArgs 'https://api.github.com/'
+        $headers = @{ 'User-Agent' = 'wizard-installer' }
+        # The anonymous limit is 60 requests an hour per address.
+        if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+        try {
+            $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases?per_page=30" -Headers $headers @extra
+        } catch {
+            Fail 4 "could not list Wizard pre-releases from GitHub (a rate limit is the usual cause): $($_.Exception.Message)`n       Set GITHUB_TOKEN (any token, no scopes) and re-run, or name one:  -Version 1.0.14-beta.1"
+        }
+        $candidates += @(Select-PublishedPreReleases $releases)
+    }
+    return (Get-NewestTag $candidates)
 }
 
 # --- PATH (user scope), done through the registry so the value keeps its type ---
@@ -257,6 +338,21 @@ function Install-Wizard {
     # TLS 1.2 is not the default on older Windows PowerShell.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
+    # The channel this run asks for: '' (not chosen), stable or pre-release.
+    $channelChoice = ''
+    if ($Channel) {
+        switch ($Channel.Trim().ToLowerInvariant()) {
+            'stable' { $channelChoice = 'stable' }
+            'pre-release' { $channelChoice = 'pre-release' }
+            'prerelease' { $channelChoice = 'pre-release' }
+            default { Fail 2 "unknown channel '$Channel' (use stable or pre-release)" }
+        }
+    }
+    if ($PreRelease) {
+        if ($channelChoice -eq 'stable') { Fail 2 '-PreRelease and -Channel stable contradict each other' }
+        $channelChoice = 'pre-release'
+    }
+
     $target = Get-Platform
     if (($script:Supported -split ' ') -notcontains $target) { Fail 3 "no Wizard release is published for $target. Supported: $script:Supported." }
     if (-not $env:LOCALAPPDATA -and -not $InstallDir) { Fail 3 '%LOCALAPPDATA% is not set; pass -InstallDir to choose a location' }
@@ -275,6 +371,9 @@ function Install-Wizard {
     try {
         if ($Version) {
             $tag = ConvertTo-Tag $Version
+        } elseif ($channelChoice -eq 'pre-release') {
+            Step 'Finding the newest release, pre-releases included'
+            $tag = ConvertTo-Tag (Resolve-NewestTag $baseOverride $temp)
         } else {
             Step 'Finding the latest release'
             $tag = ConvertTo-Tag (Resolve-LatestTag $baseOverride $temp)
@@ -397,8 +496,22 @@ function Install-Wizard {
         if ($LASTEXITCODE -ne 0) { Fail 1 "the installed program failed to run: $installed" }
         Ok $installed
 
+        # Remember an explicit channel choice, so `wizard update` keeps following
+        # it. A pre-release build with no choice made stays on the pre-release
+        # channel by itself; only a choice needs writing down. Best effort: the
+        # install already worked.
+        if ($channelChoice) {
+            $saved = $false
+            try { & $exe channel $channelChoice 2>&1 | Out-Null; $saved = ($LASTEXITCODE -eq 0) } catch { $saved = $false }
+            if ($saved) { Ok "update channel: $channelChoice" } else { Warn "could not save the update channel. Run this once:  wizard channel $channelChoice" }
+        }
+
         Write-Host ''
         Write-Host "Wizard $tag is installed in $InstallDir"
+        if ($tag -like '*-*') {
+            Write-Host 'This is a pre-release. To follow stable releases only, run:  wizard channel stable'
+            Write-Host '(you stay on this build until a stable release passes it)'
+        }
         if (-not $modifyPath) {
             Write-Host 'PATH was not modified. To use wizard, add this directory to it:'
             Write-Host "    $binDir"
