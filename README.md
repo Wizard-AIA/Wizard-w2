@@ -106,6 +106,20 @@ For scripts and CI use `wizard init --non-interactive` (see `wizard init --help`
 
 `wizard update` never overwrites files a package manager owns; on a Homebrew or Scoop install it tells you the right command instead.
 
+### Stable and pre-release channels
+
+Releases are either **stable** or **pre-release** (a beta or release candidate, tagged like `v1.0.14-beta.1`). You are on the stable channel unless you choose otherwise, and a pre-release is never offered to anyone who has not opted in: the installers, `wizard update`, Homebrew and Scoop only ever see stable releases.
+
+| I want to | Do this |
+|---|---|
+| Try pre-releases on an existing install | `wizard channel pre-release`, then `wizard update` (or `wizard update --pre-release` to do both) |
+| Install a pre-release on a new machine | `curl -fsSL https://wizardw2.vercel.app/install.sh \| sh -s -- --pre-release` (PowerShell: `-PreRelease`) |
+| Install one specific pre-release | `... \| sh -s -- --version 1.0.14-beta.1` |
+| Go back to stable | `wizard channel stable` |
+| See which channel I am on | `wizard channel` (`wizard doctor` and `wizard update --check` show it too) |
+
+The pre-release channel follows the newest release of any kind, and a stable release wins as soon as it is newer than the pre-release you are on. Wizard never downgrades by itself: if you switch to stable while running a pre-release that is ahead of it, you stay on that build until a stable release passes it. Homebrew and Scoop follow the stable channel only; to try a pre-release on a machine that has Wizard from Homebrew, use the installer script instead.
+
 ### Uninstall
 
 ```bash
