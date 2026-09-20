@@ -137,3 +137,25 @@ func releaseZip(t *testing.T, root string) []byte {
 	}
 	return data.Bytes()
 }
+
+// Every release through v1.0.12 published SHA256SUMS produced by
+// `sha256sum ./*.zip`, so each entry is "digest  ./name". The updater rejected
+// all of them, which made `wizard update` fail on every platform. This is the
+// real published line for v1.0.12.
+func TestChecksumForAssetAcceptsSha256sumDotSlashNames(t *testing.T) {
+	const digest = "3d1bee90b685e205476d515577fdb3d9b0a4fa0d5c6250223001f12d50678e47"
+	const asset = "Wizard-v1.0.12-darwin-arm64.zip"
+	for name, line := range map[string]string{
+		"dot-slash": digest + "  ./" + asset,
+		"plain":     digest + "  " + asset,
+		"binary":    digest + " *" + asset,
+	} {
+		got, err := checksumForAsset([]byte(line+"\n"), asset)
+		if err != nil || got != digest {
+			t.Errorf("%s form: got (%q, %v), want %q", name, got, err, digest)
+		}
+	}
+	if _, err := checksumForAsset([]byte(digest+"  ./other-"+asset+"\n"), asset); err == nil {
+		t.Error("a different asset name must not match")
+	}
+}

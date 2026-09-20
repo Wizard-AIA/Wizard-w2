@@ -61,16 +61,7 @@ func Root() (string, error) {
 
 	// 4. Check common default paths
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		candidates := []string{
-			filepath.Join(home, ".wizard"),
-			filepath.Join(home, "Wizard-w2"),
-			filepath.Join(home, "Projects", "Wizard-w2"),
-			"/opt/homebrew/opt/wizard",
-			"/usr/local/opt/wizard",
-			"/opt/homebrew/share/wizard",
-			"/usr/local/share/wizard",
-		}
-		for _, candidate := range candidates {
+		for _, candidate := range defaultCandidates(home) {
 			if candidate != "" && looksLikeCheckout(candidate) {
 				return candidate, nil
 			}
@@ -78,6 +69,34 @@ func Root() (string, error) {
 	}
 
 	return "", ErrNotFound
+}
+
+// defaultCandidates lists well-known install locations, tried last. The
+// official installer's active package is <home>/.wizard/current (not
+// <home>/.wizard itself), and Homebrew keeps the payload in the keg's libexec
+// (older formulas put it at the keg root, so both are checked).
+var defaultCandidates = func(home string) []string {
+	return []string{
+		filepath.Join(home, ".wizard", "current"),
+		filepath.Join(home, "Wizard-w2"),
+		filepath.Join(home, "Projects", "Wizard-w2"),
+		"/opt/homebrew/opt/wizard/libexec",
+		"/opt/homebrew/opt/wizard",
+		"/usr/local/opt/wizard/libexec",
+		"/usr/local/opt/wizard",
+		"/home/linuxbrew/.linuxbrew/opt/wizard/libexec",
+		"/opt/homebrew/share/wizard",
+		"/usr/local/share/wizard",
+	}
+}
+
+// DisableDefaultCandidates makes Root ignore the well-known install locations
+// until the returned function is called. Tests use it so the machine they run
+// on (which may have Wizard installed) cannot influence the result.
+func DisableDefaultCandidates() (restore func()) {
+	saved := defaultCandidates
+	defaultCandidates = func(string) []string { return nil }
+	return func() { defaultCandidates = saved }
 }
 
 func rootFromExecutable(exe string) (string, error) {

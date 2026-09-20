@@ -3,6 +3,9 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,21 +159,54 @@ func CheckOllama() ToolCheck {
 // shells out to whatever `uv`/`pnpm` a user has, and there is no minimum this
 // project pins against -- only Python 3.12 and Node 20 have a real version floor.
 func CheckUV() ToolCheck {
-	path, err := exec.LookPath("uv")
-	if err != nil {
-		return ToolCheck{Name: "uv", Found: false, InstallHint: uvInstallHint()}
-	}
-	version, _ := parseVersion(runVersion("uv", "--version"))
-	return ToolCheck{Name: "uv", Found: true, Path: path, Version: version, OK: true, InstallHint: uvInstallHint()}
+	return checkRunnable("uv", uvInstallHint())
 }
 
 func CheckPnpm() ToolCheck {
-	path, err := exec.LookPath("pnpm")
+	return checkRunnable("pnpm", pnpmInstallHint())
+}
+
+// checkRunnable finds name on PATH and proves it can actually be executed.
+// Finding a file is not enough: pnpm 12 ships a placeholder `pnpm` with no
+// shebang until its install step runs, which a shell tolerates but exec(2)
+// rejects with "exec format error" -- so a lookup-only check reported pnpm as
+// healthy and `wizard init` then failed halfway through the dependency install.
+// A broken tool is reported as present-but-unusable (Found, not OK) with its
+// own reinstall hint.
+func checkRunnable(name, hint string) ToolCheck {
+	path, err := exec.LookPath(name)
 	if err != nil {
-		return ToolCheck{Name: "pnpm", Found: false, InstallHint: pnpmInstallHint()}
+		return ToolCheck{Name: name, Found: false, InstallHint: hint}
 	}
-	version, _ := parseVersion(runVersion("pnpm", "--version"))
-	return ToolCheck{Name: "pnpm", Found: true, Path: path, Version: version, OK: true, InstallHint: pnpmInstallHint()}
+	out, runErr := runCommandOutputErr(name, "--version")
+	if runErr != nil {
+		return ToolCheck{Name: name, Found: true, Path: path, Version: "unusable: " + runErr.Error(), InstallHint: hint}
+	}
+	version, _ := parseVersion(out)
+	return ToolCheck{Name: name, Found: true, Path: path, Version: version, OK: true, InstallHint: hint}
+}
+
+// runCommandOutputErr is runCommandOutput that also reports why the command
+// could not run or exited non-zero.
+func runCommandOutputErr(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("timed out after 10s")
+	}
+	if err != nil {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return "", pathErr.Err
+		}
+		return out.String(), err
+	}
+	return out.String(), nil
 }
 
 // runVersion is bounded so a PATH-resolved executable that hangs (an

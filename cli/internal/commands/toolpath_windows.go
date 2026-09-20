@@ -118,3 +118,7 @@ func expandWindowsEnvironment(value string) string {
 	}
 	return windows.UTF16ToString(buffer[:n])
 }
+
+// persistedPathEntries are the user and machine PATH entries as stored in the
+// registry, which a terminal opened before an install does not yet reflect.
+func persistedPathEntries() []string { return windowsRegistryPathEntries() }

@@ -14,3 +14,7 @@ func platformToolPaths(home string) []string {
 }
 
 func platformPythonCandidates() []string { return nil }
+
+// persistedPathEntries are PATH entries stored outside this process (the
+// Windows registry). Unix shells inherit PATH, so there is nothing to read.
+func persistedPathEntries() []string { return nil }
