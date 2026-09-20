@@ -56,13 +56,21 @@ $origKind = $null; try { $origKind = $envKey.GetValueKind('Path') } catch { }
 function Set-TestPath([string]$Value) { $envKey.SetValue('Path', $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString) }
 function Get-RawPath { [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
 
+# Start-Process joins -ArgumentList with spaces and does not quote, so a path with
+# spaces or a Unicode name would be split into several arguments.
+function ConvertTo-ArgumentString([string[]]$Arguments) {
+    ($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ }
+    }) -join ' '
+}
+
 function Invoke-Installer([string[]]$Arguments, [hashtable]$Environment = @{}, [string]$Base = $base) {
     $saved = @{}
     $vars = @{ WIZARD_RELEASE_BASE_URL = $Base } + $Environment
     foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
     try {
         $log = Join-Path $work "out$script:case.txt"
-        $p = Start-Process -FilePath $psExe -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installer) + $Arguments) `
+        $p = Start-Process -FilePath $psExe -ArgumentList (ConvertTo-ArgumentString (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installer) + $Arguments)) `
             -Wait -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
         $text = (Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue)
         return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
@@ -74,7 +82,7 @@ function Invoke-Installer([string[]]$Arguments, [hashtable]$Environment = @{}, [
 # Runs the installer with a forged CPU architecture. The variables are set inside
 # the child so this process's own PROCESSOR_ARCHITECTURE is never touched.
 function Invoke-InstallerAsArch([string]$Arch, [string[]]$Arguments) {
-    $quoted = ($Arguments | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+    $quoted = ($Arguments | ForEach-Object { if ($_ -match '^-[A-Za-z]') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' '
     $script = "`$env:PROCESSOR_ARCHITECTURE = '$Arch'; Remove-Item Env:PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue; " +
         "& '$($installer.Replace("'", "''"))' $quoted; exit `$LASTEXITCODE"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
@@ -195,8 +203,10 @@ try {
 
     # 9. irm | iex must never close the caller's terminal, even on failure
     $script = (Get-Content -LiteralPath $installer -Raw)
-    $tmpScript = Join-Path $work 'iex-host.ps1'
-    Set-Content -LiteralPath $tmpScript -Value @"
+    # `irm | iex` is typed at a prompt, where $MyInvocation.MyCommand.Path is empty;
+    # a host script *file* has a Path and the installer would rightly exit. Run the
+    # host as an in-memory command so it behaves like the prompt.
+    $hostScript = @"
 `$env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:1'
 `$env:WIZARD_VERSION = '9.9.9'
 `$env:WIZARD_INSTALL_DIR = '$((New-Case).Replace("'", "''"))'
@@ -206,7 +216,8 @@ Invoke-Expression (Get-Content -LiteralPath '$($installer.Replace("'", "''"))' -
 Write-Output 'HOST-STILL-ALIVE'
 Write-Output "PREFERENCES=`$ErrorActionPreference/`$ProgressPreference"
 "@
-    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $tmpScript 2>&1 | Out-String
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($hostScript))
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded 2>&1 | Out-String
     Assert-True ($out -match 'HOST-STILL-ALIVE') 'a failing install under Invoke-Expression does not exit the host' $out
     Assert-True ($out -match 'PREFERENCES=SilentlyContinue/Continue') 'Invoke-Expression restores the caller preference variables' $out
 }
