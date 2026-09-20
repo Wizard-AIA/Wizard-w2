@@ -12,7 +12,7 @@ reference.
 
 ## Building
 
-Requires Go 1.23+.
+Requires the Go version declared in `go.mod`.
 
 ```bash
 cd cli
@@ -31,25 +31,24 @@ Match that value to `API_VERSION` in
 `backend/src/api/routes/meta.py` — `wizard start` refuses to run against a
 backend whose major version doesn't match this binary's.
 
-### Cross-compiling
+### Cross-compiling and releases
 
-Go cross-compiles from any one machine with no target toolchain install —
-just `GOOS`/`GOARCH`:
+Go cross-compiles from any one machine with no target toolchain install, just
+`GOOS`/`GOARCH`. Releases are built by `scripts/build_release.sh`, which reads
+the target matrix from `packaging/release.json` (the one place the supported
+OS/architecture pairs are defined, and which `internal/platform`'s test checks
+against) and builds each with `CGO_ENABLED=0 -trimpath -buildvcs=false` for a
+static, reproducible binary:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o dist/wizard-linux-amd64     ./cmd/wizard
-CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o dist/wizard-linux-arm64     ./cmd/wizard
-CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -o dist/wizard-darwin-amd64    ./cmd/wizard
-CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o dist/wizard-darwin-arm64    ./cmd/wizard
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/wizard-windows-amd64.exe ./cmd/wizard
+scripts/build_release.sh            # builds v<VERSION> for every target into dist/
 ```
 
-`CGO_ENABLED=0` gives a true static binary on every target — no shared libc
-dependency at runtime, no target sysroot needed to build. Tagged releases use
-the same target matrix to publish platform archives. Building from source
-remains supported; release-awareness and verified binary updates are in scope
-as described below, but are not implemented by the current `wizard update`
-command.
+Supported targets: `darwin-arm64`, `darwin-amd64`, `linux-amd64`, `linux-arm64`,
+`windows-amd64`. Windows on ARM is not built or tested, and the installers say
+so instead of downloading an archive that does not exist. The version comes from
+the repository's `VERSION` file (`scripts/release.py check` keeps every copy in
+step) and is stamped into the binary with `-X wizard/internal/compat.BuildVersion`.
 
 ### Running the tests
 
@@ -69,23 +68,67 @@ WIZARD_CLI_SELFTEST=1 go test ./internal/daemon/... -run TestSupervisor -v
 
 ## Subcommands
 
-Installed release binaries work from any directory — the installers persist
-the bundled checkout in `WIZARD_ROOT`, and the CLI also resolves the stable
-`current` package link. When running a source-built binary, use it from inside
-a Wizard checkout (or set `WIZARD_ROOT` yourself).
+Installed binaries work from any directory: the CLI locates the bundled
+`backend/` and `frontend/` from its own resolved path (a Homebrew keg's
+`libexec`, the installer's `current` package, or a Scoop app directory), so no
+environment variable is needed. When running a source-built binary, use it from
+inside a Wizard checkout or set `WIZARD_ROOT`. Global flags go before the
+command: `--no-color` (also `NO_COLOR`) and `--verbose`.
 
 | Command | What it does |
 |---|---|
-| `wizard init` | In a terminal, a bare run interactively configures provider, data mode, schema-only privacy, manager/worker models, embeddings, and the relevant endpoint/API key; press Enter to keep defaults and use ↑/↓ plus Enter for choices. Embedding choices are limited to Ollama, LM Studio, OpenAI, Gemini, or an OpenAI-compatible custom gateway; Anthropic is chat-only and is not offered for embeddings. It reuses any usable Python 3.12+ interpreter, including 3.13 and 3.14, and checks Node 20+/uv/pnpm. It only requires Ollama when the selected configuration needs a local model server. Missing required tools trigger an arrow-key confirmation and can be installed through winget, Homebrew, apt, dnf, pacman, or apk; `--install-prerequisites` opts in for scripts and `--no-install-prerequisites` only checks. On Windows, the recheck refreshes the current process from user/system PATH and common Winget locations. It copies `backend/.env.example` → `backend/.env` if missing; creates a venv under the platform config directory with `uv venv` and installs backend requirements with `uv pip install`; runs `pnpm install --frozen-lockfile && pnpm run build` for the frontend's production `standalone` bundle. `--pull-models` also `ollama pull`s a default manager/worker pair if Ollama is present. Reads host RAM and, if the default manager+worker pair clearly won't fit together and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles instead in the `.env` it creates (announced, not silent — see Design notes) — an explicit `--manager-model`/`--worker-model` is always respected as-is. `--provider`/`--data-mode`/key flags configure a local, hybrid or fully cloud setup in the same run — see [Local, hybrid and cloud setups](#local-hybrid-and-cloud-setups) below. `--non-interactive` disables prompts for automation; `--interactive` forces them. |
-| `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits here in the foreground until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` override the 8000/3000 defaults; `--no-browser` skips opening one. |
+| `wizard init` | Sets Wizard up: chooses a provider and models, checks (and offers to install) prerequisites, writes `backend/.env`, creates a venv under the config directory with `uv`, installs backend requirements, and builds the frontend's production `standalone` bundle. On a terminal it is interactive (see [Interactive setup](#interactive-setup)); `--non-interactive` never prompts and `--interactive` forces prompts. Prerequisites follow the [version policy](#prerequisites) below; `--install-prerequisites` opts in for scripts and `--no-install-prerequisites` only checks. It only requires Ollama when the chosen configuration needs a local model server. `--pull-models` also `ollama pull`s a default manager/worker pair. Reads host RAM and, if the default pair clearly won't fit and neither `--manager-model` nor `--worker-model` was given, pins one smaller model for both roles in the `.env` it creates (announced, not silent); an explicit model flag is always respected. `--provider`/`--data-mode`/key flags configure a local, hybrid or cloud setup in the same run, see [Local, hybrid and cloud setups](#local-hybrid-and-cloud-setups). After configuring it keeps a private copy of `backend/.env` in the config directory and restores it if the package directory is later replaced (a `brew upgrade`, a reinstall). |
+| `wizard start` | Re-execs itself into a detached background supervisor (backend + frontend), waits until the backend answers healthy, checks the backend's reported API version against this binary's compat marker, then opens a browser. `--backend-port`/`--frontend-port` (validated as 1-65535) override the 8000/3000 defaults; `--timeout` bounds the wait; `--no-browser` skips opening one. Tools outside the shell's PATH (a keg-only Homebrew formula, a user-level pnpm) are added to the supervisor's PATH after your own. |
 | `wizard stop` | Idempotent. Asks the supervisor to stop and waits for it to clean up; falls back to a forced kill of the recorded pids if it doesn't. |
 | `wizard delete` | Stops Wizard and deletes its user-level config, credentials, connections, skills, logs, and managed venv, plus `backend/.env`. The checkout and CLI remain installed. Prompts for confirmation; use `--yes` for automation or `--keep-env` to preserve the checkout's `.env`. |
-| `wizard status` / `wizard doctor` | Same command (the spec lists them as one thing). Local checks (what's running, log sizes, `API_PROVIDER`/`DATA_MODE`, `EXECUTION_BACKEND`) plus, when the backend answers, a render of its own `GET /api/config` — host sizing, sandbox capability, performance notes and the rest already live there; this reuses it rather than re-deriving anything. |
+| `wizard status` | What's running, log sizes, `API_PROVIDER`/`DATA_MODE`/`EXECUTION_BACKEND`, and, when the backend answers, a render of its own `GET /api/config` (host sizing, sandbox capability, performance notes). |
+| `wizard doctor` | A read-only health report of this installation with PASS / WARN / FAIL per check and a fix for anything that is not a pass: version, platform, install method, whether `wizard` is on PATH, the bundled files, the config directory, Python / Node / uv / pnpm (a tool that is present but cannot run is a failure, with the reason), configuration and credentials, the running service and its API compatibility. It works when the bundled files cannot be found, which is when it is needed. `--json` for scripts, `--network` to also test GitHub Releases and the configured model provider. Exits 3 if a check fails. |
+| `wizard update` | Updates a release install: checks GitHub Releases, verifies the archive's `SHA256SUMS` entry, stages the full package, preserves `backend/.env`, rebuilds it, then advances `current` while keeping the previous package. A git checkout uses `git pull --ff-only`. It **never overwrites files a package manager owns**: on Homebrew or Scoop it prints `brew upgrade wizard` / `scoop update wizard`. A failed update restarts the service it stopped. `--check` only reports (safe on any install). |
+| `wizard uninstall` | Removes what the official installer created: the install directory's known contents (never `RemoveAll` on the directory itself), the shell startup blocks or fish drop-in, and on Windows the user PATH entry and `WIZARD_ROOT`. It keeps your data and backs up `backend/.env` to the config directory. **`--purge`** (alias `--all`) removes everything: program, config, API keys, logs and the managed Python environment, and lists exactly what it will delete before asking. Refuses git checkouts and unrecognised layouts, and on Homebrew/Scoop prints the package manager's own command. `--yes` skips the prompt; unattended runs without it are refused. |
 | `wizard attach` | Prints status, then follows `backend.log`/`frontend.log` live, source-prefixed, until Ctrl+C. Read-only. |
 | `wizard logs` | One-shot: prints the log file paths; `--tail N` also prints the last N lines of each. |
-| `wizard update` | For a source checkout: `git pull --ff-only`, dependency rebuild, and API compatibility check. For an official release install: checks the latest GitHub Release, reports a newer version when present, verifies its `SHA256SUMS` entry, stages the complete matching package, preserves `backend/.env`, rebuilds it, then advances the stable launcher/current pointer while retaining the prior package. `--check` only reports version availability; `--self` forces the release-install path. |
 | `wizard skills add/list/update/discard/remove/token` | Fronts `backend/main.py skills` — the same install machinery (fetch, pin to a commit, show every skill's full contents, ask before writing) the REST routes and web UI's install-from-GitHub flow use, now also reachable from the compiled binary. Runs in the wizard-managed venv from `wizard init`; `add`/`update` prompt on a real terminal unless `--yes` is given. |
 | `wizard version` | Prints this binary's immutable release build version and compiled-in backend API compatibility marker. It performs no network check; use `wizard update --check` to see whether a newer release is available. |
+
+### Interactive setup
+
+On a terminal a bare `wizard init` is a guided flow:
+
+- **Menus are real dropdowns** where the terminal supports ANSI cursor control:
+  the highlighted row is marked, long lists scroll, typing jumps to a match,
+  ↑/↓, PgUp/PgDn, Home/End and Enter work, and a finished choice collapses to one
+  line. Terminals without cursor control (dumb terminals, old consoles) fall
+  back to a numbered list, and `NO_COLOR` only turns colour off.
+- **API keys** show one `•` per typed or pasted character, then a receipt
+  (length and last four characters). The key itself is never printed, and it is
+  checked against the provider immediately; a rejected key offers to re-enter it.
+- **Models come from the provider.** Once credentials are known, `init` asks the
+  provider what it offers (Ollama's installed models, LM Studio's, and the
+  OpenAI, Anthropic, Gemini or gateway model lists) and offers only usable chat
+  or embedding models, stable releases before previews. Image, speech, music and
+  specialist models are hidden. Nobody is asked to type a model name or a
+  provider URL: endpoints are known, and if a list cannot be fetched the choice
+  stays on auto-select with a pointer to the Models page. A local server on
+  another machine is asked for only when the default address is unreachable.
+- **Hybrid** setups also pair a cloud provider and verify its key.
+
+Scripted and piped use is unchanged: no menus, no network lookups, typed model
+names as before.
+
+### Prerequisites
+
+Python 3.12+, Node.js 20+, uv and pnpm are **minimums, not pins**.
+
+1. Anything at or above the minimum that is already on the machine is used as
+   is, wherever it lives: `PATH`, Homebrew (including keg-only formulae), user
+   bins, and the nvm, fnm, Volta, asdf and mise directories (searched after
+   `PATH`, so your own choice always wins).
+2. Only what is missing is installed, and the current release is preferred
+   (unversioned, so it is linked onto PATH), falling back to the minimum-version
+   package. Python is provisioned with `uv python install` on Linux and Windows.
+3. A tool that exists but cannot run is reported as broken rather than missing.
+   Tools that only a shell can start (pnpm 12's shebang-less placeholder) are run
+   through `sh` instead of failing with `exec format error`.
 
 ### Local, hybrid and cloud setups
 
@@ -163,6 +206,25 @@ A few things this does for you beyond writing the flag values into
   touches with these flags. A cloud provider only changes where the
   reasoning/code-writing model calls go.
 
+## Exit codes and environment
+
+| Code | Meaning |
+|---|---|
+| 0 | success (including `--help`) |
+| 1 | failure |
+| 2 | bad usage or an invalid value (a stray argument, port outside 1-65535) |
+| 3 | missing dependency or broken installation; run `wizard doctor` |
+| 4 | network error (release lookup, download) |
+
+| Variable | Effect |
+|---|---|
+| `WIZARD_ROOT` | directory containing `backend/` and `frontend/` (only needed for a source build) |
+| `WIZARD_CONFIG_DIR` | overrides the settings/credentials/logs/venv location |
+| `NO_COLOR`, `--no-color` | disable colour |
+| `WIZARD_ASCII=1` | ASCII symbols only |
+| `WIZARD_VERBOSE`, `--verbose` | show underlying error detail |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | honoured by the updater, downloads and model lookups |
+
 ## Release updates and version awareness (in scope)
 
 The tagged-release workflow is the delivery channel for the compiled CLI.
@@ -182,6 +244,10 @@ use their explicit Git update path:
   rebuilds it before activation, then safely switches the launcher/current
   pointer, and retains the previous package for rollback. Windows uses a
   detached helper so it never overwrites the running executable in place.
+- Package managers own their installs. `internal/installkind` recognises a
+  Homebrew keg, a Scoop app, the official installer's layout and a git
+  checkout from the paths alone; `update` and `uninstall` refuse to touch the
+  first two and print the package manager's command.
 - Source and binary updates remain deliberately separate. An ordinary source
   checkout uses Git; a release install uses verified packages. Neither updates
   the active release when staging or preparation fails.

@@ -97,11 +97,11 @@ jobs:
         # docs/analysis/mutation-testing.md calls out for the backend's own
         # cosmic-ray setup.
         #
-        # GOTOOLCHAIN=auto: gremlins v0.6.0 requires Go >=1.25, newer than
-        # this module's own go.mod (1.23, the actual build/compat target for
-        # the shipped binary -- not touched just to satisfy a dev-tool run
-        # against it). `go run` fetches the newer toolchain on demand for
-        # this one command only; the build-test job above is unaffected.
+        # GOTOOLCHAIN=auto: gremlins v0.6.0 has its own minimum Go version, which
+        # can differ from this module's go.mod (the actual build/compat target
+        # for the shipped binary, never changed just to satisfy a dev-tool run).
+        # `go run` fetches a matching toolchain on demand for this one command
+        # only; the build-test job above is unaffected.
         env:
           GOTOOLCHAIN: auto
         run: |

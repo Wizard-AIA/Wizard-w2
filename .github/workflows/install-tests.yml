@@ -1,0 +1,122 @@
+name: Installer tests
+
+# The installers are how most people meet Wizard, and they used to be tested by
+# nothing: a regression in install.sh or install.ps1 shipped unnoticed. These
+# run the real scripts against a local fake release, on every platform Wizard
+# publishes for.
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - "scripts/tests/**"
+      - "scripts/release.py"
+      - "scripts/build_release.sh"
+      - "packaging/**"
+      - "VERSION"
+      - "cli/**"
+      - ".github/workflows/install-tests.yml"
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - "scripts/tests/**"
+      - "scripts/release.py"
+      - "scripts/build_release.sh"
+      - "packaging/**"
+      - "VERSION"
+      - "cli/**"
+      - ".github/workflows/install-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consistency:
+    name: Release consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: VERSION, target matrix and installers agree
+        run: python scripts/release.py check
+
+      - name: shellcheck install.sh (errors only)
+        run: shellcheck --severity=error --shell=sh scripts/install.sh scripts/tests/test_install_sh.sh
+
+  shell:
+    name: sh installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # linux amd64/arm64 and macOS arm64/Intel: every Unix target Wizard publishes.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Run the suite under sh, dash and bash
+        run: sh scripts/tests/test_install_sh.sh
+
+  alpine:
+    name: sh installer (Alpine / busybox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # busybox ash, busybox awk/sed/mktemp/unzip: the most different userland
+      # the installer meets, and what many Docker images use.
+      - name: Run the suite inside Alpine
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w alpine:3.20 sh -c '
+            apk add --no-cache curl unzip zip python3 bash coreutils >/dev/null &&
+            SHELLS="sh bash" sh scripts/tests/test_install_sh.sh'
+
+  windows:
+    name: PowerShell installer (${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # powershell = Windows PowerShell 5.1 (what most users have); pwsh = 7+.
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Build a wizard.exe that reports v9.9.9
+        shell: pwsh
+        working-directory: cli
+        run: |
+          go build -trimpath -buildvcs=false -ldflags "-X wizard/internal/compat.BuildVersion=v9.9.9" -o "$env:RUNNER_TEMP\wizard.exe" ./cmd/wizard
+          "WIZARD_TEST_EXE=$env:RUNNER_TEMP\wizard.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run the suite under ${{ matrix.shell }}
+        shell: ${{ matrix.shell }}
+        run: .\scripts\tests\test_install_ps1.ps1

@@ -4,6 +4,106 @@ All notable changes to Wizard are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions before this
 file existed are reconstructed from tags, release notes, and milestone commits.
 
+## [v1.0.13] - 2026-09-20
+
+### Fixed
+- **`brew install wizard` failed on every Mac** with "Formula reports different
+  checksum". The formula's SHA-256 values had been copied from a maintainer's
+  local build instead of the archives CI published. Package metadata is now
+  generated from a release's published `SHA256SUMS` and from nothing else.
+  The Scoop manifest had the same defect.
+- **`wizard update` never worked from v1.0.10 to v1.0.12.** The published
+  `SHA256SUMS` listed `./Wizard-...zip`, which the updater rejected
+  (`checksum list does not contain ...`). The updater now accepts that form and
+  new releases publish bare names.
+- **`wizard init` failed on a clean Mac** after offering to install Node: it
+  installed the keg-only `node@20`, which Homebrew never links onto PATH, so the
+  recheck failed. Missing tools are now installed as the current, linked release.
+- **`wizard init` reported an installed Node or pnpm as missing** when nvm, fnm,
+  Volta, asdf or mise was not loaded in the shell. Those directories are now
+  searched (after your own PATH).
+- **`wizard init` died with `exec format error`** for a working pnpm 12, whose
+  `pnpm` is a script with no `#!` line that a shell runs but `exec` refuses.
+  Such tools now run through `sh`.
+- **A failed `wizard update` left a working service stopped**; it now restarts it.
+- Release downloads no longer fail on slow links: the updater's 20-second
+  whole-request timeout has become a per-request bound.
+- **Windows:** the update helper built its junction through Go's argument quoting,
+  which `cmd.exe` cannot parse, and a failed swap could leave no `current`
+  junction. It now builds the new junction first, swaps by rename and rolls back.
+  The installer no longer converts `%VARIABLES%` in your user PATH to literal
+  text (`REG_EXPAND_SZ` is preserved), no longer follows a junction when
+  replacing it, and fails cleanly on Windows ARM64 instead of requesting an
+  archive that does not exist.
+- **Linux/macOS installer:** no longer edits only the first startup file it
+  finds (a fresh Mac has no `~/.zshrc`, so new terminals had no `wizard`), no
+  longer breaks under `dash` (`[[`, `echo -e`), and no longer falls back to a
+  hardcoded old version when the release lookup fails.
+- `--help` on any command exits 0; stray arguments, out-of-range ports and
+  negative `--tail` values are usage errors instead of being ignored.
+- `wizard doctor` on a checkout-less install, and every command's error when the
+  bundled files cannot be found, now explain what to do instead of printing a
+  bare error.
+
+### Added
+- **`wizard doctor`** is now a real diagnostic (it was an alias of `status`):
+  PASS / WARN / FAIL with a fix for each, `--json`, `--network`, exit code 3 on
+  failure, and it works when the bundled files cannot be found.
+- **`wizard uninstall`**, with `--purge` (alias `--all`) to remove the whole
+  system: program, PATH entries, settings, API keys, logs and the Python
+  environment. Without it your data is kept and `backend/.env` is backed up.
+- **Interactive `wizard init`**: real dropdown menus (highlight, scrolling,
+  type-to-jump, collapsing to one line); API keys shown as one `•` per character
+  with a receipt (length and last four characters) and verified against the
+  provider; models are listed from what the provider actually offers, so nobody
+  types a model name or a provider URL; hybrid setups pair a cloud provider.
+- Installer options: `--version`, `--install-dir`, `--no-modify-path`, `--force`,
+  `--verbose` (and `-Version`, `-InstallDir`, `-NoModifyPath`, `-Force` for
+  PowerShell), plus `WIZARD_RELEASE_BASE_URL` for an internal mirror.
+- Both installers verify the archive's SHA-256 before unpacking, run the new
+  program before switching to it, and are safe to run again.
+- Exit codes: `3` for a missing dependency or broken install, `4` for a network
+  error. Global `--no-color` and `--verbose`. `did you mean` for a mistyped command.
+- `wizard init` keeps a private copy of `backend/.env` in the settings directory
+  and restores it after a package-manager upgrade replaces the package.
+- Releases include `install.sh`, `install.ps1`, a machine-readable
+  `release.json`, and the rendered `wizard.rb` and `wizard.json`.
+
+### Changed
+- **Prerequisites are minimums, not pins.** Python 3.12+ and Node 20+ mean any
+  newer version works and is used as is; only missing tools are installed.
+- `wizard update` recognises Homebrew and Scoop installs and prints their
+  upgrade command instead of touching their files.
+- The Homebrew formula installs the application into `libexec` and uses
+  `on_arm`/`on_intel`; its test checks the installed version.
+- One `VERSION` file is the source of truth; the release build refuses a tag
+  that disagrees with it and the binary must report the tag it was built for.
+- The output of `--help`, `doctor` and `init` is consistent and adapts to the
+  terminal (colour and Unicode only where supported; plain ASCII in pipes/CI).
+
+### Removed
+- `scripts/wizard.json`, the hand-maintained Scoop manifest (superseded by the
+  generated one attached to each release).
+
+### Security
+- Installers and the updater verify each archive against the release's
+  `SHA256SUMS` before unpacking (integrity, not a signature), reject unsafe
+  archive paths and use a private temporary directory.
+- `wizard uninstall` refuses to delete `$HOME`, `/`, package-manager files or
+  git checkouts, and never follows the `current` link into a package.
+- API keys are never printed, and never placed in a URL or an error message.
+
+### Upgrading
+- **Homebrew:** `brew update && brew upgrade wizard`, then `wizard init`
+  (your settings are restored). If you hit the old checksum error, `brew update`
+  first: the tap is fixed.
+- **Installer script or PowerShell installer:** run `wizard update`. Releases
+  through v1.0.12 could not update themselves (see above), so on v1.0.12 or
+  earlier re-run the installer once instead:
+  `curl -fsSL https://wizardw2.vercel.app/install.sh | sh` (macOS/Linux) or
+  `irm https://wizardw2.vercel.app/install.ps1 | iex` (Windows).
+- **Scoop:** `scoop update wizard`.
+
 ## [v1.0.12] - 2026-09-11
 
 ### Fixed
@@ -225,6 +325,7 @@ Initial public foundation: FastAPI backend (CSV upload, chat, validation),
 the first agent framework and skills, and the CI/CD bootstrap (linting,
 dependency auditing, API contract tests).
 
+[v1.0.13]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.12...v1.0.13
 [v1.0.12]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.11...v1.0.12
 [v1.0.11]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.10...v1.0.11
 [v1.0.10]: https://github.com/Wizard-AIA/Wizard-w2/compare/v1.0.9...v1.0.10
