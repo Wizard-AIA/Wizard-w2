@@ -273,6 +273,12 @@ jobs:
           WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765 sh dist/install.sh --version "$version" --no-modify-path
           export PATH="$HOME/.wizard/bin:$PATH"
 
+          # Leave the checkout. `wizard init` and `wizard start` follow the working
+          # directory, so from here they would run this repository's backend instead
+          # of the one the installer just unpacked, and the health check below would
+          # be reading the wrong VERSION file.
+          cd "$RUNNER_TEMP"
+
           grep -q "$tag" <<< "$(wizard --version 2>&1 || true)"
           # A cloud provider avoids needing a local model server. The key is a placeholder.
           wizard init --non-interactive --no-install-prerequisites --provider anthropic --anthropic-key sk-ant-ci-placeholder
@@ -304,6 +310,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "installer exited $LASTEXITCODE" }
           $wizard = "$env:LOCALAPPDATA\Wizard\bin\wizard.exe"
 
+          # Leave the checkout (see the Unix step): init and start follow the working
+          # directory, and must run the installed package, not this repository.
+          Set-Location $env:RUNNER_TEMP
+
           & $wizard --version | Select-String $tag | Out-Null
           & $wizard init --non-interactive --no-install-prerequisites --provider anthropic --anthropic-key sk-ant-ci-placeholder
           if ($LASTEXITCODE -ne 0) { throw "wizard init exited $LASTEXITCODE" }
@@ -328,7 +338,7 @@ jobs:
   publish:
     name: Stage draft GitHub Release
     needs: [smoke, e2e]
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write # To create the GitHub Release
@@ -508,7 +518,7 @@ jobs:
   publish-live:
     name: Publish the verified release
     needs: [verify-draft, sbom]
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -637,6 +647,13 @@ jobs:
       packages: write # To push to GHCR
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # The image copies VERSION, and the backend reports it. A pre-release image
+      # must say 1.0.14-beta.1, as its archive and its tag do, not the 1.0.14 it
+      # precedes. Working tree only; nothing is committed.
+      - name: Stamp the pre-release version
+        if: env.RELEASE_PRERELEASE == 'true'
+        run: printf '%s\n' "${RELEASE_TAG#v}" > VERSION
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
