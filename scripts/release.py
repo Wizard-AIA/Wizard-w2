@@ -8,11 +8,19 @@ build. Package metadata is rendered from the SHA256SUMS that was actually
 published with the release.
 
 Sources of truth
-  VERSION                  the release version (X.Y.Z, no "v")
+  VERSION                  the version being released (X.Y.Z, no "v")
   packaging/release.json   repository, artifact name template, target matrix
+
+Tags. A release is tagged vX.Y.Z (stable) or vX.Y.Z-KIND.N (pre-release), where KIND
+is alpha, beta or rc and N starts at 1. The tag's X.Y.Z must equal VERSION: a
+pre-release is a candidate for the version in VERSION, published early. Only stable
+releases become GitHub's "latest release", get package-manager metadata, or move the
+`latest` container tag. The same grammar is enforced by the Go CLI (internal/relver)
+and by install.sh / install.ps1.
 
 Commands
   check                    fail if any version or target list has drifted (CI gate)
+  tag-info TAG             validate a tag and print version=, base=, prerelease=
   set-version X.Y.Z        update every copy of the version that must exist
   verify --dir DIR         check DIR/SHA256SUMS against the archives beside it
   render                   write wizard.rb, wizard.json and release.json from a SHA256SUMS
@@ -27,10 +35,15 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+# No leading zeros, matching the Go CLI's parser: 1.0.13 is a version, 1.0.013 is a typo.
+_NUM = r"(?:0|[1-9]\d*)"
+SEMVER = re.compile(rf"^{_NUM}\.{_NUM}\.{_NUM}$")
+# vX.Y.Z or vX.Y.Z-KIND.N. Group 1 is the base version, group 2 the pre-release part.
+TAG = re.compile(rf"^v({_NUM}\.{_NUM}\.{_NUM})(?:-((?:alpha|beta|rc)\.[1-9]\d*))?$")
 CHECKSUM_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(?:\./)?(\S.*)$")
 # In frontend/lib/api-types.generated.ts: "App Version" then its "@default X.Y.Z".
 APP_VERSION_DEFAULT = re.compile(r"(App Version\s*\n\s*\* @default )\d+\.\d+\.\d+")
@@ -38,6 +51,27 @@ APP_VERSION_DEFAULT = re.compile(r"(App Version\s*\n\s*\* @default )\d+\.\d+\.\d
 
 class ReleaseError(Exception):
     """A problem the operator must fix; printed without a traceback."""
+
+
+class TagInfo(NamedTuple):
+    tag: str
+    base: str  # X.Y.Z, what VERSION must say
+    prerelease: str | None  # "beta.1", or None for a stable release
+
+    @property
+    def version(self) -> str:
+        """The full version without the "v": 1.0.14 or 1.0.14-beta.1."""
+        return self.base if self.prerelease is None else f"{self.base}-{self.prerelease}"
+
+
+def parse_tag(tag: str) -> TagInfo:
+    match = TAG.match(tag)
+    if not match:
+        raise ReleaseError(
+            f"tag {tag!r} is not a release tag: use vX.Y.Z or vX.Y.Z-KIND.N with KIND alpha, beta or rc "
+            "(for example v1.0.14 or v1.0.14-beta.1)"
+        )
+    return TagInfo(tag, match.group(1), match.group(2))
 
 
 # --- sources of truth -------------------------------------------------------
@@ -128,10 +162,23 @@ def collect_problems(tag: str | None = None, changelog: bool = False) -> list[st
                 f"(run: scripts/release.py set-version {version})"
             )
 
-    if tag is not None and tag != f"v{version}":
-        problems.append(f"tag {tag!r} does not match VERSION (expected v{version})")
+    prerelease = False
+    if tag is not None:
+        try:
+            info = parse_tag(tag)
+        except ReleaseError as exc:
+            problems.append(str(exc))
+        else:
+            prerelease = info.prerelease is not None
+            if info.base != version:
+                problems.append(
+                    f"tag {tag!r} does not match VERSION: it is for {info.base} but VERSION is {version!r} "
+                    f"(expected v{version} or v{version}-beta.N)"
+                )
 
-    if changelog and f"## [v{version}]" not in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"):
+    # A pre-release is documented by its release notes; the changelog entry is
+    # written once, for the stable release it becomes.
+    if changelog and not prerelease and f"## [v{version}]" not in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"):
         problems.append(f"CHANGELOG.md has no '## [v{version}]' section")
 
     manifest = load_manifest()
@@ -168,6 +215,15 @@ def cmd_check(args: argparse.Namespace) -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
     print(f"release consistency OK (version {read_version()})")
+    return 0
+
+
+def cmd_tag_info(args: argparse.Namespace) -> int:
+    info = parse_tag(args.tag)
+    print(f"tag={info.tag}")
+    print(f"version={info.version}")
+    print(f"base={info.base}")
+    print(f"prerelease={'true' if info.prerelease is not None else 'false'}")
     return 0
 
 
@@ -217,6 +273,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     directory = Path(args.dir)
     manifest = load_manifest()
     tag = args.tag or f"v{read_version()}"
+    parse_tag(tag)
     sums_path = directory / manifest["checksums"]
     if not sums_path.exists():
         raise ReleaseError(f"{sums_path} not found")
@@ -345,6 +402,11 @@ def render_release_json(manifest: dict, version: str, sums: dict[str, str], size
 def cmd_render(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     version = (args.version or read_version()).removeprefix("v")
+    if TAG.match(f"v{version}") and parse_tag(f"v{version}").prerelease is not None:
+        raise ReleaseError(
+            f"{version} is a pre-release. Homebrew, Scoop and the website manifest describe stable releases only, "
+            "so nothing is rendered for it"
+        )
     if not SEMVER.match(version):
         raise ReleaseError(f"version must be X.Y.Z, got {version!r}")
     tag = f"v{version}"
@@ -388,6 +450,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tag", help="also require this git tag to equal v<VERSION>")
     p.add_argument("--changelog", action="store_true", help="also require a CHANGELOG section for this version")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("tag-info", help="validate a release tag and print its parts")
+    p.add_argument("tag")
+    p.set_defaults(func=cmd_tag_info)
 
     p = sub.add_parser("set-version", help="update every copy of the version")
     p.add_argument("version")

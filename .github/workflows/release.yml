@@ -10,12 +10,28 @@ name: Publish Release
 # and `brew install` failed with "Formula reports different checksum".
 #
 # Manual runs (workflow_dispatch) build and test everything but publish nothing.
+#
+# Pre-releases. A tag vX.Y.Z-KIND.N (KIND alpha, beta or rc) goes through the same
+# pipeline and is published as a GitHub *pre-release*, which GitHub never returns
+# as the "latest release". That is the whole isolation: the installers, `wizard
+# update`, the Homebrew formula and the website all resolve "latest", so none of
+# them can reach a pre-release unless someone opted in. On top of that a
+# pre-release renders no Homebrew, Scoop or website metadata, notifies no
+# downstream repository, and does not move the container `latest` tag.
+# To rehearse that path without publishing, run this workflow by hand with a
+# tag such as v<VERSION>-beta.1 (its X.Y.Z must equal VERSION).
 
 on:
   push:
     tags:
       - 'v*' # Trigger on version tags like v1.0.0
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Rehearse this tag; nothing is published. Default v<VERSION>. Use v<VERSION>-beta.1 to rehearse the pre-release path."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -25,8 +41,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The tag being released. On a manual run there is no tag, so v<VERSION>.
-  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+  # The tag being released. On a manual run it is the tag input, else v<VERSION>.
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag || '' }}
+  # "true" for vX.Y.Z-KIND.N. scripts/release.py check (first job) rejects any
+  # tag with a "-" that is not exactly that shape, so the test here is enough.
+  RELEASE_PRERELEASE: ${{ contains(github.ref_type == 'tag' && github.ref_name || inputs.tag || '', '-') }}
 
 jobs:
   verify:
@@ -143,6 +162,11 @@ jobs:
           grep -q 'unknown command' <<< "$($fresh 'wizard bogus' 2>&1 || true)"
           grep -q 'invalid --backend-port' <<< "$($fresh 'wizard start --backend-port 99999' 2>&1 || true)"
 
+          # A pre-release build follows the pre-release channel until told otherwise;
+          # a stable build follows stable.
+          if [ "$RELEASE_PRERELEASE" = true ]; then want='Update channel: pre-release (implied by this pre-release build)'; else want='Update channel: stable (default)'; fi
+          grep -qF "$want" <<< "$($fresh 'wizard channel' 2>&1 || true)"
+
           # Idempotent: a second run keeps a single PATH block.
           sh dist/install.sh --version "${tag#v}" --yes
           for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
@@ -186,6 +210,9 @@ jobs:
           powershell -NoProfile -Command 'wizard doctor --json' | Out-File doctor.json -Encoding utf8
           $d = Get-Content doctor.json -Raw | ConvertFrom-Json
           if ($d.platform -ne 'windows-amd64') { throw "doctor reported platform $($d.platform)" }
+          $want = if ($env:RELEASE_PRERELEASE -eq 'true') { 'Update channel: pre-release (implied by this pre-release build)' } else { 'Update channel: stable (default)' }
+          $channel = (powershell -NoProfile -Command 'wizard channel') -join "`n"
+          if (-not $channel.Contains($want)) { throw "wizard channel reported '$channel', expected '$want'" }
 
           # The user PATH must keep its type and its unexpanded variables.
           $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
@@ -323,7 +350,7 @@ jobs:
           # while draft. Do not expose it to users until those exact uploaded
           # bytes, their checksums and the generated formula have passed.
           draft: true
-          prerelease: false
+          prerelease: ${{ env.RELEASE_PRERELEASE == 'true' }}
           files: |
             dist/*.zip
             dist/SHA256SUMS
@@ -344,23 +371,32 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Nothing to render for a pre-release
+        if: env.RELEASE_PRERELEASE == 'true'
+        run: |
+          echo "::notice::$RELEASE_TAG is a pre-release. Homebrew, Scoop and the website manifest describe stable releases only, so no package metadata is rendered."
+
       # Fetch the checksum asset from the just-created draft, not the build
       # workspace. This is the exact release object that will later be made
       # public, so the formula pins what users actually download.
       - name: Download SHA256SUMS from the draft release
+        if: env.RELEASE_PRERELEASE != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir release-asset
 
       - name: Render wizard.rb, wizard.json and release.json
+        if: env.RELEASE_PRERELEASE != 'true'
         run: python scripts/release.py render --version "${RELEASE_TAG#v}" --sums release-asset/SHA256SUMS --out packaging-out
 
       - name: Attach them to the release
+        if: env.RELEASE_PRERELEASE != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$RELEASE_TAG" packaging-out/wizard.rb packaging-out/wizard.json packaging-out/release.json --clobber
 
       - name: Upload for the verification jobs
+        if: env.RELEASE_PRERELEASE != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: packaging
@@ -434,7 +470,7 @@ jobs:
           powershell -NoProfile -Command 'wizard uninstall --yes'
 
       - name: Download the rendered Homebrew formula
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && env.RELEASE_PRERELEASE != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: packaging
@@ -445,7 +481,7 @@ jobs:
       # draft ZIP before the release is public, without weakening the formula
       # users receive (which continues to point at GitHub Releases).
       - name: Homebrew install, test and audit (macOS, Linux)
-        if: runner.os != 'Windows' && (matrix.target == 'darwin-arm64' || matrix.target == 'darwin-amd64' || matrix.target == 'linux-amd64')
+        if: runner.os != 'Windows' && env.RELEASE_PRERELEASE != 'true' && (matrix.target == 'darwin-arm64' || matrix.target == 'darwin-amd64' || matrix.target == 'linux-amd64')
         shell: bash
         run: |
           set -eu
@@ -481,12 +517,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+        run: |
+          set -eu
+          if [ "$RELEASE_PRERELEASE" = true ]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=true --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+          fi
+
+      # The property everything else rests on: a pre-release is never what
+      # GitHub calls the latest release. Prove it against the live API rather
+      # than trusting the flags just set.
+      - name: A pre-release must not be the latest release
+        if: env.RELEASE_PRERELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          flagged="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq .prerelease)"
+          latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          echo "flagged prerelease=$flagged; latest release is $latest"
+          if [ "$flagged" != true ]; then echo "::error::$RELEASE_TAG is not flagged as a pre-release"; exit 1; fi
+          if [ "$latest" = "$RELEASE_TAG" ]; then echo "::error::the pre-release $RELEASE_TAG became the latest release, so every stable user would be offered it"; exit 1; fi
 
       # Downstream repositories pull packaging attached to this now-public
       # release. Dispatch only after it is available to their unauthenticated
-      # workflows and their users.
+      # workflows and their users. A pre-release has no packaging to pull.
       - name: Tell downstream repositories a release exists
+        if: env.RELEASE_PRERELEASE != 'true'
         env:
           PACKAGING_PUSH_TOKEN: ${{ secrets.PACKAGING_PUSH_TOKEN }}
         run: |
@@ -543,7 +602,7 @@ jobs:
           powershell -NoProfile -Command 'wizard uninstall --yes'
 
       - name: Scoop install from the public manifest (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.RELEASE_PRERELEASE != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -593,7 +652,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/backend
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ env.RELEASE_PRERELEASE != 'true' }}
 
       - name: Build and Push Backend
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
@@ -611,7 +670,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/frontend
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ env.RELEASE_PRERELEASE != 'true' }}
 
       - name: Build and Push Frontend
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
