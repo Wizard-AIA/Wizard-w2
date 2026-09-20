@@ -80,18 +80,31 @@ function Get-Platform {
     }
 }
 
-function Get-DownloadArgs {
+# NO_PROXY is a comma-separated list of hosts and domain suffixes ("*" = all).
+function Test-NoProxy([string]$HostName) {
+    $list = if ($env:NO_PROXY) { $env:NO_PROXY } else { $env:no_proxy }
+    if (-not $list -or -not $HostName) { return $false }
+    foreach ($entry in ($list -split '[,\s]+')) {
+        $entry = $entry.Trim().TrimStart('*').TrimStart('.')
+        if (-not $entry) { if ($list.Trim() -eq '*') { return $true }; continue }
+        if ($HostName -eq $entry -or $HostName.EndsWith(".$entry")) { return $true }
+    }
+    return $false
+}
+
+function Get-DownloadArgs([string]$Url) {
     # Invoke-WebRequest uses the system proxy on 5.1; honour the standard
     # environment variables too, as the other installers and the CLI do.
     $splat = @{ UseBasicParsing = $true }
     $proxy = if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:https_proxy) { $env:https_proxy } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null }
-    if ($proxy -and -not ($env:NO_PROXY -match 'github\.com')) { $splat['Proxy'] = $proxy }
+    $requestHost = try { ([System.Uri]$Url).Host } catch { '' }
+    if ($proxy -and -not (Test-NoProxy $requestHost)) { $splat['Proxy'] = $proxy }
     return $splat
 }
 
 function Save-Url([string]$Url, [string]$Destination) {
     Debug-Line "GET $Url"
-    $extra = Get-DownloadArgs
+    $extra = Get-DownloadArgs $Url
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             Invoke-WebRequest -Uri $Url -OutFile $Destination @extra
@@ -130,7 +143,7 @@ function Resolve-LatestTag([string]$BaseOverride, [string]$Temp) {
     } catch {
         Debug-Line "redirect lookup failed: $($_.Exception.Message)"
     }
-    $extra = Get-DownloadArgs
+    $extra = Get-DownloadArgs 'https://api.github.com/'
     try {
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$script:Repo/releases/latest" -Headers @{ 'User-Agent' = 'wizard-installer' } @extra
         if ($release.tag_name) { return [string]$release.tag_name }
@@ -177,14 +190,21 @@ function Add-UserPath([string]$Directory) {
 
 function Send-EnvironmentChange {
     # Tell running programs (Explorer, new terminals) to re-read the environment.
-    if (-not ('Wizard.NativeMethods' -as [type])) {
-        Add-Type -Namespace Wizard -Name NativeMethods -MemberDefinition @'
+    # Best effort: the PATH is already saved, and Add-Type is refused outright in
+    # PowerShell's ConstrainedLanguage mode (AppLocker / WDAC managed machines),
+    # where failing here would report a finished install as broken.
+    try {
+        if (-not ('Wizard.NativeMethods' -as [type])) {
+            Add-Type -Namespace Wizard -Name NativeMethods -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
 public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);
 '@
+        }
+        $result = [UIntPtr]::Zero
+        [void][Wizard.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x2, 5000, [ref]$result)
+    } catch {
+        Debug-Line "could not broadcast the environment change: $($_.Exception.Message)"
     }
-    $result = [UIntPtr]::Zero
-    [void][Wizard.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x2, 5000, [ref]$result)
 }
 
 # --- junctions: removing one must never touch the directory it points at ---
@@ -242,8 +262,10 @@ function Install-Wizard {
     if (-not $env:LOCALAPPDATA -and -not $InstallDir) { Fail 3 '%LOCALAPPDATA% is not set; pass -InstallDir to choose a location' }
     if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'Wizard' }
     $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
-    $userProfile = [System.IO.Path]::GetFullPath($env:USERPROFILE)
-    if ($InstallDir.TrimEnd('\') -eq $userProfile.TrimEnd('\') -or $InstallDir.TrimEnd('\') -eq [System.IO.Path]::GetPathRoot($InstallDir).TrimEnd('\')) {
+    # USERPROFILE can be unset for a service account or a scheduled task.
+    $profileDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
+    $userProfile = if ($profileDir) { [System.IO.Path]::GetFullPath($profileDir) } else { '' }
+    if (($userProfile -and $InstallDir.TrimEnd('\') -eq $userProfile.TrimEnd('\')) -or $InstallDir.TrimEnd('\') -eq [System.IO.Path]::GetPathRoot($InstallDir).TrimEnd('\')) {
         Fail 2 "refusing to install into $InstallDir; choose a dedicated directory (default: $(Join-Path $env:LOCALAPPDATA 'Wizard'))"
     }
 
@@ -351,7 +373,7 @@ function Install-Wizard {
         Copy-Item -LiteralPath (Join-Path $destination 'cli\wizard.exe') -Destination $nextExe
         try {
             if (Test-Path -LiteralPath $exe) {
-                $aside = "$exe.old-" + (Get-Date -Format 'yyyyMMddHHmmss')
+                $aside = "$exe.old-" + (Get-Date -Format 'yyyyMMddHHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
                 Move-Item -LiteralPath $exe -Destination $aside
             }
             Move-Item -LiteralPath $nextExe -Destination $exe

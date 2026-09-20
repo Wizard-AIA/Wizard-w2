@@ -147,8 +147,14 @@ jobs:
           done || true
 
           $fresh 'wizard uninstall --yes'
-          test ! -e "$HOME/.wizard/bin" && test ! -e "$HOME/.wizard/current"
-          ! grep -rq '>>> wizard' "$HOME"/.zshrc "$HOME"/.bashrc "$HOME"/.bash_profile "$HOME"/.profile 2>/dev/null
+          # Explicit ifs: `set -e` ignores a failing `!`-negated command and every
+          # non-final member of an && list, so the terse forms pass while broken.
+          for leftover in "$HOME/.wizard/bin" "$HOME/.wizard/current"; do
+            if [ -e "$leftover" ]; then echo "uninstall left $leftover behind"; exit 1; fi
+          done
+          for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+            if [ -f "$f" ] && grep -q '>>> wizard' "$f"; then echo "uninstall left the PATH block in $f"; exit 1; fi
+          done
 
       - name: Install from those archives, run, uninstall (Windows)
         if: runner.os == 'Windows'
@@ -440,9 +446,10 @@ jobs:
           export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1
           brew tap-new --no-git local/verify
           tap="$(brew --repository local/verify)"
-          brew audit --strict --formula packaging-out/wizard.rb
           mirror="file://$PWD/release-assets/"
           sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb > "$tap/Formula/wizard.rb"
+          brew trust local/verify 2>/dev/null || true
+          brew audit --strict --formula local/verify/wizard
           brew install --formula local/verify/wizard
           wizard --version | grep -q "$RELEASE_TAG"
           wizard --help | grep -q Usage
@@ -460,6 +467,7 @@ jobs:
       - name: Make the tested draft public
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
 
       # Downstream repositories pull packaging attached to this now-public
@@ -494,6 +502,8 @@ jobs:
       - name: Install from the public GitHub release (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # lifts the anonymous API rate limit for `wizard update --check`
         run: |
           set -eu
           if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
@@ -507,6 +517,8 @@ jobs:
       - name: Install from the public GitHub release (Windows)
         if: runner.os == 'Windows'
         shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # lifts the anonymous API rate limit for `wizard update --check`
         run: |
           $ErrorActionPreference = 'Stop'
           $script = Invoke-RestMethod "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/install.ps1"

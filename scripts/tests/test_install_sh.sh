@@ -105,8 +105,10 @@ run_suite() {
   expect "the launcher is a relative symlink through current" test "$(readlink "$INSTALL/bin/wizard")" = "../current/cli/wizard"
   expect "a zsh user with NO ~/.zshrc still gets PATH set up (fresh macOS)" grep -q '.wizard/env' "$HOME_DIR/.zshrc"
   expect "no staging directory is left behind" sh -c "! ls -d $INSTALL/.wizard-update-* >/dev/null 2>&1"
+  cp "$HOME_DIR/.zshrc" "$WORK/zshrc.after-first-run"
   exit_is 0 "running the installer again succeeds" --yes
   expect "re-running does not duplicate the PATH block" test "$(count_blocks "$HOME_DIR/.zshrc")" = 1
+  expect "re-running leaves the startup file byte-for-byte unchanged (no growing blank lines)" cmp -s "$HOME_DIR/.zshrc" "$WORK/zshrc.after-first-run"
   expect "the env file exports the bin directory once" sh -c "grep -c 'export PATH' '$INSTALL/env' | grep -qx 1"
 
   new_case; TEST_SHELL=/bin/bash

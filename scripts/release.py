@@ -281,7 +281,7 @@ def _brew_blocks(manifest: dict, tag: str, sums: dict[str, str]) -> str:
 def render_formula(manifest: dict, version: str, sums: dict[str, str]) -> str:
     tag = f"v{version}"
     template = (ROOT / "packaging" / "homebrew" / "wizard.rb.tmpl").read_text(encoding="utf-8")
-    return template.replace("@VERSION@", version).replace("@ASSETS@", _brew_blocks(manifest, tag, sums))
+    return template.replace("@ASSETS@", _brew_blocks(manifest, tag, sums))
 
 
 def render_scoop(manifest: dict, version: str, sums: dict[str, str]) -> dict:

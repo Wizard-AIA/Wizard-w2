@@ -14,10 +14,13 @@ class Wizard < Formula
     # from its own resolved path, so the symlink in bin/ works from anywhere.
     # Release ZIPs intentionally contain one versioned top-level directory so
     # direct installs can retain the previous package for rollback. Homebrew
-    # owns the versioned keg already, so install the *contents* of that one
-    # directory under libexec; installing the directory itself would make the
-    # launcher point at a nonexistent libexec/cli/wizard.
-    package_dir = Dir["*"].find { |entry| File.directory?(entry) && File.executable?(File.join(entry, "cli", "wizard")) }
+    # owns the versioned keg already, and depending on its version it either
+    # unpacks into that directory or strips it, so accept both layouts and
+    # install the *contents* of the package under libexec; installing the
+    # directory itself would make the launcher point at a nonexistent
+    # libexec/cli/wizard.
+    package_dir = Dir["*"].find { |e| File.directory?(e) && File.executable?(File.join(e, "cli", "wizard")) }
+    package_dir = "." if File.executable?("cli/wizard")
     odie "Wizard release archive has no application directory" unless package_dir
     libexec.install Dir[File.join(package_dir, "*")]
     bin.install_symlink libexec/"cli/wizard"

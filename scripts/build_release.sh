@@ -84,6 +84,11 @@ while IFS= read -r entry; do
   fi
 done < "$REPO_ROOT/.distignore"
 
+# Tracked symlinks (AGENTS.md and GEMINI.md point at CLAUDE.md) dangle once
+# CLAUDE.md is excluded above. The installers and `wizard update` refuse any
+# archive that contains a link, so none may reach the zip.
+find "$BASE_STAGE" -type l -delete
+
 # requirements.txt/.lock.txt/-local.txt pin this org's own Safety.dev
 # vulnerability-scanning proxy as their package index (see
 # .safety-project.ini) -- fine for this team's own CI, but a consumer's
@@ -155,6 +160,10 @@ for target in "${TARGETS[@]}"; do
     exit 1
   fi
 
+  if unzip -Z "$zip_path" | grep -q '^l'; then
+    echo "error: $zip_path contains a symbolic link; the installers would refuse it" >&2
+    exit 1
+  fi
   size="$(du -h "$zip_path" | cut -f1)"
   echo "Wrote $zip_path ($size, $actual_file_count files)"
 

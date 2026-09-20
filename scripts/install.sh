@@ -306,7 +306,7 @@ extract() {
   # the staging directory even when every member name looks harmless.
   if command -v unzip >/dev/null 2>&1 && command -v zipinfo >/dev/null 2>&1; then
     unzip -Z1 "$archive" > "$TMP/archive.paths" || die 1 "could not read $ASSET as a ZIP archive"
-    if grep -E '(^/|(^|/)\.\.(/|$)|^[A-Za-z]:)' "$TMP/archive.paths" >/dev/null 2>&1; then
+    if grep -E '(^[/\\]|(^|[/\\])\.\.([/\\]|$)|^[A-Za-z]:|\\)' "$TMP/archive.paths" >/dev/null 2>&1; then
       die 1 "the archive contains an unsafe path; refusing to unpack it"
     fi
     zipinfo -l "$archive" > "$TMP/archive.info" || die 1 "could not inspect $ASSET"
@@ -339,7 +339,7 @@ PY
     die 3 "cannot unpack a verified .zip: install unzip and zipinfo (or python3), then re-run."
   fi
   # Defence in depth for ZIP tools whose metadata reporting differs by host.
-  if find "$destination" -type l -print -quit | grep -q .; then
+  if find "$destination" -type l | head -n 1 | grep -q .; then
     die 1 "the archive produced a symbolic link; refusing to install it"
   fi
 }
@@ -391,7 +391,15 @@ add_block() {
   file=$1; line=$2
   mkdir -p "$(dirname "$file")"
   if [ -f "$file" ]; then
-    awk -v s="$RC_START" -v e="$RC_END" '$0==s{skip=1;next} skip&&$0==e{skip=0;next} !skip{print}' "$file" > "$TMP/rc.tmp"
+    # Drop the block and the blank line(s) put in front of it, so re-running the
+    # installer leaves the file byte-for-byte as it was.
+    awk -v s="$RC_START" -v e="$RC_END" '
+      $0==s { skip=1; blank=0; next }
+      skip && $0==e { skip=0; next }
+      skip { next }
+      $0=="" { blank++; next }
+      { while (blank>0) { print ""; blank-- } print }
+      END { while (blank>0) { print ""; blank-- } }' "$file" > "$TMP/rc.tmp"
   else
     : > "$TMP/rc.tmp"
   fi

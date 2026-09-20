@@ -44,6 +44,18 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 - `wizard doctor` on a checkout-less install, and every command's error when the
   bundled files cannot be found, now explain what to do instead of printing a
   bare error.
+- Pressing **Escape** in an interactive menu no longer freezes it until two more
+  keys are typed (it clears the type-ahead search instead).
+- `wizard doctor` probes the backend on the port `wizard start` actually used, not
+  always 8000.
+- **Windows:** an interrupted `wizard update` no longer leaves a `wizard.exe.next`
+  that makes every later update fail.
+- `wizard update` sends `GITHUB_TOKEN` / `GH_TOKEN` (to `api.github.com` only) when
+  set, and says so when GitHub's anonymous rate limit is the reason it failed.
+- **Installers:** running the Linux/macOS installer again no longer adds a blank
+  line to your shell startup file each time; the PowerShell installer no longer
+  fails on machines that block `Add-Type` (AppLocker/WDAC) or have no
+  `USERPROFILE`, and applies `NO_PROXY` per host instead of only for github.com.
 
 ### Added
 - **`wizard doctor`** is now a real diagnostic (it was an alias of `status`):

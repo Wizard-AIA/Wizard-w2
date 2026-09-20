@@ -71,6 +71,26 @@ function Invoke-Installer([string[]]$Arguments, [hashtable]$Environment = @{}, [
     }
 }
 
+# Runs the installer with a forged CPU architecture. The variables are set inside
+# the child so this process's own PROCESSOR_ARCHITECTURE is never touched.
+function Invoke-InstallerAsArch([string]$Arch, [string[]]$Arguments) {
+    $quoted = ($Arguments | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' '
+    $script = "`$env:PROCESSOR_ARCHITECTURE = '$Arch'; Remove-Item Env:PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue; " +
+        "& '$($installer.Replace("'", "''"))' $quoted; exit `$LASTEXITCODE"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    $saved = [Environment]::GetEnvironmentVariable('WIZARD_RELEASE_BASE_URL')
+    [Environment]::SetEnvironmentVariable('WIZARD_RELEASE_BASE_URL', $base)
+    try {
+        $log = Join-Path $work "arch$script:case.txt"
+        $p = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+        $text = (Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue)
+        return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
+    } finally {
+        [Environment]::SetEnvironmentVariable('WIZARD_RELEASE_BASE_URL', $saved)
+    }
+}
+
 function New-Case([string]$Name = 'Wizard') {
     $script:case++
     $dir = Join-Path $work "case$script:case\$Name"
@@ -88,7 +108,9 @@ try {
     Assert-True (Test-Path "$dir\bin\wizard.exe") 'bin\wizard.exe exists'
     Assert-True ((& "$dir\bin\wizard.exe" --version) -match 'v9\.9\.9') 'wizard --version reports the release'
     $current = Get-Item -LiteralPath "$dir\current" -Force
-    Assert-True ($current.Target -like '*Wizard-v9.9.9-windows-amd64') 'current is a junction to the versioned package' ([string]$current.Target)
+    # Windows PowerShell 5.1 returns a junction's Target as string[]; PowerShell 7 as string.
+    $target = [string](@($current.Target)[0])
+    Assert-True ($target -like '*Wizard-v9.9.9-windows-amd64') 'current is a junction to the versioned package' $target
     $raw = Get-RawPath
     Assert-True ($raw -like "*$dir\bin*") 'the bin directory is on the user PATH'
     Assert-True ($raw -like '%USERPROFILE%\bin*') 'the existing %VARIABLE% entry was not expanded'
@@ -121,12 +143,14 @@ try {
     $r = Invoke-Installer @('-InstallDir', $dir, '-Version', '9.9.7')
     Assert-True ($r.Code -eq 1 -and $r.Text -match 'not listed') 'an archive missing from SHA256SUMS is refused' $r.Text
 
-    New-Release 'v9.9.6'
-    $sumLine = (Get-Content "$server\v9.9.6\SHA256SUMS" -Raw).Trim() -replace '  ', '  ./'
-    Set-Content "$server\v9.9.6\SHA256SUMS" $sumLine -Encoding Ascii
+    # The test exe always reports v9.9.9, so the './name' case must install 9.9.9.
+    $dotDir = Join-Path $server 'v9.9.9'
+    $sumLine = (Get-Content "$dotDir\SHA256SUMS" -Raw).Trim() -replace '  ', '  ./'
+    Set-Content "$dotDir\SHA256SUMS" $sumLine -Encoding Ascii
     $dir = New-Case
-    $r = Invoke-Installer @('-InstallDir', $dir, '-Version', '9.9.6')
+    $r = Invoke-Installer @('-InstallDir', $dir, '-Version', '9.9.9')
     Assert-True ($r.Code -eq 0) "a SHA256SUMS written as './name' (releases through v1.0.12) is accepted" $r.Text
+    New-Release 'v9.9.9'   # restore a bare-name SHA256SUMS for the cases below
 
     New-Release 'v9.9.5' 'v0.0.1'
     $dir = New-Case
@@ -136,11 +160,11 @@ try {
 
     # 5. platform
     $dir = New-Case
-    $r = Invoke-Installer @('-InstallDir', $dir) @{ PROCESSOR_ARCHITECTURE = 'ARM64'; PROCESSOR_ARCHITEW6432 = '' }
+    $r = Invoke-InstallerAsArch 'ARM64' @('-InstallDir', $dir)
     Assert-True ($r.Code -eq 3 -and $r.Text -match 'ARM64') 'Windows on ARM64 fails cleanly (exit 3), no 404' $r.Text
     Assert-True (-not (Test-Path "$dir\bin")) 'nothing was installed on ARM64'
-    $r = Invoke-Installer @('-InstallDir', $dir) @{ PROCESSOR_ARCHITECTURE = 'x86'; PROCESSOR_ARCHITEW6432 = '' }
-    Assert-True ($r.Code -eq 3) 'an unsupported architecture is exit 3' $r.Text
+    $r = Invoke-InstallerAsArch 'x86' @('-InstallDir', $dir)
+    Assert-True ($r.Code -eq 3 -and $r.Text -match "unsupported CPU architecture: 'x86'") 'an unsupported architecture is exit 3' $r.Text
 
     # 6. usage and network
     $r = Invoke-Installer @('-Version', 'not-a-version')
