@@ -210,7 +210,13 @@ try {
 
     # 10. pre-releases and channels. The real wizard.exe does the channel saving, so
     # WIZARD_CONFIG_DIR points each case at its own directory to read the result.
-    function Get-CurrentTarget([string]$Dir) { [string](@((Get-Item -LiteralPath "$Dir\current" -Force).Target)[0]) }
+    # $null when nothing was installed, so a failed install is one failed assertion
+    # (with the installer's output), not a crash that hides every case after it.
+    function Get-CurrentTarget([string]$Dir) {
+        $item = Get-Item -LiteralPath "$Dir\current" -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) { return $null }
+        return [string](@($item.Target)[0])
+    }
 
     foreach ($bad in '9.9.9-beta', '9.9.9-beta.0', '9.9.9-beta.01', '9.9.9-preview.1', '9.9.9-Beta.1', '9.9.9-beta.1.2', '9.9.9-beta.1+x', '9.9.9+x', '09.9.9', '9.9.9.1', '9.9', 'latest') {
         $r = Invoke-Installer @('-InstallDir', (New-Case), '-Version', $bad)

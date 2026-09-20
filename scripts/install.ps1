@@ -134,7 +134,8 @@ function Save-Url([string]$Url, [string]$Destination) {
 #   X.Y.Z-KIND.N      a pre-release (KIND is alpha, beta or rc; N starts at 1)
 # No leading zeros, no build metadata, nothing else. Matching is case-sensitive,
 # digits are ASCII only, and \z (not $) means nothing may follow the version.
-$script:ReleaseVersionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?\z'
+# Groups 1-3 are X, Y, Z; 4 and 5 are the pre-release kind and number, if any.
+$script:ReleaseVersionPattern = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(alpha|beta|rc)\.([1-9][0-9]*))?\z'
 $script:PreReleaseTagPattern = '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)\.[1-9][0-9]*\z'
 
 # Remove-TagPrefix: trim, then drop at most one lowercase v (V and vv are not tags).
