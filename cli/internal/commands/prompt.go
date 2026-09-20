@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -501,12 +502,22 @@ func renderArrowSelection(out io.Writer, options []string, selected int, redraw 
 	fmt.Fprintf(out, "%-*s", len(selection)+width+10, selection)
 }
 
+// escapeSequenceWait is how long readTerminalKey waits for the bytes that follow
+// an Escape before deciding it was the Escape key itself. Terminals send an
+// arrow key's three bytes together, so this only has to outlast a slow link.
+const escapeSequenceWait = 50 * time.Millisecond
+
 func readTerminalKey(file *os.File) ([]byte, error) {
 	first := []byte{0}
 	if _, err := io.ReadFull(file, first); err != nil {
 		return nil, err
 	}
 	if first[0] != 0x1b {
+		return first, nil
+	}
+	// A bare Escape press has nothing after it. Reading two more bytes here
+	// would hang the prompt until the person pressed two other keys.
+	if !inputPending(file, escapeSequenceWait) {
 		return first, nil
 	}
 	sequence := make([]byte, 3)

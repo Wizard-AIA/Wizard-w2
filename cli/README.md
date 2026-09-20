@@ -220,10 +220,11 @@ A few things this does for you beyond writing the flag values into
 |---|---|
 | `WIZARD_ROOT` | directory containing `backend/` and `frontend/` (only needed for a source build) |
 | `WIZARD_CONFIG_DIR` | overrides the settings/credentials/logs/venv location |
-| `NO_COLOR`, `--no-color` | disable colour |
+| `NO_COLOR`, `--no-color` | disable colour (`--no-color` and `--verbose` go before the command: `wizard --no-color doctor`) |
 | `WIZARD_ASCII=1` | ASCII symbols only |
 | `WIZARD_VERBOSE`, `--verbose` | show underlying error detail |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | honoured by the updater, downloads and model lookups |
+| `GITHUB_TOKEN`, `GH_TOKEN` | optional; sent to `api.github.com` only, to lift the anonymous rate limit on `wizard update` |
 
 ## Release updates and version awareness (in scope)
 

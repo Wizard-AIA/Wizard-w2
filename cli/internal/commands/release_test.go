@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"wizard/internal/compat"
@@ -157,5 +159,48 @@ func TestChecksumForAssetAcceptsSha256sumDotSlashNames(t *testing.T) {
 	}
 	if _, err := checksumForAsset([]byte(digest+"  ./other-"+asset+"\n"), asset); err == nil {
 		t.Error("a different asset name must not match")
+	}
+}
+
+func TestSetGitHubAuthOnlyTargetsGitHubsAPI(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token-not-real")
+	t.Setenv("GH_TOKEN", "")
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"https://api.github.com/repos/o/r/releases/latest", "Bearer test-token-not-real"},
+		{"https://github.com/o/r/releases/download/v1/x.zip", ""},
+		{"https://mirror.example.com/latest", ""},
+		{"http://api.github.com/repos/o/r/releases/latest", ""},
+	} {
+		req, _ := http.NewRequest(http.MethodGet, tc.url, nil)
+		setGitHubAuth(req)
+		if got := req.Header.Get("Authorization"); got != tc.want {
+			t.Errorf("%s: Authorization = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "gh-cli-token-not-real")
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
+	setGitHubAuth(req)
+	if got := req.Header.Get("Authorization"); got != "Bearer gh-cli-token-not-real" {
+		t.Errorf("GH_TOKEN fallback: Authorization = %q", got)
+	}
+}
+
+func TestFetchLatestReleaseExplainsAnonymousRateLimit(t *testing.T) {
+	originalURL, originalClient := releaseAPIURL, releaseHTTPClient
+	defer func() { releaseAPIURL, releaseHTTPClient = originalURL, originalClient }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+	}))
+	defer server.Close()
+	releaseAPIURL, releaseHTTPClient = server.URL, server.Client()
+	_, err := fetchLatestRelease(context.Background())
+	if err == nil || !errors.Is(err, errNetwork) || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+		t.Fatalf("want a network error that names GITHUB_TOKEN, got %v", err)
 	}
 }

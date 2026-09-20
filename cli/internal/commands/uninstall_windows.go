@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -91,6 +92,7 @@ func scheduleSelfCleanup(installRoot string) {
 	quotedRoot := strings.ReplaceAll(installRoot, "'", "''")
 	script := fmt.Sprintf("Start-Sleep -Seconds 3; Remove-Item -LiteralPath '%s' -Recurse -Force -ErrorAction SilentlyContinue", quotedRoot)
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encodePowerShellCommand(script))
+	cmd.Dir = os.TempDir()
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS,

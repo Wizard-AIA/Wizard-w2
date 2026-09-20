@@ -77,6 +77,7 @@ func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wizard-cli-update")
+	setGitHubAuth(req)
 	resp, err := releaseHTTPClient.Do(req)
 	if err != nil {
 		return latestRelease{}, fmt.Errorf("checking for the latest Wizard release: %w: %v", errNetwork, err)
@@ -84,6 +85,9 @@ func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return latestRelease{}, fmt.Errorf("GitHub's anonymous rate limit for this network is used up: %w. Try again later, or set GITHUB_TOKEN (any token, no scopes) to raise it", errNetwork)
+		}
 		return latestRelease{}, fmt.Errorf("release service returned %s: %w: %s", resp.Status, errNetwork, strings.TrimSpace(string(body)))
 	}
 	var release latestRelease
@@ -95,6 +99,23 @@ func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 		return latestRelease{}, fmt.Errorf("release service returned an invalid tag %q: %w", release.TagName, err)
 	}
 	return release, nil
+}
+
+// setGitHubAuth attaches GITHUB_TOKEN / GH_TOKEN to a request for GitHub's API,
+// lifting the 60-requests-an-hour anonymous limit that shared office and CI
+// addresses hit. The token goes to api.github.com and nowhere else: not to a
+// mirror set through releaseAPIURL, and never to the archive downloads.
+func setGitHubAuth(req *http.Request) {
+	if req.URL.Scheme != "https" || req.URL.Hostname() != "api.github.com" {
+		return
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 }
 
 func (r latestRelease) asset(name string) (releaseAsset, bool) {

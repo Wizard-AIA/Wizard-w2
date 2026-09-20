@@ -58,7 +58,11 @@ func RunApplyStagedUpdate(args []string) int {
 	launcher := filepath.Join(binDir, "wizard.exe")
 	next := launcher + ".next"
 	backup := launcher + ".previous-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	// A .next left by an interrupted earlier update would make the exclusive
+	// create in copyFile fail every retry.
+	_ = os.Remove(next)
 	if err := copyFile(filepath.Join(*packageDir, "cli", "wizard.exe"), next); err != nil {
+		_ = os.Remove(next)
 		return 1
 	}
 	if err := os.Rename(launcher, backup); err != nil {

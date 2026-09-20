@@ -96,6 +96,8 @@ func (d *dropdownState) key(k []byte) dropdownAction {
 		return dropdownAccept
 	case "\x03": // Ctrl-C
 		return dropdownCancel
+	case "\x1b": // the Escape key on its own clears what was typed to search
+		d.typed = ""
 	case "\x1b[A":
 		d.typed = ""
 		d.move(-1)

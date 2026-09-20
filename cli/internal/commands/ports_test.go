@@ -41,3 +41,21 @@ func TestActivePortsFallBackToDefaults(t *testing.T) {
 		t.Fatalf("got (%q, %q), want defaults (%q, %q)", backend, frontend, DefaultBackendPort, DefaultFrontendPort)
 	}
 }
+
+func TestRecordedBackendPortPrefersWhatStartRecorded(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WIZARD_BACKEND_PORT", "")
+	if got := recordedBackendPort(dir); got != DefaultBackendPort {
+		t.Fatalf("with nothing recorded got %q, want the default", got)
+	}
+	t.Setenv("WIZARD_BACKEND_PORT", "8123")
+	if got := recordedBackendPort(dir); got != "8123" {
+		t.Fatalf("with only the env override got %q", got)
+	}
+	if err := saveActivePorts(&Env{RunDir: dir}, "8080", "3001"); err != nil {
+		t.Fatal(err)
+	}
+	if got := recordedBackendPort(dir); got != "8080" {
+		t.Fatalf("a recorded --backend-port must win: got %q, want 8080 (doctor probed the wrong port)", got)
+	}
+}

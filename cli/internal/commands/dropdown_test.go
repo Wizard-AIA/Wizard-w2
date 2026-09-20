@@ -179,3 +179,17 @@ func TestDropdownShortListShowsEveryOptionAndNoScrollHint(t *testing.T) {
 		t.Fatalf("no position counter when nothing scrolls: %q", lines[2])
 	}
 }
+
+func TestDropdownEscapeClearsTypeAheadWithoutCancelling(t *testing.T) {
+	d := newDropdown([]string{"alpha", "beta", "gamma"}, "", 10)
+	keys(d, "g")
+	if d.selected != 2 {
+		t.Fatalf("type-ahead did not jump to gamma (selected %d)", d.selected)
+	}
+	if action := keys(d, "\x1b"); action != dropdownNone {
+		t.Fatalf("a lone Escape returned action %v, want none", action)
+	}
+	if d.typed != "" {
+		t.Fatalf("Escape left %q in the search buffer", d.typed)
+	}
+}

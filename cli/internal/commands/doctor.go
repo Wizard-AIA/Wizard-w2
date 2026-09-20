@@ -222,7 +222,7 @@ func collectDoctor(network, verbose bool) *doctorReport {
 		if pid, alive := daemon.LiveAt(filepath.Join(runDir, "run", "daemon.pid")); alive {
 			detail := fmt.Sprintf("running (pid %d)", pid)
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			h, herr := healthcheck.NewClient("http://127.0.0.1:" + backendPort()).Health(ctx)
+			h, herr := healthcheck.NewClient("http://127.0.0.1:" + recordedBackendPort(filepath.Join(runDir, "run"))).Health(ctx)
 			cancel()
 			switch {
 			case herr != nil:
