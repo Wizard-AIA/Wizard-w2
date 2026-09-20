@@ -109,6 +109,25 @@ def test_unknown_session_id_is_rejected_not_silently_replaced(client: TestClient
     assert response.status_code == 404
 
 
+def test_every_session_scoped_read_says_the_session_is_gone_in_words_the_client_keys_on(client: TestClient) -> None:
+    """The frontend replays a read once on a fresh session only when the 404 detail starts with
+    "Session not found" (frontend/lib/session-recovery.ts isSessionGone). A tab left open across a
+    backend restart sends a dead id to exactly these four routes on load; if the wording drifts, the
+    tab stops healing and the console fills with 404s again."""
+    for path in ("/api/session", "/api/data-mode", "/api/permissions", "/api/usage"):
+        response = client.get(path, headers={SESSION_HEADER: "does-not-exist"})
+        assert response.status_code == 404, path
+        assert response.json()["detail"].startswith("Session not found"), path
+
+
+def test_a_missing_file_is_not_reported_as_a_missing_session(client: TestClient) -> None:
+    """A plain 404 must not look like a dead session, or the client would discard a good one."""
+    session_id = client.post("/api/session").json()["session_id"]
+    response = client.get("/api/workspace/file/nope.csv", headers={SESSION_HEADER: session_id})
+    assert response.status_code == 404
+    assert not response.json()["detail"].startswith("Session not found")
+
+
 def test_omitted_session_id_yields_a_fresh_session(client: TestClient) -> None:
     response = client.get("/api/session")
     assert response.status_code == 200

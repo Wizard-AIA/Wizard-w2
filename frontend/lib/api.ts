@@ -34,6 +34,7 @@ import type {
   UsageTotals,
   WorkspaceFileEntry,
 } from "./types"
+import { createSessionRecovery, isReplayable, isSessionGone } from "./session-recovery"
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000"
@@ -85,7 +86,21 @@ async function extractError(response: Response): Promise<string> {
   return response.statusText || `Request failed (${response.status})`
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Replaces a session id the backend no longer knows (it restarted). Mints with
+ * a header-less POST, which the backend answers with a new session, and stores
+ * the id. See session-recovery.ts for why this is single-flight.
+ */
+const recoverSession = createSessionRecovery(
+  { get: getStoredSessionId, set: storeSessionId, clear: clearStoredSessionId },
+  async () => {
+    const response = await fetch(`${API_BASE_URL}/api/session`, { method: "POST" })
+    if (!response.ok) throw new ApiError(await extractError(response), response.status)
+    return ((await response.json()) as SessionInfo).session_id
+  },
+)
+
+async function request<T>(path: string, init: RequestInit = {}, replayed = false): Promise<T> {
   const headers = new Headers(init.headers)
   const sessionId = getStoredSessionId()
   if (sessionId) headers.set("X-Session-Id", sessionId)
@@ -100,10 +115,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (returned) storeSessionId(returned)
 
   if (!response.ok) {
-    if (response.status === 404 && sessionId) {
-      clearStoredSessionId()
+    const message = await extractError(response)
+    if (sessionId && isSessionGone(response.status, message)) {
+      // The backend restarted and forgot this tab's session. Reads are replayed
+      // once on a fresh session, so a tab left open across an upgrade heals
+      // itself. Writes are not: they would land in an empty session and hide
+      // that the user's data is gone, so they surface the error instead.
+      if (!replayed && isReplayable(init.method)) {
+        let recovered = false
+        try {
+          await recoverSession(sessionId)
+          recovered = true
+        } catch {
+          // fall through and report the original error
+        }
+        if (recovered) return request<T>(path, init, true)
+      }
+      // Only drop the id that just failed: the chat socket may already have
+      // stored a newer one, and wiping that would orphan the live session.
+      if (getStoredSessionId() === sessionId) clearStoredSessionId()
     }
-    throw new ApiError(await extractError(response), response.status)
+    throw new ApiError(message, response.status)
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T

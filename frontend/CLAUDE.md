@@ -9,6 +9,7 @@ Loads only when work touches `frontend/`. Global rules: [root CLAUDE.md](../CLAU
 cd frontend && pnpm install
 pnpm dev                                         # Next.js dev server (:3000)
 pnpm lint && npx tsc --noEmit && pnpm build      # The three CI gates
+pnpm test                                        # lib/*.test.ts on Node's test runner (Node >= 22.18)
 
 # Regenerate lib/api-types.generated.ts from the backend's REST schemas
 # (run from backend/ first: python scripts/generate_openapi.py)
@@ -38,6 +39,7 @@ Five routes, no landing page — `/` **is** the workspace:
 - **Every socket handler must check `socketRef.current === socket`** to prevent duplicate/orphan socket leaks under React StrictMode effect remounts.
 - `connect()` must perform **no synchronous setState** in mount effects (triggers ESLint error).
 - Session ID is persisted in `localStorage` and sent on every request via `X-Session-Id`.
+- Sessions live in backend memory, so a backend restart kills the id a still-open tab holds; the backend answers it with 404 "Session not found…" on purpose. `request()` in [lib/api.ts](lib/api.ts) recovers via [lib/session-recovery.ts](lib/session-recovery.ts): one shared header-less `POST /api/session`, then the read is replayed once. **Writes are never replayed** (they would hide that the user's data is gone), and only a "Session not found" 404 counts, never a bare 404 (a missing file must not cost the session).
 
 ### Permission & Prompts
 - The composer has two independent controls: Depth segmented control (Auto/Fast/Deep) and Permission popover ([components/chat/permission-control.tsx](components/chat/permission-control.tsx)).

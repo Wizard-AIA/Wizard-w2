@@ -111,6 +111,17 @@ jobs:
     - name: Build
       run: pnpm build
 
+    # Node's own test runner executes the .ts unit tests directly, which needs
+    # the type stripping that is on by default from Node 22.18. The build above
+    # stays on Node 20.
+    - name: Set up Node.js 22 for unit tests
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+      with:
+        node-version: '22'
+
+    - name: Unit tests
+      run: pnpm test
+
   docker:
     name: Docker images build
     needs: [backend, frontend]

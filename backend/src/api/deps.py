@@ -42,7 +42,7 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
 
 
 def get_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
-    """Resolves the session for the current request, creating one if absent or expired.
+    """Resolves the caller's session, creating one only when no id was sent.
 
     The session id is carried in the ``X-Session-Id`` request header, not as a
     query parameter. The session id is effectively a credential -- whoever holds it
@@ -52,9 +52,12 @@ def get_session(x_session_id: str | None = Header(default=None, alias=SESSION_HE
     serve a direct navigation target (a download link a browser tab opens
     without JS setting a header) use :func:`get_session_for_link` instead.
 
-    An id that was sent but no longer resolves (e.g. server restart, TTL reap)
-    transparently creates a fresh session rather than hard-failing with 404,
-    preventing persistent reconnect loops in clients holding a stale cookie.
+    An id that *was* sent but no longer resolves (a backend restart, a TTL reap,
+    a forged id) is rejected with 404 rather than silently handed a fresh
+    session: that would detach the caller from the workspace, data mode and
+    permissions it thought it had (issue #94). Recovery is the client's job
+    (``frontend/lib/session-recovery.ts``), which keys on the 404 detail
+    starting with "Session not found".
     """
     if x_session_id is None:
         return session_manager.create()
