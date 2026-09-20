@@ -132,13 +132,16 @@ jobs:
 
           # A NEW shell must find wizard: PATH setup is what the user relies on.
           if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
+          # Capture, then grep (here-string). Under `set -o pipefail` a pipe into
+          # `grep -q` fails on the CLI's correct nonzero exit (a usage error is 2)
+          # and on SIGPIPE when grep exits early.
           $fresh 'wizard --version' | tee version.out
           grep -q "$tag" version.out
-          $fresh 'wizard --help' | grep -q Usage
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
           $fresh 'wizard doctor --json' > doctor.json || test "$?" = 3   # 3 = a prerequisite is missing, still valid JSON
           python3 -c 'import json; d = json.load(open("doctor.json")); assert d["platform"] == "${{ matrix.target }}", d["platform"]; print("doctor ok:", d["summary"])'
-          $fresh 'wizard bogus' 2>&1 | grep -q 'unknown command'
-          $fresh 'wizard start --backend-port 99999' 2>&1 | grep -q 'invalid --backend-port'
+          grep -q 'unknown command' <<< "$($fresh 'wizard bogus' 2>&1 || true)"
+          grep -q 'invalid --backend-port' <<< "$($fresh 'wizard start --backend-port 99999' 2>&1 || true)"
 
           # Idempotent: a second run keeps a single PATH block.
           sh dist/install.sh --version "${tag#v}" --yes
@@ -243,7 +246,7 @@ jobs:
           WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765 sh dist/install.sh --version "$version" --no-modify-path
           export PATH="$HOME/.wizard/bin:$PATH"
 
-          wizard --version | grep -q "$tag"
+          grep -q "$tag" <<< "$(wizard --version 2>&1 || true)"
           # A cloud provider avoids needing a local model server. The key is a placeholder.
           wizard init --non-interactive --no-install-prerequisites --provider anthropic --anthropic-key sk-ant-ci-placeholder
           wizard doctor
@@ -405,7 +408,7 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
           $fresh 'wizard --version' | tee out.txt
           grep -q "$RELEASE_TAG" out.txt
-          $fresh 'wizard --help' | grep -q Usage
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
           $fresh 'wizard uninstall --yes'
 
       - name: Install from the staged release (Windows)
@@ -447,12 +450,17 @@ jobs:
           brew tap-new --no-git local/verify
           tap="$(brew --repository local/verify)"
           mirror="file://$PWD/release-assets/"
-          sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb > "$tap/Formula/wizard.rb"
+          # Homebrew infers a version from a github.com release URL, but from a bare
+          # file name ("Wizard-v1.0.13-darwin-arm64") it would read "64", so the
+          # mirrored copy states the version explicitly. The production formula
+          # keeps the github.com URLs and lets Homebrew infer it.
+          sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb \
+            | awk -v v="${RELEASE_TAG#v}" '{ print } /^  license /{ print "  version \"" v "\"" }' > "$tap/Formula/wizard.rb"
           brew trust local/verify 2>/dev/null || true
           brew audit --strict --formula local/verify/wizard
           brew install --formula local/verify/wizard
-          wizard --version | grep -q "$RELEASE_TAG"
-          wizard --help | grep -q Usage
+          grep -q "$RELEASE_TAG" <<< "$(wizard --version 2>&1 || true)"
+          grep -q Usage <<< "$(wizard --help 2>&1 || true)"
           brew test local/verify/wizard
           brew uninstall wizard
 
@@ -509,8 +517,8 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
           curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/install.sh" | sh -s -- --version "${RELEASE_TAG#v}" --yes
           if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
-          $fresh 'wizard --version' | grep -q "$RELEASE_TAG"
-          $fresh 'wizard --help' | grep -q Usage
+          grep -q "$RELEASE_TAG" <<< "$($fresh 'wizard --version' 2>&1 || true)"
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
           $fresh 'wizard update --check'
           $fresh 'wizard uninstall --yes'
 
@@ -535,11 +543,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Invoke-RestMethod get.scoop.sh -OutFile install-scoop.ps1
-          .\install-scoop.ps1
+          .\install-scoop.ps1 -RunAsAdmin   # hosted runners are administrators; Scoop refuses that by default
           $env:PATH += ";$env:USERPROFILE\scoop\shims"
           Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/wizard.json" -OutFile wizard.json
           scoop install .\wizard.json
-          wizard --version | Select-String $env:RELEASE_TAG | Out-Null
+          $v = wizard --version
+          if ($v -notmatch [regex]::Escape($env:RELEASE_TAG)) { throw "reported '$v'" }
           scoop uninstall wizard
 
   sbom:
