@@ -33,16 +33,14 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Safety
-        # Hash-pinned separately from the app's own lock (requirements-audit-tools.in):
-        # this job never installs requirements.lock.txt, so constraining safety
-        # against it would only produce a spurious conflict over typer's version.
+      - name: Install pip-audit
+        # This small, hash-pinned tool environment is intentionally separate
+        # from Wizard's runtime lock: it audits that lock without installing
+        # application code in the CI runner.
         run: uv pip install --system --require-hashes -r requirements-audit-tools.lock.txt
 
       - name: Scan runtime dependencies
-        env:
-          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
-        run: safety scan --file requirements.txt --fail-on unignored
+        run: pip-audit --requirement requirements.lock.txt --require-hashes --disable-pip --strict
 
   node-audit:
     name: Node.js
