@@ -1,0 +1,55 @@
+name: Brew rehearsal (temporary, delete before merge)
+
+# Runs the release workflow's Homebrew verification step against archives built
+# from this branch, before any tag exists: audit the rendered formula, install it
+# from a local file mirror, run `wizard`, run `brew test`, uninstall.
+
+on:
+  push:
+    branches: [Aniket-a14/release-v1-0-13-dadaca79]
+    paths: [.github/workflows/brew-rehearsal.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  brew:
+    name: brew rehearsal (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, macos-15-intel, ubuntu-latest]
+    env:
+      RELEASE_TAG: v1.0.13
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Build the archives from this commit
+        run: scripts/build_release.sh "$RELEASE_TAG"
+      - name: Render the formula from the built SHA256SUMS
+        run: python3 scripts/release.py render --version 1.0.13 --sums dist/SHA256SUMS --out packaging-out
+      - name: Homebrew audit, install, test, uninstall (file mirror)
+        shell: bash
+        run: |
+          set -eu
+          if ! command -v brew >/dev/null 2>&1; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1
+          brew --version
+          brew tap-new --no-git local/verify
+          tap="$(brew --repository local/verify)"
+          mirror="file://$PWD/dist/"
+          sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb > "$tap/Formula/wizard.rb"
+          cat "$tap/Formula/wizard.rb"
+          brew trust local/verify 2>/dev/null || true
+          brew audit --strict --formula local/verify/wizard
+          brew install --formula local/verify/wizard
+          wizard --version | grep -q "$RELEASE_TAG"
+          wizard --help | grep -q Usage
+          ls -la "$(brew --prefix wizard)/libexec" | head
+          brew test local/verify/wizard
+          brew uninstall wizard
