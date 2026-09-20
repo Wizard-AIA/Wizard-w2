@@ -530,7 +530,7 @@ function Install-Wizard {
 # Never `exit` under irm | iex: it would close the user's terminal.
 $code = 0
 try {
-    if ($Version -and $Version -notmatch '^[vV]?\d+\.\d+\.\d+$') { Fail 2 "not a release version: '$Version' (expected something like 1.0.13)" }
+    if ($Version) { $null = ConvertTo-Tag $Version }
     Install-Wizard
 } catch {
     Write-Host 'error ' -NoNewline -ForegroundColor Red
