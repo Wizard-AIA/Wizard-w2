@@ -2,13 +2,18 @@ package commands
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
+
+	"wizard/internal/ui"
 )
 
 // initSettings is the complete set of setup choices that the interactive
@@ -69,6 +74,14 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	}
 	settings.provider = provider
 
+	// Credentials come right after the provider, before any model question:
+	// with a working key init can ask the provider which models exist and offer
+	// only those, instead of asking for a model name the user cannot know.
+	if err := promptProviderCredentials(env.Out, reader, input, env, settings, provider); err != nil {
+		return err
+	}
+	catalog := discoverForInit(env, input, reader, settings, provider)
+
 	modeDefault := settings.dataMode
 	if modeDefault == "" {
 		modeDefault = envValueOr(env, "DATA_MODE", "auto")
@@ -91,6 +104,11 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	} else {
 		settings.dataMode = mode
 	}
+	if mode == "hybrid" && !cloudProviders[provider] && initDiscoveryEnabled(input) {
+		if err := promptHybridCloud(env, input, reader, settings); err != nil {
+			return err
+		}
+	}
 
 	schemaDefault := strings.ToLower(envValueOr(env, "DATA_SCHEMA_ONLY", "true"))
 	if schemaDefault != "true" && schemaDefault != "false" {
@@ -108,8 +126,14 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if settings.managerModelSet || settings.managerModelFlagSet {
 		managerCurrent = settings.managerModel
 	}
-	settings.managerModel, settings.managerModelSet, err = promptModel(env.Out, reader,
-		"Manager model", managerCurrent)
+	// A fresh Ollama has no models yet; suggest a starter pair sized to this
+	// machine so the person is not left guessing names.
+	var starters []string
+	if provider == "ollama" {
+		starters = starterModels("qwen3:8b", "qwen2.5-coder:7b") // the --manager-model/--worker-model defaults
+	}
+	settings.managerModel, settings.managerModelSet, err = promptModelSelect(env, input, reader,
+		"Manager model", managerCurrent, catalog, "chat", starters)
 	if err != nil {
 		return err
 	}
@@ -117,8 +141,8 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if settings.workerModelSet || settings.workerModelFlagSet {
 		workerCurrent = settings.workerModel
 	}
-	settings.workerModel, settings.workerModelSet, err = promptModel(env.Out, reader,
-		"Worker model", workerCurrent)
+	settings.workerModel, settings.workerModelSet, err = promptModelSelect(env, input, reader,
+		"Worker model", workerCurrent, catalog, "chat", starters)
 	if err != nil {
 		return err
 	}
@@ -148,7 +172,12 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 	if settings.embeddingModel != "" {
 		embeddingCurrent = settings.embeddingModel
 	}
-	embeddingModel, set, err := promptModel(env.Out, reader, "Embedding model", embeddingCurrent)
+	embeddingCat := embeddingCatalog(env, input, settings, catalog, embeddingProvider)
+	var embeddingStarters []string
+	if embeddingProviderOrDefault(embeddingProvider, provider) == "ollama" {
+		embeddingStarters = []string{"nomic-embed-text"}
+	}
+	embeddingModel, set, err := promptModelSelect(env, input, reader, "Embedding model", embeddingCurrent, embeddingCat, "embedding", embeddingStarters)
 	if err != nil {
 		return err
 	}
@@ -157,12 +186,63 @@ func promptInitSettings(env *Env, settings *initSettings) error {
 		settings.embeddingModelClear = embeddingModel == ""
 	}
 
-	if err := promptProviderCredentials(env.Out, reader, input, env, settings, provider); err != nil {
-		return err
-	}
-
-	fmt.Fprintln(env.Out, "Configuration captured. Continuing with dependency setup...")
+	summarizeInitChoices(env, settings, provider)
 	return nil
+}
+
+// embeddingProviderOrDefault resolves "auto" to the chat provider.
+func embeddingProviderOrDefault(embeddingProvider, provider string) string {
+	if embeddingProvider == "" || embeddingProvider == "auto" {
+		return provider
+	}
+	return embeddingProvider
+}
+
+// embeddingCatalog returns the models to offer for the embedding step: the chat
+// provider's own list when embeddings follow it, otherwise a fresh lookup of the
+// chosen embedding provider (skipped silently without a terminal, or without a
+// key for a cloud provider).
+func embeddingCatalog(env *Env, input io.Reader, settings *initSettings, chat initCatalog, embeddingProvider string) initCatalog {
+	target := embeddingProviderOrDefault(embeddingProvider, chat.provider)
+	if target == chat.provider {
+		return chat
+	}
+	cat := initCatalog{provider: target}
+	if !initDiscoveryEnabled(input) {
+		return cat
+	}
+	key := providerAPIKey(env, settings, target)
+	if cloudProviders[target] && key == "" {
+		return cat
+	}
+	models, err := initModelDiscovery(context.Background(), modelSource{Provider: target, BaseURL: providerBaseURL(env, settings, target), APIKey: key})
+	if err != nil {
+		return cat
+	}
+	cat.models, cat.known = models, true
+	return cat
+}
+
+// summarizeInitChoices prints what init captured. Keys are described, never
+// printed, so a screenshot of the terminal is safe to share.
+func summarizeInitChoices(env *Env, settings *initSettings, provider string) {
+	p := ui.New(env.Out)
+	p.Section("Your setup")
+	show := func(key, value string) {
+		if value == "" {
+			value = p.Dim("auto")
+		}
+		p.KV(16, key, value)
+	}
+	show("Provider", provider)
+	show("Data mode", firstNonEmpty(settings.dataMode, "auto"))
+	show("Manager model", settings.managerModel)
+	show("Worker model", settings.workerModel)
+	show("Embedding model", settings.embeddingModel)
+	if key := providerAPIKey(env, settings, provider); key != "" {
+		p.KV(16, "API key", describeSecret(key))
+	}
+	fmt.Fprintln(env.Out, "\nContinuing with dependency setup...")
 }
 
 func promptProviderCredentials(out io.Writer, reader *bufio.Reader, input io.Reader, env *Env, settings *initSettings, provider string) error {
@@ -220,40 +300,44 @@ func promptProviderCredentials(out io.Writer, reader *bufio.Reader, input io.Rea
 			*keyName.value = value
 		}
 	}
-
-	value, set, err := promptOptional(out, reader, "Custom provider base URL (optional)", "", false)
-	if err != nil {
-		return err
-	}
-	if set {
-		settings.baseURL = value
-	}
+	// No endpoint question: every provider's API root is known, and asking a
+	// person to type one is how typos and wrong URLs get in. A proxy is still
+	// available as `--base-url`; a local server on another machine is asked for
+	// only if the default address turns out to be unreachable (see
+	// discoverForInit).
 	return nil
 }
 
-// promptSecretOptional keeps API keys out of a normal terminal transcript.
+// promptSecretOptional reads an API key without ever printing it, but with
+// visible feedback: each typed or pasted character shows as a mask glyph, and
+// once entered a receipt line proves the key arrived (its length and last four
+// characters). The old prompt echoed nothing at all, so a person could not tell
+// a successful paste from a paste that never happened.
+//
 // Piped/non-terminal input deliberately retains the line-oriented fallback so
-// `wizard init --interactive` remains testable and usable from a wrapper; a
-// real terminal always gets term.ReadPassword's no-echo behavior.
+// `wizard init --interactive` remains testable and usable from a wrapper.
 func promptSecretOptional(out io.Writer, reader *bufio.Reader, input io.Reader, label, current string) (string, bool, error) {
 	defaultText := "not set"
 	if current != "" {
-		defaultText = "saved"
+		defaultText = "saved, " + describeSecret(current)
 	}
-	fmt.Fprintf(out, "%s [%s]: ", label, defaultText)
 
 	if file, ok := input.(*os.File); ok && readerIsTerminal(file) && reader.Buffered() == 0 {
-		value, err := term.ReadPassword(int(file.Fd()))
-		fmt.Fprintln(out)
+		fmt.Fprintf(out, "%s [%s]\n  paste or type it; each • is one character, Enter to confirm, Enter alone to keep it: ", label, defaultText)
+		value, err := readMaskedSecret(file, out)
 		if err != nil {
 			return "", false, err
 		}
-		trimmed := strings.TrimSpace(string(value))
-		if trimmed == "" {
+		if value == "" {
+			if current != "" {
+				fmt.Fprintf(out, "  Keeping the saved key (%s).\n", describeSecret(current))
+			}
 			return current, false, nil
 		}
-		return trimmed, true, nil
+		fmt.Fprintf(out, "  Key received: %s.\n", describeSecret(value))
+		return value, true, nil
 	}
+	fmt.Fprintf(out, "%s [%s]: ", label, defaultText)
 
 	line, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {
@@ -345,7 +429,18 @@ func promptChoiceForInput(out io.Writer, input io.Reader, reader *bufio.Reader, 
 	return promptChoice(out, reader, label, options, current)
 }
 
+// promptArrowChoice is the interactive select. On a terminal that supports
+// ANSI cursor movement it is a real dropdown (see dropdown.go); on one that does
+// not -- a dumb terminal, an old console -- it falls back to a numbered list
+// with a single redrawn "Selected:" line, which needs only a carriage return.
 func promptArrowChoice(out io.Writer, file *os.File, label string, options []string, current string) (string, error) {
+	if p := ui.New(out); p.T.Cursor {
+		value, err := runDropdown(out, file, p, label, options, current)
+		if !errors.Is(err, errRawUnavailable) {
+			return value, err
+		}
+	}
+
 	defaultIndex := 0
 	for i, option := range options {
 		if option == current {
@@ -360,9 +455,11 @@ func promptArrowChoice(out io.Writer, file *os.File, label string, options []str
 	}
 	defer func() { _ = term.Restore(int(file.Fd()), state) }()
 
-	fmt.Fprintf(out, "\n%s (use ↑/↓, Enter):\n", label)
+	// Raw mode turns off "\n" -> "\r\n" translation, so lines end in "\r\n"
+	// here; a bare "\n" staircases the text across the screen.
+	fmt.Fprintf(out, "\r\n%s (use ↑/↓, Enter):\r\n", label)
 	for i, option := range options {
-		fmt.Fprintf(out, "  %d) %s\n", i+1, option)
+		fmt.Fprintf(out, "  %d) %s\r\n", i+1, option)
 	}
 	selected := defaultIndex
 	renderArrowSelection(out, options, selected, false)
@@ -376,7 +473,7 @@ func promptArrowChoice(out io.Writer, file *os.File, label string, options []str
 		}
 		next, accepted := applyTerminalKey(key, selected, len(options))
 		if accepted {
-			fmt.Fprintln(out)
+			fmt.Fprint(out, "\r\n")
 			return options[next], nil
 		}
 		if next == selected {
@@ -405,6 +502,11 @@ func renderArrowSelection(out io.Writer, options []string, selected int, redraw 
 	fmt.Fprintf(out, "%-*s", len(selection)+width+10, selection)
 }
 
+// escapeSequenceWait is how long readTerminalKey waits for the bytes that follow
+// an Escape before deciding it was the Escape key itself. Terminals send an
+// arrow key's three bytes together, so this only has to outlast a slow link.
+const escapeSequenceWait = 50 * time.Millisecond
+
 func readTerminalKey(file *os.File) ([]byte, error) {
 	first := []byte{0}
 	if _, err := io.ReadFull(file, first); err != nil {
@@ -413,10 +515,23 @@ func readTerminalKey(file *os.File) ([]byte, error) {
 	if first[0] != 0x1b {
 		return first, nil
 	}
+	// A bare Escape press has nothing after it. Reading two more bytes here
+	// would hang the prompt until the person pressed two other keys.
+	if !inputPending(file, escapeSequenceWait) {
+		return first, nil
+	}
 	sequence := make([]byte, 3)
 	sequence[0] = first[0]
 	if _, err := io.ReadFull(file, sequence[1:]); err != nil {
 		return sequence[:1], nil
+	}
+	// PgUp, PgDn, Home and End arrive as ESC [ <digit> ~ : consume the "~" so
+	// it is not read as a typed character on the next call.
+	if sequence[1] == '[' && sequence[2] >= '0' && sequence[2] <= '9' {
+		tail := []byte{0}
+		if _, err := io.ReadFull(file, tail); err == nil {
+			sequence = append(sequence, tail[0])
+		}
 	}
 	return sequence, nil
 }

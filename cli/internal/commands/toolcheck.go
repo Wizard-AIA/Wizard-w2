@@ -3,6 +3,9 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,6 +76,18 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 			best, haveBest = c, true
 		}
 	}
+	// Last resort: ask uv, which knows about its own managed interpreters and
+	// any system one that satisfies the minimum. This is how a Python that
+	// `wizard init` provisioned through uv is found again.
+	for _, path := range uvPythonCandidates(minMajor, minMinor) {
+		c := checkPythonCandidate(path, path, minMajor, minMinor, "--version")
+		if c.OK {
+			return c
+		}
+		if !haveBest {
+			best, haveBest = c, true
+		}
+	}
 	if runtime.GOOS == "windows" {
 		// The Windows Store App Execution Alias can occupy python3.exe while
 		// the real interpreter is available through the Python launcher. Try
@@ -93,6 +109,26 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 		return best
 	}
 	return ToolCheck{Name: "Python", Found: false, MinMajor: minMajor, MinMinor: minMinor, InstallHint: pythonInstallHint()}
+}
+
+// uvPythonCandidates returns interpreters uv reports for ">=min". It is
+// empty when uv is not installed or reports nothing.
+func uvPythonCandidates(minMajor, minMinor int) []string {
+	if _, err := exec.LookPath("uv"); err != nil {
+		return nil
+	}
+	out, err := runCommandOutputErr("uv", "python", "find", fmt.Sprintf(">=%d.%d", minMajor, minMinor))
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if filepath.IsAbs(line) {
+			paths = append(paths, line)
+		}
+	}
+	return paths
 }
 
 // versionedPythonCandidates finds interpreters such as python3.14 when a
@@ -156,21 +192,59 @@ func CheckOllama() ToolCheck {
 // shells out to whatever `uv`/`pnpm` a user has, and there is no minimum this
 // project pins against -- only Python 3.12 and Node 20 have a real version floor.
 func CheckUV() ToolCheck {
-	path, err := exec.LookPath("uv")
-	if err != nil {
-		return ToolCheck{Name: "uv", Found: false, InstallHint: uvInstallHint()}
-	}
-	version, _ := parseVersion(runVersion("uv", "--version"))
-	return ToolCheck{Name: "uv", Found: true, Path: path, Version: version, OK: true, InstallHint: uvInstallHint()}
+	return checkRunnable("uv", uvInstallHint())
 }
 
 func CheckPnpm() ToolCheck {
-	path, err := exec.LookPath("pnpm")
+	return checkRunnable("pnpm", pnpmInstallHint())
+}
+
+// checkRunnable finds name on PATH and proves it can actually be executed.
+// Finding a file is not enough: pnpm 12 ships a placeholder `pnpm` with no
+// shebang until its install step runs, which a shell tolerates but exec(2)
+// rejects with "exec format error" -- so a lookup-only check reported pnpm as
+// healthy and `wizard init` then failed halfway through the dependency install.
+// A broken tool is reported as present-but-unusable (Found, not OK) with its
+// own reinstall hint.
+func checkRunnable(name, hint string) ToolCheck {
+	path, err := exec.LookPath(name)
 	if err != nil {
-		return ToolCheck{Name: "pnpm", Found: false, InstallHint: pnpmInstallHint()}
+		return ToolCheck{Name: name, Found: false, InstallHint: hint}
 	}
-	version, _ := parseVersion(runVersion("pnpm", "--version"))
-	return ToolCheck{Name: "pnpm", Found: true, Path: path, Version: version, OK: true, InstallHint: pnpmInstallHint()}
+	out, runErr := runCommandOutputErr(name, "--version")
+	if runErr != nil && errors.Is(runErr, syscall.ENOEXEC) && runtime.GOOS != "windows" {
+		// exec(2) refuses it but a shell can run it (see runtool.go): usable.
+		name2, args2 := toolExec(name, []string{"--version"})
+		out, runErr = runCommandOutputErr(name2, args2...)
+	}
+	if runErr != nil {
+		return ToolCheck{Name: name, Found: true, Path: path, Version: "unusable: " + runErr.Error(), InstallHint: hint}
+	}
+	version, _ := parseVersion(out)
+	return ToolCheck{Name: name, Found: true, Path: path, Version: version, OK: true, InstallHint: hint}
+}
+
+// runCommandOutputErr is runCommandOutput that also reports why the command
+// could not run or exited non-zero.
+func runCommandOutputErr(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("timed out after 10s")
+	}
+	if err != nil {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return "", pathErr.Err
+		}
+		return out.String(), err
+	}
+	return out.String(), nil
 }
 
 // runVersion is bounded so a PATH-resolved executable that hangs (an
@@ -225,25 +299,30 @@ func finishCheck(c ToolCheck, parsed [2]int, version string, minMajor, minMinor 
 	return c
 }
 
+// The install hints name a package, never a version: the requirement is a
+// minimum (Python 3.12+, Node 20+), so whatever the package manager currently
+// ships is right, and newer releases are fine.
+
 func pythonInstallHint() string {
+	minimum := fmt.Sprintf("Python %d.%d or newer", minPythonMajor, minPythonMinor)
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install Python.Python.3.12  (or download from https://python.org)"
+		return "uv python install  (needs uv; " + minimum + " from https://python.org also works)"
 	case "darwin":
-		return "brew install python@3.12"
+		return "brew install python  (or: uv python install; " + minimum + " is enough)"
 	default:
-		return "sudo apt install python3.12  (or your distribution's equivalent)"
+		return "uv python install  (or your distribution's python3 package; " + minimum + " is enough)"
 	}
 }
 
 func nodeInstallHint() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install OpenJS.NodeJS.LTS"
+		return "winget install OpenJS.NodeJS.LTS  (Node " + fmt.Sprint(minNodeMajor) + " or newer)"
 	case "darwin":
-		return "brew install node@20"
+		return "brew install node  (Node " + fmt.Sprint(minNodeMajor) + " or newer)"
 	default:
-		return "use your distribution's Node 20+ package, or https://nodejs.org"
+		return fmt.Sprintf("install Node %d or newer: your distribution's nodejs package if it is new enough, otherwise https://nodejs.org/en/download or a version manager such as fnm or nvm", minNodeMajor)
 	}
 }
 
@@ -261,10 +340,10 @@ func uvInstallHint() string {
 func pnpmInstallHint() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install pnpm.pnpm  (or: corepack enable && corepack prepare pnpm@latest --activate)"
+		return "winget install pnpm.pnpm  (or: corepack enable)"
 	case "darwin":
 		return "brew install pnpm"
 	default:
-		return "corepack enable && corepack prepare pnpm@latest --activate"
+		return "curl -fsSL https://get.pnpm.io/install.sh | sh -  (or: corepack enable, where corepack is installed)"
 	}
 }

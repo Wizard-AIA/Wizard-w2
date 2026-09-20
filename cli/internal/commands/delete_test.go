@@ -98,3 +98,16 @@ func TestSafeDeleteTargetRejectsBroadPaths(t *testing.T) {
 		t.Fatal("a nested Wizard config path should be deletable")
 	}
 }
+
+func TestSafeDeleteTargetRejectsSymlinkedParent(t *testing.T) {
+
+	outside := t.TempDir()
+	parent := t.TempDir()
+	link := filepath.Join(parent, "linked-parent")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if safeDeleteTarget(filepath.Join(link, "wizard")) {
+		t.Fatal("a config directory beneath a symlinked parent must not be deletable")
+	}
+}

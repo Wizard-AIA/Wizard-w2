@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"wizard/internal/platform"
 )
 
 const (
@@ -32,9 +35,25 @@ const (
 	maxArchiveExtracted  = int64(4 << 30)
 )
 
+const (
+	// metadataTimeout bounds a release-API request. downloadTimeout bounds a
+	// whole archive transfer; it is deliberately generous because it also has
+	// to cover slow proxied links, unlike the old client-wide 20s cap that
+	// aborted any download slower than a few hundred KB/s.
+	metadataTimeout = 20 * time.Second
+	downloadTimeout = 30 * time.Minute
+)
+
+// errNetwork marks a failure to reach or read from the release service, so
+// callers can exit with exitcode.Network instead of a generic failure.
+var errNetwork = errors.New("network error")
+
 var (
-	releaseAPIURL     = defaultReleaseAPIURL
-	releaseHTTPClient = &http.Client{Timeout: 20 * time.Second}
+	releaseAPIURL = defaultReleaseAPIURL
+	// The default transport honors HTTPS_PROXY/HTTP_PROXY/NO_PROXY and, on
+	// Unix, SSL_CERT_FILE, which is what corporate proxies need. No overall
+	// Client.Timeout: it would include the response body read.
+	releaseHTTPClient = &http.Client{}
 )
 
 type releaseAsset struct {
@@ -50,20 +69,26 @@ type latestRelease struct {
 }
 
 func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
+	ctx, cancel := context.WithTimeout(ctx, metadataTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPIURL, nil)
 	if err != nil {
 		return latestRelease{}, fmt.Errorf("creating release request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wizard-cli-update")
+	setGitHubAuth(req)
 	resp, err := releaseHTTPClient.Do(req)
 	if err != nil {
-		return latestRelease{}, fmt.Errorf("checking for the latest Wizard release: %w", err)
+		return latestRelease{}, fmt.Errorf("checking for the latest Wizard release: %w: %v", errNetwork, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return latestRelease{}, fmt.Errorf("release service returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return latestRelease{}, fmt.Errorf("GitHub's anonymous rate limit for this network is used up: %w. Try again later, or set GITHUB_TOKEN (any token, no scopes) to raise it", errNetwork)
+		}
+		return latestRelease{}, fmt.Errorf("release service returned %s: %w: %s", resp.Status, errNetwork, strings.TrimSpace(string(body)))
 	}
 	var release latestRelease
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxReleaseMetadata+1))
@@ -76,6 +101,23 @@ func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
 	return release, nil
 }
 
+// setGitHubAuth attaches GITHUB_TOKEN / GH_TOKEN to a request for GitHub's API,
+// lifting the 60-requests-an-hour anonymous limit that shared office and CI
+// addresses hit. The token goes to api.github.com and nowhere else: not to a
+// mirror set through releaseAPIURL, and never to the archive downloads.
+func setGitHubAuth(req *http.Request) {
+	if req.URL.Scheme != "https" || req.URL.Hostname() != "api.github.com" {
+		return
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
 func (r latestRelease) asset(name string) (releaseAsset, bool) {
 	for _, asset := range r.Assets {
 		if asset.Name == name && asset.URL != "" {
@@ -86,7 +128,7 @@ func (r latestRelease) asset(name string) (releaseAsset, bool) {
 }
 
 func releaseArchiveName(tag string) string {
-	return fmt.Sprintf("Wizard-%s-%s-%s.zip", tag, runtime.GOOS, runtime.GOARCH)
+	return platform.ArtifactName(tag, platform.Current())
 }
 
 // versionParts intentionally accepts only stable numeric release tags. A
@@ -171,6 +213,8 @@ func downloadReleaseAsset(ctx context.Context, asset releaseAsset, destination s
 	if asset.Size < 0 || asset.Size > limit {
 		return fmt.Errorf("release asset %s has unsafe declared size %d", asset.Name, asset.Size)
 	}
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return err
@@ -178,11 +222,11 @@ func downloadReleaseAsset(ctx context.Context, asset releaseAsset, destination s
 	req.Header.Set("User-Agent", "wizard-cli-update")
 	resp, err := releaseHTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("downloading %s: %w", asset.Name, err)
+		return fmt.Errorf("downloading %s: %w: %v", asset.Name, errNetwork, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("downloading %s: server returned %s", asset.Name, resp.Status)
+		return fmt.Errorf("downloading %s: %w: server returned %s", asset.Name, errNetwork, resp.Status)
 	}
 	if resp.ContentLength > limit {
 		return fmt.Errorf("release asset %s exceeds the %d byte limit", asset.Name, limit)
@@ -213,7 +257,10 @@ func checksumForAsset(contents []byte, assetName string) (string, error) {
 		if len(fields) < 2 {
 			continue
 		}
-		name := strings.TrimPrefix(fields[len(fields)-1], "*")
+		// sha256sum writes "digest  name", or "digest *name" in binary mode, and
+		// "digest  ./name" when it was run over ./*.zip -- which is how every
+		// release up to v1.0.12 published its SHA256SUMS, so ./ must be accepted.
+		name := strings.TrimPrefix(strings.TrimPrefix(fields[len(fields)-1], "*"), "./")
 		if name != assetName {
 			continue
 		}

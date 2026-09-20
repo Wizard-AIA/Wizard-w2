@@ -12,7 +12,8 @@ import (
 // unlike the short, captured commands in toolcheck.go.
 func runStreamed(env *Env, dir, name string, args []string, extraEnv ...string) error {
 	fmt.Fprintf(env.Out, "$ %s %s\n", name, joinArgs(args))
-	cmd := exec.Command(name, args...)
+	execName, execArgs := toolExec(name, args) // pnpm/uv that only a shell can start
+	cmd := exec.Command(execName, execArgs...)
 	cmd.Dir = dir
 	cmd.Stdout = env.Out
 	cmd.Stderr = env.Err

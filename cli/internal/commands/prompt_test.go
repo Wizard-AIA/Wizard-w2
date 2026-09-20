@@ -27,7 +27,10 @@ func TestPromptInitSettingsCapturesProviderModeModelsAndCredentials(t *testing.T
 	writeBackendEnv(t, backendDir, "API_PROVIDER=ollama\nDATA_SCHEMA_ONLY=true\n")
 	out := &bytes.Buffer{}
 	env := newTestEnv(t, backendDir)
-	env.In = strings.NewReader("4\n3\n\nqwen3:8b\nqwen2.5-coder:7b\n1\ntext-embedding-3-small\nsk-openai-test\nhttps://proxy.example/v1\n")
+	// Order: provider, key (credentials now precede the model questions so they
+	// can be looked up; there is no endpoint question), data mode, schema-only,
+	// manager, worker, embedding provider, embedding model.
+	env.In = strings.NewReader("4\nsk-openai-test\n3\n\nqwen3:8b\nqwen2.5-coder:7b\n1\ntext-embedding-3-small\n")
 	env.Out = out
 	settings := initSettings{}
 
@@ -43,8 +46,8 @@ func TestPromptInitSettingsCapturesProviderModeModelsAndCredentials(t *testing.T
 	if settings.embeddingProvider != "" || settings.embeddingModel != "text-embedding-3-small" {
 		t.Fatalf("unexpected embedding settings: %#v", settings.providerConfig)
 	}
-	if settings.openaiKey != "sk-openai-test" || settings.baseURL != "https://proxy.example/v1" {
-		t.Fatalf("unexpected credentials/base URL: %#v", settings.providerConfig)
+	if settings.openaiKey != "sk-openai-test" || settings.baseURL != "" {
+		t.Fatalf("unexpected credentials/base URL (init must not ask for one): %#v", settings.providerConfig)
 	}
 	if !strings.Contains(out.String(), "Default provider") || !strings.Contains(out.String(), "OpenAI API key") {
 		t.Fatalf("expected interactive prompts, got: %s", out.String())
@@ -74,7 +77,8 @@ func TestPromptInitSettingsClearsSavedEmbeddingModelWhenAutoSelected(t *testing.
 	backendDir := filepath.Join(t.TempDir(), "backend")
 	writeBackendEnv(t, backendDir, "API_PROVIDER=gemini\nDATA_MODE=cloud-only\nEMBEDDING_REMOTE_MODEL=old-model\n")
 	env := newTestEnv(t, backendDir)
-	env.In = strings.NewReader("\n\n\n\n\n\nauto\n\n")
+	// provider, key, mode, schema, manager, worker, embedding provider, embedding model
+	env.In = strings.NewReader("\n\n\n\n\n\n\nauto\n")
 	env.Out = &bytes.Buffer{}
 	settings := initSettings{}
 

@@ -14,44 +14,125 @@ Full documentation, including task guides (EDA, model training) and an
 [edge-cases & gotchas reference](https://wizardw2.vercel.app/docs/troubleshooting/edge-cases),
 lives at **[wizardw2.vercel.app](https://wizardw2.vercel.app/)**.
 
-## ⚡ Install & Quick Start
+## ⚡ Install
 
-### 🍺 Option A: Homebrew (macOS & Linux)
+Wizard runs on **macOS** (Apple Silicon and Intel), **Linux** (x86-64 and ARM64) and **Windows 10/11** (x86-64). Windows on ARM is not supported yet. Nothing below needs administrator rights.
 
-```bash
-brew tap Wizard-AIA/wizard && brew install wizard
-wizard init && wizard start
-```
+| Platform | Install |
+|---|---|
+| **macOS** | `brew install Wizard-AIA/wizard/wizard` |
+| **Linux** | `curl -fsSL https://wizardw2.vercel.app/install.sh \| sh` |
+| **Windows** (PowerShell) | `irm https://wizardw2.vercel.app/install.ps1 \| iex` |
 
-From a terminal, `wizard init` asks for the provider, data mode, models, and
-the relevant API key when needed. Use ↑/↓ and Enter for choices, or press
-Enter to keep the shown default. If Python, Node.js, uv, or pnpm is missing,
-the interactive wizard asks whether to install it; cloud-only configurations
-do not require Ollama. Use `wizard init --non-interactive` for automation, or
-`wizard init --install-prerequisites --non-interactive` to install missing
-tools in a script.
-
-To remove Wizard's user data and local configuration while keeping the
-checkout and CLI, run `wizard delete` and confirm. Use `wizard delete --yes`
-for a confirmed non-interactive deletion, or `--keep-env` to preserve
-`backend/.env`.
-
-### 📦 Option B: Standalone Prebuilt Binary
-**[Download latest release package](https://github.com/Wizard-AIA/Wizard-w2/releases/latest)** for macOS, Linux, or Windows, extract it, and run:
+Then confirm it works and set it up:
 
 ```bash
-./cli/wizard init       # checks prerequisites, installs dependencies
-./cli/wizard start      # launches everything, opens a browser
+wizard --version      # wizard CLI v1.0.13, backend API compat v4.0.0
+wizard --help
+wizard init           # choose a provider and models, install what is missing
+wizard start          # launches Wizard and opens http://localhost:3000
 ```
 
-### ☁️ Option C: 1-Click Cloud Trial (GitHub Codespaces)
-Launch an instant full-stack environment in your browser:
+<details>
+<summary><b>Every install method, with options</b></summary>
 
-[![Open in GitHub Codespaces](https://img.shields.io/badge/Codespaces-Open_in_Browser-blue?logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2)
+**macOS or Linux, Homebrew** (also works on Linux):
 
-That's it — no `git clone`, no Go toolchain, no build step. See [Quick start](#quick-start) below for what `init`/`start` actually do, and [Docker alternative](#docker-alternative) if you'd rather containerize it.
+```bash
+brew install Wizard-AIA/wizard/wizard
+```
 
-Building from source instead? `git clone https://github.com/Wizard-AIA/Wizard-w2.git` gets you the same repo this release was cut from — see the [Contributing & Development](#contributing--development) section at the bottom.
+**macOS or Linux, installer script** (no Homebrew needed; installs into `~/.wizard`):
+
+```bash
+curl -fsSL https://wizardw2.vercel.app/install.sh | sh
+# options: --version 1.0.13  --install-dir DIR  --no-modify-path  --force  --verbose
+curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.13 --no-modify-path
+```
+
+**Windows, PowerShell 5.1 or 7+** (installs into `%LOCALAPPDATA%\Wizard` and adds it to your user PATH):
+
+```powershell
+irm https://wizardw2.vercel.app/install.ps1 | iex
+# with options:
+& ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -Version 1.0.13 -NoModifyPath
+```
+
+**Windows, Scoop:**
+
+```powershell
+scoop install https://github.com/Wizard-AIA/Wizard-w2/releases/latest/download/wizard.json
+```
+
+**Any platform, manual download.** Take the archive for your platform from the [latest release](https://github.com/Wizard-AIA/Wizard-w2/releases/latest), check it against `SHA256SUMS`, extract it, change into the extracted `Wizard-v<version>-<platform>` directory, and run `./cli/wizard init`.
+
+Every option also has an environment variable (`WIZARD_VERSION`, `WIZARD_INSTALL_DIR`, `WIZARD_NO_MODIFY_PATH`), and `WIZARD_RELEASE_BASE_URL` points the installers at an internal mirror.
+
+**Try it without installing:** [![Open in GitHub Codespaces](https://img.shields.io/badge/Codespaces-Open_in_Browser-blue?logo=githubcodespaces&logoColor=white)](https://codespaces.new/Wizard-AIA/Wizard-w2)
+
+</details>
+
+### Prerequisites
+
+Wizard needs **Python 3.12+**, **Node.js 20+**, **uv** and **pnpm**. Those are minimums: anything newer works, and `wizard init` uses whatever your machine already has (nvm, fnm, Volta, Homebrew and system installs are all found). It only offers to install what is missing, and then installs the current release. [Ollama](https://ollama.com/) is needed only if you want local models; cloud-only setups do not need it. Docker is optional.
+
+### First run
+
+`wizard init` walks through the setup on a terminal:
+
+- pick a **provider** (Ollama, LM Studio, Anthropic, OpenAI, Gemini or a custom gateway) from a list;
+- paste an **API key** if it needs one. Each character shows as `•`, and a receipt (its length and last four characters) proves the paste arrived. The key is never printed, and it is checked with the provider right away;
+- pick **manager and worker models from what that provider actually offers**. You are never asked to type a model name or a provider URL;
+- everything is a menu: ↑/↓ to move, type to jump, Enter to select.
+
+For scripts and CI use `wizard init --non-interactive` (see `wizard init --help`); `--install-prerequisites` lets it install missing tools without asking.
+
+### Where things live
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Program | `~/.wizard` or the Homebrew keg | `~/.wizard` | `%LOCALAPPDATA%\Wizard` |
+| Settings, keys, logs, Python environment | `~/Library/Application Support/Wizard` | `~/.config/wizard` (or `$XDG_CONFIG_HOME`) | `%APPDATA%\Wizard` |
+
+`WIZARD_CONFIG_DIR` overrides the settings location. Behind a proxy, the standard `HTTPS_PROXY` and `NO_PROXY` variables are honoured by the installers, the updater and model lookups.
+
+### Upgrade
+
+| Installed with | Upgrade |
+|---|---|
+| Homebrew | `brew update && brew upgrade wizard`, then `wizard init` (your settings are kept) |
+| Installer script or PowerShell | `wizard update` (`wizard update --check` only reports) |
+| Scoop | `scoop update wizard` |
+
+`wizard update` never overwrites files a package manager owns; on a Homebrew or Scoop install it tells you the right command instead.
+
+### Uninstall
+
+```bash
+wizard uninstall            # removes the program and its PATH entries; keeps your settings and keys
+wizard uninstall --purge    # removes everything: program, settings, API keys, logs, Python environment
+```
+
+Homebrew and Scoop installs are removed with `brew uninstall wizard` / `scoop uninstall wizard`; `wizard uninstall` prints the right one. `wizard delete` removes only your data and leaves the program installed.
+
+### If something goes wrong
+
+Run **`wizard doctor`**. It checks the version, platform, where `wizard` runs from, whether it is on your PATH, the settings directory, Python, Node, uv and pnpm, your configuration, and the running service, and prints a fix for anything that is not a pass (`--json` for scripts, `--network` to test connectivity). It exits `3` when something required is missing.
+
+| Symptom | Fix |
+|---|---|
+| `wizard: command not found` right after installing | Open a new terminal (the installer edited your shell startup files or user PATH). `wizard doctor` says exactly what to add. |
+| `checksum mismatch` | The download was corrupted or altered and nothing was installed. Re-run; if it persists, check your proxy. |
+| `another Wizard is already installed` | Two installs shadow each other. Upgrade the existing one, remove it, or pass `--force`. |
+| `wizard init` says Node or pnpm is missing but you have it | Run `wizard doctor`: it lists where it looked and why a tool was rejected. |
+| Exit codes | `0` ok · `1` failure · `2` bad usage · `3` missing dependency or broken install · `4` network |
+
+**Integrity.** The installers and the updater verify each archive's SHA-256 against the release's `SHA256SUMS` before unpacking anything. That protects against corrupt or partial downloads; the checksum file comes from the same release, so it is integrity, not a signature.
+
+### Development install
+
+Building from source is separate from the above; see [Contributing & Development](#contributing--development) at the bottom, or the [CLI README](cli/README.md).
+
 
 ## What it is
 
@@ -76,20 +157,21 @@ Every stage streams to the browser as it happens — the reasoning, each move an
 - **It fits the machine it is on.** Thread count, sandbox memory and the session cap are measured from your CPU and RAM at boot rather than assumed.
 - **It is honest about degradation.** No embedding model? Retrieval falls back to word overlap. Model unreachable? You get a clear message, not a hang. Nothing silently pretends.
 
-## Quick start
+## Using Wizard
 
-**Prerequisites:** [Ollama](https://ollama.com/) (or LM Studio). [Docker Desktop](https://www.docker.com/products/docker-desktop/) is recommended but **not required** — see [Docker alternative](#docker-alternative) below for the container path, or keep reading for the no-Docker one.
-
-Downloaded a [release zip](#download)? You already have a prebuilt `wizard` binary — skip straight to:
+After [installing](#-install), `wizard init` and `wizard start` are all you need. Open **http://localhost:3000**; API docs are at **http://localhost:8000/docs**.
 
 ```bash
-./cli/wizard init                  # reuses Python 3.12+ (including 3.14); checks Node 20+ and installs dependencies
-./cli/wizard start                 # launches both in the background, opens a browser
-./cli/wizard status                # what's running, host sizing, sandbox capability
-./cli/wizard stop
+wizard status      # what's running, host sizing, sandbox capability
+wizard stop
+wizard doctor      # if anything looks wrong
 ```
 
-Building from source instead, the `wizard` CLI ([cli/](cli/)) is a single static binary that automates the same steps — check prerequisites, install dependencies, and manage the backend/frontend as a background service, the same on Linux, macOS and Windows:
+Local models need [Ollama](https://ollama.com/) (or LM Studio); a cloud provider needs only an API key. [Docker Desktop](https://www.docker.com/products/docker-desktop/) is optional, see [Docker alternative](#docker-alternative).
+
+### From source
+
+Contributors building from a clone (end users should use the [installers](#-install) above):
 
 ```bash
 git clone https://github.com/Wizard-AIA/Wizard-w2.git && cd Wizard-w2

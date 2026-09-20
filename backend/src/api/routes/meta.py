@@ -54,6 +54,7 @@ from src.core.tools import runtime as runtime_backend
 from src.providers import exists as provider_exists
 from src.utils.hostinfo import host_info
 from src.utils.logging import logger
+from src.version import APP_VERSION
 
 
 router = APIRouter(tags=["meta"])
@@ -138,7 +139,7 @@ async def health_ready() -> JSONResponse:
         content=HealthDetailResponse(
             status=status,
             version=API_VERSION,
-            app_version="1.0.12",
+            app_version=APP_VERSION,
             sandbox_available=sandbox_available,
             execution_backend=backend,
             model_provider=settings.API_PROVIDER,
@@ -269,7 +270,7 @@ async def server_config() -> ServerConfig:
     return ServerConfig(
         app_name=settings.APP_NAME,
         version=API_VERSION,
-        app_version="1.0.12",
+        app_version=APP_VERSION,
         plot_format=settings.PLOT_FORMAT,
         sandbox_available=backend == "docker",
         sandbox_enabled=settings.SANDBOX_ENABLED,

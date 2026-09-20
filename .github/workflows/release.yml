@@ -1,18 +1,69 @@
 name: Publish Release
 
+# Pipeline: verify -> build -> smoke (the exact built archives, five platforms)
+#           -> draft release -> package -> verify-draft -> publish-live
+#           -> verify-live.
+#
+# Nothing is publicly published until the exact uploaded release assets have
+# been installed and run on every platform Wizard advertises. Package metadata
+# (Homebrew, Scoop) is never taken from a build machine: v1.0.12's formula was,
+# and `brew install` failed with "Formula reports different checksum".
+#
+# Manual runs (workflow_dispatch) build and test everything but publish nothing.
+
 on:
   push:
     tags:
       - 'v*' # Trigger on version tags like v1.0.0
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The tag being released. On a manual run there is no tag, so v<VERSION>.
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
 jobs:
-  release:
+  verify:
+    name: Verify (version, tests)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # To create the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Version, tag, changelog and target lists agree
+        run: |
+          tag="${RELEASE_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+          python scripts/release.py check --tag "$tag" --changelog
+
+      - name: CLI vet and tests
+        working-directory: cli
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Installer tests (sh, dash, bash)
+        run: sh scripts/tests/test_install_sh.sh
+
+  build:
+    name: Build archives
+    needs: verify
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -22,24 +73,487 @@ jobs:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
 
-      - name: Build consumer release zips
-        run: bash scripts/build_release.sh "${{ github.ref_name }}"
+      - name: Build consumer release zips and SHA256SUMS
+        run: bash scripts/build_release.sh "${RELEASE_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+
+      # The installers ship as release assets so `releases/latest/download/install.sh`
+      # is always the installer that matches the latest release.
+      - name: Stage installers beside the archives
+        run: cp scripts/install.sh scripts/install.ps1 dist/
+
+      - name: Upload build output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-dist
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/install.sh
+            dist/install.ps1
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Smoke ${{ matrix.target }}
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64,   runner: ubuntu-latest,    shell: bash }
+          - { target: linux-arm64,   runner: ubuntu-24.04-arm, shell: bash }
+          - { target: darwin-arm64,  runner: macos-latest,     shell: bash }
+          - { target: darwin-amd64,  runner: macos-15-intel,   shell: bash }
+          - { target: windows-amd64, runner: windows-latest,   shell: pwsh }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Download the archives that would be published
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Install from those archives, run, uninstall (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          tag="${RELEASE_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+          mkdir -p "serve/$tag" && cp dist/*.zip dist/SHA256SUMS "serve/$tag/" && echo "$tag" > serve/LATEST
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory serve >/dev/null 2>&1 &
+          sleep 2
+          export WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765
+          if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
+
+          sh dist/install.sh --version "${tag#v}" --yes
+
+          # A NEW shell must find wizard: PATH setup is what the user relies on.
+          if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
+          # Capture, then grep (here-string). Under `set -o pipefail` a pipe into
+          # `grep -q` fails on the CLI's correct nonzero exit (a usage error is 2)
+          # and on SIGPIPE when grep exits early.
+          $fresh 'wizard --version' | tee version.out
+          grep -q "$tag" version.out
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
+          $fresh 'wizard doctor --json' > doctor.json || test "$?" = 3   # 3 = a prerequisite is missing, still valid JSON
+          python3 -c 'import json; d = json.load(open("doctor.json")); assert d["platform"] == "${{ matrix.target }}", d["platform"]; print("doctor ok:", d["summary"])'
+          grep -q 'unknown command' <<< "$($fresh 'wizard bogus' 2>&1 || true)"
+          grep -q 'invalid --backend-port' <<< "$($fresh 'wizard start --backend-port 99999' 2>&1 || true)"
+
+          # Idempotent: a second run keeps a single PATH block.
+          sh dist/install.sh --version "${tag#v}" --yes
+          for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+            [ -f "$f" ] && [ "$(grep -c '>>> wizard' "$f")" -gt 1 ] && { echo "duplicate PATH block in $f"; exit 1; }
+          done || true
+
+          $fresh 'wizard uninstall --yes'
+          # Explicit ifs: `set -e` ignores a failing `!`-negated command and every
+          # non-final member of an && list, so the terse forms pass while broken.
+          for leftover in "$HOME/.wizard/bin" "$HOME/.wizard/current"; do
+            if [ -e "$leftover" ]; then echo "uninstall left $leftover behind"; exit 1; fi
+          done
+          for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+            if [ -f "$f" ] && grep -q '>>> wizard' "$f"; then echo "uninstall left the PATH block in $f"; exit 1; fi
+          done
+
+      - name: Install from those archives, run, uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { 'v' + (Get-Content VERSION).Trim() }
+          New-Item -ItemType Directory -Force "serve/$tag" | Out-Null
+          Copy-Item dist/*.zip, dist/SHA256SUMS "serve/$tag"
+          Set-Content serve/LATEST $tag
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'serve' -WindowStyle Hidden
+          Start-Sleep 3
+          $env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:8765'
+
+          # Windows PowerShell 5.1 is what most people run the installer with.
+          powershell -NoProfile -ExecutionPolicy Bypass -File dist/install.ps1 -Version ($tag.TrimStart('v')) -Yes
+          if ($LASTEXITCODE -ne 0) { throw "installer exited $LASTEXITCODE" }
+
+          # A NEW terminal must find wizard: the user PATH was edited in the registry.
+          # A child process inherits this session's environment, not the registry, so
+          # rebuild PATH the way a fresh logon would before starting one.
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          $v = powershell -NoProfile -Command 'wizard --version'
+          if ($v -notmatch [regex]::Escape($tag)) { throw "wizard --version reported '$v', expected $tag" }
+          powershell -NoProfile -Command 'wizard --help' | Select-String 'Usage' | Out-Null
+          powershell -NoProfile -Command 'wizard doctor --json' | Out-File doctor.json -Encoding utf8
+          $d = Get-Content doctor.json -Raw | ConvertFrom-Json
+          if ($d.platform -ne 'windows-amd64') { throw "doctor reported platform $($d.platform)" }
+
+          # The user PATH must keep its type and its unexpanded variables.
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          if ($key.GetValueKind('Path') -ne 'ExpandString') { throw 'user PATH is no longer REG_EXPAND_SZ' }
+          $key.Close()
+
+          powershell -NoProfile -Command 'wizard uninstall --yes'
+          Start-Sleep 5   # the running .exe is removed by a helper once this process exits
+          if (Test-Path "$env:LOCALAPPDATA\Wizard\current") { throw 'the current junction was not removed' }
+
+  e2e:
+    name: E2E ${{ matrix.target }} (init, start, health, stop)
+    needs: smoke
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64,   runner: ubuntu-latest }
+          - { target: darwin-arm64,  runner: macos-latest }
+          - { target: windows-amd64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Host tools, on purpose: init must use what the machine already has.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"   # newer than the 3.12 minimum: must be accepted, not replaced
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "22"       # likewise newer than the Node 20 minimum
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6
+        with:
+          version: 10
+
+      - name: Download the archives that would be published
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Install, initialise, start, check health, stop, uninstall (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          tag="${RELEASE_TAG:-v$(tr -d '[:space:]' < VERSION)}"
+          version="${tag#v}"
+          mkdir -p "serve/$tag" && cp dist/*.zip dist/SHA256SUMS "serve/$tag/" && echo "$tag" > serve/LATEST
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory serve >/dev/null 2>&1 &
+          sleep 2
+          WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765 sh dist/install.sh --version "$version" --no-modify-path
+          export PATH="$HOME/.wizard/bin:$PATH"
+
+          grep -q "$tag" <<< "$(wizard --version 2>&1 || true)"
+          # A cloud provider avoids needing a local model server. The key is a placeholder.
+          wizard init --non-interactive --no-install-prerequisites --provider anthropic --anthropic-key sk-ant-ci-placeholder
+          wizard doctor
+          wizard start --no-browser --timeout 240
+          health="$(curl -fsS http://127.0.0.1:8000/health)"
+          echo "$health"
+          echo "$health" | python3 -c "import json,sys; d = json.load(sys.stdin); assert d['app_version'] == '$version', d"
+          curl -fsS -o /dev/null http://127.0.0.1:3000/
+          wizard status
+          wizard stop
+          wizard uninstall --purge --yes
+          test ! -e "$HOME/.wizard/current"
+
+      - name: Install, initialise, start, check health, stop, uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { 'v' + (Get-Content VERSION).Trim() }
+          $version = $tag.TrimStart('v')
+          New-Item -ItemType Directory -Force "serve/$tag" | Out-Null
+          Copy-Item dist/*.zip, dist/SHA256SUMS "serve/$tag"
+          Set-Content serve/LATEST $tag
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'serve' -WindowStyle Hidden
+          Start-Sleep 3
+          $env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:8765'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File dist/install.ps1 -Version $version -Yes
+          if ($LASTEXITCODE -ne 0) { throw "installer exited $LASTEXITCODE" }
+          $wizard = "$env:LOCALAPPDATA\Wizard\bin\wizard.exe"
+
+          & $wizard --version | Select-String $tag | Out-Null
+          & $wizard init --non-interactive --no-install-prerequisites --provider anthropic --anthropic-key sk-ant-ci-placeholder
+          if ($LASTEXITCODE -ne 0) { throw "wizard init exited $LASTEXITCODE" }
+          & $wizard doctor
+          & $wizard start --no-browser --timeout 300
+          if ($LASTEXITCODE -ne 0) { throw "wizard start exited $LASTEXITCODE" }
+          $health = Invoke-RestMethod http://127.0.0.1:8000/health
+          if ($health.app_version -ne $version) { throw "backend reports app_version $($health.app_version), expected $version" }
+          Invoke-WebRequest http://127.0.0.1:3000/ -UseBasicParsing | Out-Null
+          & $wizard status
+          & $wizard stop
+          & $wizard uninstall --purge --yes
+          Start-Sleep 5
+
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "--- doctor"; (wizard doctor 2>&1 || "$HOME/.wizard/bin/wizard" doctor 2>&1 || true)
+          echo "--- logs"; for f in "$HOME/.config/wizard/logs/"* "$HOME/Library/Application Support/Wizard/logs/"*; do [ -f "$f" ] && { echo "== $f"; tail -n 60 "$f"; }; done || true
+
+  publish:
+    name: Stage draft GitHub Release
+    needs: [smoke, e2e]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To create the GitHub Release
+    steps:
+      - name: Download the tested archives
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: release-dist
+          path: dist
 
       # Notes start blank rather than auto-generated: a raw commit/PR list reads as noise
       # to a consumer downloading a zip, not a changelog. Write the real paragraph by hand
       # with `gh release edit <tag> --notes-file ...` right after this job creates the release.
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           generate_release_notes: false
-          draft: false
+          # A release can be downloaded by authenticated verification jobs
+          # while draft. Do not expose it to users until those exact uploaded
+          # bytes, their checksums and the generated formula have passed.
+          draft: true
           prerelease: false
           files: |
             dist/*.zip
             dist/SHA256SUMS
+            dist/install.sh
+            dist/install.ps1
+
+  package:
+    name: Render packaging from draft-release checksums
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attaches the rendered files to the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Fetch the checksum asset from the just-created draft, not the build
+      # workspace. This is the exact release object that will later be made
+      # public, so the formula pins what users actually download.
+      - name: Download SHA256SUMS from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir release-asset
+
+      - name: Render wizard.rb, wizard.json and release.json
+        run: python scripts/release.py render --version "${RELEASE_TAG#v}" --sums release-asset/SHA256SUMS --out packaging-out
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" packaging-out/wizard.rb packaging-out/wizard.json packaging-out/release.json --clobber
+
+      - name: Upload for the verification jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: packaging
+          path: packaging-out/*
+          retention-days: 14
+
+  verify-draft:
+    name: Verify staged release ${{ matrix.target }}
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64,   runner: ubuntu-latest }
+          - { target: linux-arm64,   runner: ubuntu-24.04-arm }
+          - { target: darwin-arm64,  runner: macos-latest }
+          - { target: darwin-amd64,  runner: macos-15-intel }
+          - { target: windows-amd64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Download the exact uploaded draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release download "$RELEASE_TAG" --dir release-assets
+
+      # Draft release assets are not anonymously fetchable. Serve the exact
+      # bytes downloaded from GitHub locally; the installer still downloads
+      # install.sh, SHA256SUMS and its archive through its normal HTTP path.
+      - name: Install from the staged release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p "serve/$RELEASE_TAG"
+          cp release-assets/* "serve/$RELEASE_TAG/"
+          echo "$RELEASE_TAG" > serve/LATEST
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory serve >/dev/null 2>&1 &
+          sleep 2
+          if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
+          WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765 sh "release-assets/install.sh" --version "${RELEASE_TAG#v}" --yes
+          if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
+          $fresh 'wizard --version' | tee out.txt
+          grep -q "$RELEASE_TAG" out.txt
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
+          $fresh 'wizard uninstall --yes'
+
+      - name: Install from the staged release (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force "serve/$env:RELEASE_TAG" | Out-Null
+          Copy-Item release-assets/* "serve/$env:RELEASE_TAG"
+          Set-Content serve/LATEST $env:RELEASE_TAG
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'serve' -WindowStyle Hidden
+          Start-Sleep 3
+          $env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:8765'
+          $script = Get-Content release-assets/install.ps1 -Raw
+          & ([scriptblock]::Create($script)) -Version ($env:RELEASE_TAG.TrimStart('v')) -Yes
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          $v = powershell -NoProfile -Command 'wizard --version'
+          if ($v -notmatch [regex]::Escape($env:RELEASE_TAG)) { throw "reported '$v'" }
+          powershell -NoProfile -Command 'wizard uninstall --yes'
+
+      - name: Download the rendered Homebrew formula
+        if: runner.os != 'Windows'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: packaging
+          path: packaging-out
+
+      # First audit the production formula, then change only its base URL to a
+      # local file mirror. This makes Homebrew verify and unpack the exact
+      # draft ZIP before the release is public, without weakening the formula
+      # users receive (which continues to point at GitHub Releases).
+      - name: Homebrew install, test and audit (macOS, Linux)
+        if: runner.os != 'Windows' && (matrix.target == 'darwin-arm64' || matrix.target == 'darwin-amd64' || matrix.target == 'linux-amd64')
+        shell: bash
+        run: |
+          set -eu
+          if ! command -v brew >/dev/null 2>&1; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1
+          brew tap-new --no-git local/verify
+          tap="$(brew --repository local/verify)"
+          mirror="file://$PWD/release-assets/"
+          # Homebrew infers a version from a github.com release URL, but from a bare
+          # file name ("Wizard-v1.0.13-darwin-arm64") it would read "64", so the
+          # mirrored copy states the version explicitly (before `license`, which is
+          # where brew audit wants it). The production formula keeps the github.com
+          # URLs and lets Homebrew infer it.
+          sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb \
+            | awk -v v="${RELEASE_TAG#v}" '/^  license /{ print "  version \"" v "\"" } { print }' > "$tap/Formula/wizard.rb"
+          brew trust local/verify 2>/dev/null || true
+          brew audit --strict --formula local/verify/wizard
+          brew install --formula local/verify/wizard
+          grep -q "$RELEASE_TAG" <<< "$(wizard --version 2>&1 || true)"
+          grep -q Usage <<< "$(wizard --help 2>&1 || true)"
+          brew test local/verify/wizard
+          brew uninstall wizard
+
+  publish-live:
+    name: Publish the verified release
+    needs: [verify-draft, sbom]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Make the tested draft public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+
+      # Downstream repositories pull packaging attached to this now-public
+      # release. Dispatch only after it is available to their unauthenticated
+      # workflows and their users.
+      - name: Tell downstream repositories a release exists
+        env:
+          PACKAGING_PUSH_TOKEN: ${{ secrets.PACKAGING_PUSH_TOKEN }}
+        run: |
+          if [ -z "$PACKAGING_PUSH_TOKEN" ]; then
+            echo "::notice::No PACKAGING_PUSH_TOKEN secret: the Homebrew tap and website pick this release up on their next scheduled sync, or run their 'Sync release' workflow."
+            exit 0
+          fi
+          for repo in Wizard-AIA/homebrew-wizard Wizard-AIA/website; do
+            curl -fsS -X POST -H "Authorization: Bearer $PACKAGING_PUSH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$repo/dispatches" -d "{\"event_type\":\"wizard-release\",\"client_payload\":{\"tag\":\"$RELEASE_TAG\"}}"
+          done
+
+  verify-live:
+    name: Verify public release ${{ matrix.target }}
+    needs: publish-live
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64, runner: ubuntu-latest }
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: windows-amd64, runner: windows-latest }
+    steps:
+      - name: Install from the public GitHub release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # lifts the anonymous API rate limit for `wizard update --check`
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/install.sh" | sh -s -- --version "${RELEASE_TAG#v}" --yes
+          if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
+          grep -q "$RELEASE_TAG" <<< "$($fresh 'wizard --version' 2>&1 || true)"
+          grep -q Usage <<< "$($fresh 'wizard --help' 2>&1 || true)"
+          $fresh 'wizard update --check'
+          $fresh 'wizard uninstall --yes'
+
+      - name: Install from the public GitHub release (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # lifts the anonymous API rate limit for `wizard update --check`
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Invoke-RestMethod "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/install.ps1"
+          & ([scriptblock]::Create($script)) -Version ($env:RELEASE_TAG.TrimStart('v')) -Yes
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          $v = powershell -NoProfile -Command 'wizard --version'
+          if ($v -notmatch [regex]::Escape($env:RELEASE_TAG)) { throw "reported '$v'" }
+          powershell -NoProfile -Command 'wizard update --check'
+          powershell -NoProfile -Command 'wizard uninstall --yes'
+
+      - name: Scoop install from the public manifest (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-RestMethod get.scoop.sh -OutFile install-scoop.ps1
+          .\install-scoop.ps1 -RunAsAdmin   # hosted runners are administrators; Scoop refuses that by default
+          $env:PATH += ";$env:USERPROFILE\scoop\shims"
+          Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/wizard.json" -OutFile wizard.json
+          scoop install .\wizard.json
+          $v = wizard --version
+          if ($v -notmatch [regex]::Escape($env:RELEASE_TAG)) { throw "reported '$v'" }
+          scoop uninstall wizard
 
   sbom:
-    needs: release
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write # anchore/sbom-action attaches the SBOM to the release it's run against
@@ -53,7 +567,7 @@ jobs:
           format: spdx-json
 
   push-images:
-    needs: release
+    needs: publish-live
     runs-on: ubuntu-latest
     permissions:
       contents: read

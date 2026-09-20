@@ -17,12 +17,11 @@ func RunDelete(env *Env, args []string) int {
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "Skip the deletion confirmation prompt.")
 	keepEnv := fs.Bool("keep-env", false, "Keep backend/.env in the checkout.")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseFlags(env, fs, args); done {
+		return code
 	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(env.Err, "wizard delete does not accept positional arguments")
-		return 2
+	if code, done := rejectArgs(env, "delete", fs.Args()); done {
+		return code
 	}
 
 	if !safeDeleteTarget(env.ConfigDir) {
@@ -49,19 +48,33 @@ func RunDelete(env *Env, args []string) int {
 	if code := RunStop(env, nil); code != 0 {
 		return code
 	}
-	if err := removeIfExists(env.ConfigDir); err != nil {
-		fmt.Fprintf(env.Err, "could not delete Wizard config %q: %v\n", env.ConfigDir, err)
+	if err := deleteUserData(env, *keepEnv); err != nil {
+		fmt.Fprintf(env.Err, "%v\n", err)
 		return 1
-	}
-	if !*keepEnv {
-		if err := removeIfExists(env.BackendEnvPath()); err != nil {
-			fmt.Fprintf(env.Err, "could not delete backend/.env: %v\n", err)
-			return 1
-		}
 	}
 
 	fmt.Fprintln(env.Out, "Wizard data deleted. The checkout and CLI remain installed.")
 	return 0
+}
+
+// deleteUserData removes the user-level config directory (credentials,
+// connections, skills, logs, the managed venv) and, unless keepEnv, the
+// checkout's backend/.env. It stops nothing and prints nothing: `wizard
+// delete` and `wizard uninstall --purge` each wrap it with their own prompts
+// and messages, and both rely on the safety check here.
+func deleteUserData(env *Env, keepEnv bool) error {
+	if !safeDeleteTarget(env.ConfigDir) {
+		return fmt.Errorf("refusing to delete unsafe Wizard config path %q", env.ConfigDir)
+	}
+	if err := removeIfExists(env.ConfigDir); err != nil {
+		return fmt.Errorf("could not delete Wizard config %q: %v", env.ConfigDir, err)
+	}
+	if !keepEnv {
+		if err := removeIfExists(env.BackendEnvPath()); err != nil {
+			return fmt.Errorf("could not delete backend/.env: %v", err)
+		}
+	}
+	return nil
 }
 
 func confirmDelete(in io.Reader) bool {
@@ -107,5 +120,61 @@ func safeDeleteTarget(path string) bool {
 			return false
 		}
 	}
-	return filepath.Dir(clean) != clean
+	if filepath.Dir(clean) == clean {
+		return false
+	}
+	// os.RemoveAll deliberately does not follow a symlink passed as its final
+	// argument, but the operating system resolves symlinked *parents* before
+	// RemoveAll sees the path. A user-controlled WIZARD_CONFIG_DIR such as
+	// /tmp/link/wizard must never allow deletion outside the intended tree.
+	return !hasSymlinkComponent(clean)
+}
+
+// hasSymlinkComponent reports whether an existing component of path is a
+// symlink. Missing suffixes are fine: config directories are created lazily.
+// An unreadable component is treated as unsafe because its type cannot be
+// established before a destructive operation.
+func hasSymlinkComponent(path string) bool {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	current := volume + string(filepath.Separator)
+	for _, component := range strings.Split(remainder, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			// macOS exposes its normal temporary directories through /var and
+			// /tmp symlinks into /private. These are OS-owned aliases, not a
+			// caller-controlled escape, and tests as well as real CI commonly
+			// receive paths through them. Every other symlinked parent is unsafe.
+			if isCanonicalSystemAlias(current) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func isCanonicalSystemAlias(path string) bool {
+	clean := filepath.Clean(path)
+	var expected string
+	switch clean {
+	case string(filepath.Separator) + "var":
+		expected = string(filepath.Separator) + "private" + string(filepath.Separator) + "var"
+	case string(filepath.Separator) + "tmp":
+		expected = string(filepath.Separator) + "private" + string(filepath.Separator) + "tmp"
+	default:
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	return err == nil && filepath.Clean(resolved) == expected
 }

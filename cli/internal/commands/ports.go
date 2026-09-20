@@ -70,3 +70,16 @@ func loadActivePorts(env *Env) (backend, frontend string) {
 	}
 	return firstNonEmpty(rec.Backend, DefaultBackendPort), firstNonEmpty(rec.Frontend, DefaultFrontendPort)
 }
+
+// recordedBackendPort is the backend port `wizard start` recorded in runDir,
+// else the WIZARD_BACKEND_PORT / default one. `wizard doctor` runs before an
+// Env exists, so it cannot go through loadActivePorts.
+func recordedBackendPort(runDir string) string {
+	if data, err := os.ReadFile(filepath.Join(runDir, "ports.json")); err == nil {
+		var rec portRecord
+		if json.Unmarshal(data, &rec) == nil && rec.Backend != "" {
+			return rec.Backend
+		}
+	}
+	return backendPort()
+}

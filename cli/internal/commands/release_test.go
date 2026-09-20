@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"wizard/internal/compat"
@@ -136,4 +138,69 @@ func releaseZip(t *testing.T, root string) []byte {
 		t.Fatal(err)
 	}
 	return data.Bytes()
+}
+
+// Every release through v1.0.12 published SHA256SUMS produced by
+// `sha256sum ./*.zip`, so each entry is "digest  ./name". The updater rejected
+// all of them, which made `wizard update` fail on every platform. This is the
+// real published line for v1.0.12.
+func TestChecksumForAssetAcceptsSha256sumDotSlashNames(t *testing.T) {
+	const digest = "3d1bee90b685e205476d515577fdb3d9b0a4fa0d5c6250223001f12d50678e47"
+	const asset = "Wizard-v1.0.12-darwin-arm64.zip"
+	for name, line := range map[string]string{
+		"dot-slash": digest + "  ./" + asset,
+		"plain":     digest + "  " + asset,
+		"binary":    digest + " *" + asset,
+	} {
+		got, err := checksumForAsset([]byte(line+"\n"), asset)
+		if err != nil || got != digest {
+			t.Errorf("%s form: got (%q, %v), want %q", name, got, err, digest)
+		}
+	}
+	if _, err := checksumForAsset([]byte(digest+"  ./other-"+asset+"\n"), asset); err == nil {
+		t.Error("a different asset name must not match")
+	}
+}
+
+func TestSetGitHubAuthOnlyTargetsGitHubsAPI(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token-not-real")
+	t.Setenv("GH_TOKEN", "")
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"https://api.github.com/repos/o/r/releases/latest", "Bearer test-token-not-real"},
+		{"https://github.com/o/r/releases/download/v1/x.zip", ""},
+		{"https://mirror.example.com/latest", ""},
+		{"http://api.github.com/repos/o/r/releases/latest", ""},
+	} {
+		req, _ := http.NewRequest(http.MethodGet, tc.url, nil)
+		setGitHubAuth(req)
+		if got := req.Header.Get("Authorization"); got != tc.want {
+			t.Errorf("%s: Authorization = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "gh-cli-token-not-real")
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/x", nil)
+	setGitHubAuth(req)
+	if got := req.Header.Get("Authorization"); got != "Bearer gh-cli-token-not-real" {
+		t.Errorf("GH_TOKEN fallback: Authorization = %q", got)
+	}
+}
+
+func TestFetchLatestReleaseExplainsAnonymousRateLimit(t *testing.T) {
+	originalURL, originalClient := releaseAPIURL, releaseHTTPClient
+	defer func() { releaseAPIURL, releaseHTTPClient = originalURL, originalClient }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+	}))
+	defer server.Close()
+	releaseAPIURL, releaseHTTPClient = server.URL, server.Client()
+	_, err := fetchLatestRelease(context.Background())
+	if err == nil || !errors.Is(err, errNetwork) || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+		t.Fatalf("want a network error that names GITHUB_TOKEN, got %v", err)
+	}
 }

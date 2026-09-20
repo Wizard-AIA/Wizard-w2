@@ -8,6 +8,7 @@ from pydantic import AfterValidator, BaseModel, Field
 from pydantic_core import PydanticCustomError
 
 from src.providers import PROVIDERS, exists as provider_exists
+from src.version import APP_VERSION
 
 
 def _known_provider(value: str) -> str:
@@ -41,7 +42,7 @@ class ErrorDetail(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
-    app_version: str = "1.0.12"
+    app_version: str = APP_VERSION
     sandbox_available: bool
     execution_backend: str = "inprocess"
     model_provider: str
@@ -50,7 +51,7 @@ class HealthResponse(BaseModel):
 class HealthDetailResponse(BaseModel):
     status: str = "ok"
     version: str
-    app_version: str = "1.0.12"
+    app_version: str = APP_VERSION
     sandbox_available: bool
     execution_backend: str = "inprocess"
     model_provider: str
@@ -62,7 +63,7 @@ class ServerConfig(BaseModel):
 
     app_name: str
     version: str
-    app_version: str = "1.0.12"
+    app_version: str = APP_VERSION
     plot_format: Literal["png", "html"]
     sandbox_available: bool
     sandbox_enabled: bool
