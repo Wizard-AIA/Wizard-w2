@@ -13,6 +13,7 @@ import (
 	"wizard/internal/daemon"
 	"wizard/internal/exitcode"
 	"wizard/internal/installkind"
+	"wizard/internal/relver"
 )
 
 func currentBuildVersion() string { return compat.BuildVersion }
@@ -28,6 +29,8 @@ func RunUpdate(env *Env, args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	checkOnly := fs.Bool("check", false, "Check GitHub Releases and report whether a newer Wizard is available.")
 	self := fs.Bool("self", false, "Update a managed release installation instead of a source checkout.")
+	channelFlag := fs.String("channel", "", "Release channel to follow: stable or pre-release. Remembered for later updates (see `wizard channel`).")
+	preRelease := fs.Bool("pre-release", false, "Shorthand for --channel pre-release.")
 	if code, done := parseFlags(env, fs, args); done {
 		return code
 	}
@@ -38,8 +41,22 @@ func RunUpdate(env *Env, args []string) int {
 		fmt.Fprintln(env.Err, "--check and --self cannot be used together")
 		return exitcode.Usage
 	}
+
+	choice, code, ok := requestedChannel(env, *channelFlag, *preRelease)
+	if !ok {
+		return code
+	}
+	channel, _, problem := resolveChannel(env)
+	if problem != nil {
+		fmt.Fprintf(env.Err, "warning: %v\n", problem)
+	}
+	explicit := choice != ""
+	if explicit {
+		channel = choice
+	}
+
 	if *checkOnly {
-		return runReleaseCheck(env)
+		return runReleaseCheck(env, channel, explicit)
 	}
 
 	exe, _ := executablePath()
@@ -48,15 +65,68 @@ func RunUpdate(env *Env, args []string) int {
 	if info.Kind.PackageManaged() {
 		fmt.Fprintf(env.Err, "Wizard was installed with %s, which owns its files, so it must upgrade them.\n\n  %s\n\n", info.Kind, info.Kind.UpgradeCommand())
 		fmt.Fprintln(env.Err, "Then run `wizard init` to rebuild the dependencies for the new version.")
+		if channel == ChannelPreRelease {
+			fmt.Fprintf(env.Err, "%s follows the stable channel only. To try pre-releases, install with the official installer (see https://wizardw2.vercel.app/docs/getting-started/installation).\n", info.Kind)
+		}
 		return exitcode.Environment
 	}
 	if *self {
-		return runReleaseUpdate(env)
+		return runReleaseUpdate(env, channel, explicit)
 	}
 	if info.Kind == installkind.Checkout || isGitCheckout(env.RepoRoot) {
+		if explicit {
+			fmt.Fprintln(env.Err, "Note: --channel applies to installed releases. This is a source checkout, which follows git; the channel was not changed.")
+		}
 		return runCheckoutUpdate(env)
 	}
-	return runReleaseUpdate(env)
+	return runReleaseUpdate(env, channel, explicit)
+}
+
+// requestedChannel reads --channel / --pre-release. choice is "" when neither
+// was given; ok is false (with the exit code) for an invalid or contradictory
+// request.
+func requestedChannel(env *Env, name string, preRelease bool) (choice Channel, code int, ok bool) {
+	if name != "" {
+		parsed, err := ParseChannel(name)
+		if err != nil {
+			fmt.Fprintln(env.Err, err)
+			return "", exitcode.Usage, false
+		}
+		choice = parsed
+	}
+	if preRelease {
+		if choice == ChannelStable {
+			fmt.Fprintln(env.Err, "--pre-release and --channel stable contradict each other")
+			return "", exitcode.Usage, false
+		}
+		choice = ChannelPreRelease
+	}
+	return choice, 0, true
+}
+
+// rememberChannel saves an explicitly requested channel once the release
+// service has answered, so a typo or an outage never flips a setting.
+func rememberChannel(env *Env, channel Channel) {
+	if current, source, _ := resolveChannel(env); source == sourceChosen && current == channel {
+		return
+	}
+	if err := saveChannel(env, channel); err != nil {
+		fmt.Fprintf(env.Err, "Could not remember the %s channel: %v\n", channel, err)
+		return
+	}
+	fmt.Fprintf(env.Out, "Update channel set to %s: %s.\n", channel, describeChannel(channel))
+}
+
+// upToDateMessage explains why there is nothing to install. On a pre-release
+// that is newer than everything on the channel it says so, instead of the
+// misleading "up to date".
+func upToDateMessage(current, latest string) string {
+	installed, ierr := relver.Parse(current)
+	published, perr := relver.Parse(latest)
+	if ierr == nil && perr == nil && relver.Compare(installed, published) > 0 {
+		return fmt.Sprintf("You are on %s, which is newer than the latest release on this channel (%s). Wizard will move on when a release passes it.", current, latest)
+	}
+	return "Wizard is up to date."
 }
 
 func isGitCheckout(root string) bool {
@@ -71,8 +141,8 @@ func networkCode(err error) int {
 	return exitcode.Failure
 }
 
-func runReleaseCheck(env *Env) int {
-	release, available, err := releaseCheck(context.Background())
+func runReleaseCheck(env *Env, channel Channel, explicit bool) int {
+	release, available, err := releaseCheck(context.Background(), channel)
 	if err != nil {
 		fmt.Fprintf(env.Err, "Could not check for a newer Wizard release: %v\n", err)
 		if errors.Is(err, errNetwork) {
@@ -81,11 +151,17 @@ func runReleaseCheck(env *Env) int {
 		return networkCode(err)
 	}
 	fmt.Fprintf(env.Out, "Installed wizard version: %s\n", currentBuildVersion())
+	fmt.Fprintf(env.Out, "Update channel: %s\n", channel)
 	fmt.Fprintf(env.Out, "Latest Wizard release: %s\n", release.TagName)
 	if available {
 		fmt.Fprintf(env.Out, "A new version is available. Run `wizard update` to install %s.\n", release.TagName)
 	} else {
-		fmt.Fprintln(env.Out, "Wizard is up to date.")
+		fmt.Fprintln(env.Out, upToDateMessage(currentBuildVersion(), release.TagName))
+	}
+	if explicit {
+		// A check only reads. Saying so keeps "--channel" from looking like it
+		// changed a setting it did not.
+		fmt.Fprintf(env.Out, "(--check does not save the channel. Run `wizard channel %s` to switch.)\n", channel)
 	}
 	return exitcode.OK
 }
@@ -146,20 +222,23 @@ func runCheckoutUpdate(env *Env) int {
 // runReleaseUpdate only activates artifacts that have completed all checks and
 // preparation in a private staging directory. It intentionally does not fall
 // back to an unchecked download when an older release lacks SHA256SUMS.
-func runReleaseUpdate(env *Env) int {
+func runReleaseUpdate(env *Env, channel Channel, explicit bool) int {
 	installRoot, err := managedInstallRoot(env.RepoRoot)
 	if err != nil {
 		fmt.Fprintf(env.Err, "This Wizard installation cannot update itself: %v\nInstall a release with the official installer, or extract a newer release archive manually.\n", err)
 		return exitcode.Environment
 	}
-	release, available, err := releaseCheck(context.Background())
+	release, available, err := releaseCheck(context.Background(), channel)
 	if err != nil {
 		fmt.Fprintf(env.Err, "Could not check for a newer Wizard release: %v\n", err)
 		return networkCode(err)
 	}
-	fmt.Fprintf(env.Out, "Installed wizard version: %s\nLatest Wizard release: %s\n", currentBuildVersion(), release.TagName)
+	if explicit {
+		rememberChannel(env, channel)
+	}
+	fmt.Fprintf(env.Out, "Installed wizard version: %s\nUpdate channel: %s\nLatest Wizard release: %s\n", currentBuildVersion(), channel, release.TagName)
 	if !available {
-		fmt.Fprintln(env.Out, "Wizard is up to date.")
+		fmt.Fprintln(env.Out, upToDateMessage(currentBuildVersion(), release.TagName))
 		return exitcode.OK
 	}
 	fmt.Fprintf(env.Out, "A new version is available: %s\n", release.TagName)
