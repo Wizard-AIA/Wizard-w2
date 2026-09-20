@@ -5,39 +5,24 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"wizard/internal/commands"
-	"wizard/internal/compat"
+	"wizard/internal/exitcode"
+	"wizard/internal/repo"
 )
-
-const usage = `wizard - manage the Wizard backend and frontend as a background service
-
-Usage:
-  wizard init     Configure setup, check prerequisites, and install dependencies.
-  wizard start    Launch the backend and frontend in the background.
-  wizard stop     Stop them.
-  wizard delete   Stop Wizard and delete its user-level data and configuration.
-  wizard status   Show what's running (alias: doctor).
-  wizard doctor   Same as status.
-  wizard attach   Follow the backend/frontend logs live.
-  wizard logs     Print log file paths (add --tail N for recent lines).
-  wizard update   Update a checkout, or a release install; add --check to only check.
-  wizard skills   Install and manage skills (add/list/update/discard/remove/token).
-  wizard version  Print this binary's version and compat marker.
-
-Run from inside a Wizard checkout (or any subdirectory of one).
-`
 
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	args = consumeGlobalFlags(args)
 	if len(args) == 0 {
-		fmt.Print(usage)
-		return 0
+		commands.PrintHelp(os.Stdout)
+		return exitcode.OK
 	}
 
 	cmd, rest := args[0], args[1:]
@@ -48,19 +33,49 @@ func run(args []string) int {
 	}
 
 	switch cmd {
-	case "-h", "--help", "help":
-		fmt.Print(usage)
-		return 0
+	case "-h", "--help":
+		commands.PrintHelp(os.Stdout)
+		return exitcode.OK
+	case "help":
+		if len(rest) == 0 {
+			commands.PrintHelp(os.Stdout)
+			return exitcode.OK
+		}
+		// `wizard help init` is `wizard init --help`.
+		return run(append([]string{rest[0], "--help"}, rest[1:]...))
 	case "-v", "--version", "version":
-		fmt.Printf("wizard CLI %s, backend API compat v%s\n", compat.BuildVersion, compat.CompatAPIVersion)
-		return 0
+		commands.PrintVersion(os.Stdout)
+		return exitcode.OK
+	case "doctor":
+		// Runs without a checkout: diagnosing a missing one is its job.
+		return commands.RunDoctor(os.Stdout, os.Stderr, rest)
+	}
+
+	if !isKnown(cmd) {
+		fmt.Fprintf(os.Stderr, "wizard: unknown command %q", cmd)
+		if s := commands.SuggestCommand(cmd); s != "" {
+			fmt.Fprintf(os.Stderr, "; did you mean %q?", s)
+		}
+		fmt.Fprintln(os.Stderr, "\nRun `wizard --help` to see the commands.")
+		return exitcode.Usage
+	}
+
+	// `wizard <command> --help` must work even when the bundled files cannot
+	// be found; the command's own flag set prints the usage. `skills` forwards
+	// its arguments to the backend, which answers its own --help.
+	if cmd != "skills" && cmd != "__supervise" && commands.WantsHelp(rest) {
+		return runWithEnv(commands.HelpEnv(os.Stdout, os.Stderr), cmd, rest)
 	}
 
 	env, err := commands.NewEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return 1
+		return reportEnvError(err)
 	}
+	return runWithEnv(env, cmd, rest)
+}
+
+// runWithEnv dispatches an already-vetted command.
+func runWithEnv(env *commands.Env, cmd string, rest []string) int {
 
 	switch cmd {
 	case "init":
@@ -71,7 +86,9 @@ func run(args []string) int {
 		return commands.RunStop(env, rest)
 	case "delete":
 		return commands.RunDelete(env, rest)
-	case "status", "doctor":
+	case "uninstall":
+		return commands.RunUninstall(env, rest)
+	case "status":
 		return commands.RunStatus(env, rest)
 	case "attach":
 		return commands.RunAttach(env, rest)
@@ -85,9 +102,58 @@ func run(args []string) int {
 		// Hidden: only `wizard start` invokes this, as a detached child of
 		// itself. Not part of the documented interface -- see supervise.go.
 		return commands.RunSupervise(env)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
-		fmt.Fprint(os.Stderr, usage)
-		return 2
 	}
+	return exitcode.Failure // unreachable: isKnown vetted cmd
+}
+
+// isKnown reports whether cmd is dispatched below (documented commands plus
+// the hidden supervisor entry point).
+func isKnown(cmd string) bool {
+	if cmd == "__supervise" {
+		return true
+	}
+	for _, c := range commands.Commands {
+		if c.Name == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// consumeGlobalFlags strips leading --no-color and --verbose. They are only
+// recognised before the command so they can never collide with a flag a
+// subcommand (or the skills backend it forwards to) defines itself.
+func consumeGlobalFlags(args []string) []string {
+	for len(args) > 0 {
+		switch args[0] {
+		case "--no-color":
+			os.Setenv("WIZARD_NO_COLOR", "1")
+		case "--verbose":
+			os.Setenv("WIZARD_VERBOSE", "1")
+		default:
+			return args
+		}
+		args = args[1:]
+	}
+	return args
+}
+
+// reportEnvError turns "could not set up the environment" into an actionable
+// message rather than a bare error, and the environment exit code.
+func reportEnvError(err error) int {
+	if errors.Is(err, repo.ErrNotFound) {
+		fmt.Fprintln(os.Stderr, "Wizard could not find its files (the backend/ and frontend/ directories).")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  - Installed with the installer or a package manager? Open a new terminal and retry;")
+		fmt.Fprintln(os.Stderr, "    if it persists, reinstall Wizard.")
+		fmt.Fprintln(os.Stderr, "  - Running from a source checkout? cd into it, or set WIZARD_ROOT to its path.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Then run: wizard doctor")
+		if os.Getenv("WIZARD_VERBOSE") != "" {
+			fmt.Fprintf(os.Stderr, "\ndetail: %v\n", err)
+		}
+		return exitcode.Environment
+	}
+	fmt.Fprintf(os.Stderr, "Wizard could not prepare its environment: %v\n\nRun: wizard doctor\n", err)
+	return exitcode.Environment
 }

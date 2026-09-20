@@ -22,6 +22,9 @@ import (
 // the rest already live there (backend/src/api/routes/meta.py); this reuses
 // that rather than re-deriving any of it.
 func RunStatus(env *Env, args []string) int {
+	if code, done := noFlags(env, "status", args); done {
+		return code
+	}
 	fmt.Fprintln(env.Out, "wizard status")
 	fmt.Fprintln(env.Out, "==============")
 

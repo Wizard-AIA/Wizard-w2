@@ -9,6 +9,7 @@ import (
 
 	"wizard/internal/compat"
 	"wizard/internal/daemon"
+	"wizard/internal/exitcode"
 	"wizard/internal/healthcheck"
 )
 
@@ -23,14 +24,33 @@ func RunStart(env *Env, args []string) int {
 	frontendPortFlag := fs.String("frontend-port", "", "Override the frontend port (default 3000).")
 	noBrowser := fs.Bool("no-browser", false, "Do not open a browser once healthy.")
 	timeoutSeconds := fs.Int("timeout", 90, "Seconds to wait for the backend to become healthy.")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseFlags(env, fs, args); done {
+		return code
+	}
+	if code, done := rejectArgs(env, "start", fs.Args()); done {
+		return code
+	}
+	for name, value := range map[string]string{"--backend-port": *backendPortFlag, "--frontend-port": *frontendPortFlag} {
+		if value != "" && !validPort(value) {
+			fmt.Fprintf(env.Err, "invalid %s %q: must be a port number from 1 to 65535\n", name, value)
+			return exitcode.Usage
+		}
+	}
+	if *timeoutSeconds < 1 {
+		fmt.Fprintf(env.Err, "invalid --timeout %d: must be at least 1 second\n", *timeoutSeconds)
+		return exitcode.Usage
 	}
 
 	if pid, alive := daemon.LiveAt(env.DaemonPIDPath()); alive {
 		fmt.Fprintf(env.Err, "wizard is already running (daemon pid %d). Use `wizard status` or `wizard stop`.\n", pid)
 		return 1
 	}
+
+	// A tool installed by `wizard init` may live outside the PATH this shell
+	// was started with (a keg-only Homebrew formula, a user-level pnpm). Extend
+	// PATH here so the detached supervisor, which inherits this environment,
+	// can start `node`.
+	refreshToolPath()
 
 	if !env.VenvExists() {
 		fmt.Fprintln(env.Err, "No Python environment found. Run `wizard init` first.")

@@ -75,6 +75,18 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 			best, haveBest = c, true
 		}
 	}
+	// Last resort: ask uv, which knows about its own managed interpreters and
+	// any system one that satisfies the minimum. This is how a Python that
+	// `wizard init` provisioned through uv is found again.
+	for _, path := range uvPythonCandidates(minMajor, minMinor) {
+		c := checkPythonCandidate(path, path, minMajor, minMinor, "--version")
+		if c.OK {
+			return c
+		}
+		if !haveBest {
+			best, haveBest = c, true
+		}
+	}
 	if runtime.GOOS == "windows" {
 		// The Windows Store App Execution Alias can occupy python3.exe while
 		// the real interpreter is available through the Python launcher. Try
@@ -96,6 +108,26 @@ func CheckPython(minMajor, minMinor int) ToolCheck {
 		return best
 	}
 	return ToolCheck{Name: "Python", Found: false, MinMajor: minMajor, MinMinor: minMinor, InstallHint: pythonInstallHint()}
+}
+
+// uvPythonCandidates returns interpreters uv reports for ">=min". It is
+// empty when uv is not installed or reports nothing.
+func uvPythonCandidates(minMajor, minMinor int) []string {
+	if _, err := exec.LookPath("uv"); err != nil {
+		return nil
+	}
+	out, err := runCommandOutputErr("uv", "python", "find", fmt.Sprintf(">=%d.%d", minMajor, minMinor))
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if filepath.IsAbs(line) {
+			paths = append(paths, line)
+		}
+	}
+	return paths
 }
 
 // versionedPythonCandidates finds interpreters such as python3.14 when a
@@ -261,25 +293,30 @@ func finishCheck(c ToolCheck, parsed [2]int, version string, minMajor, minMinor 
 	return c
 }
 
+// The install hints name a package, never a version: the requirement is a
+// minimum (Python 3.12+, Node 20+), so whatever the package manager currently
+// ships is right, and newer releases are fine.
+
 func pythonInstallHint() string {
+	minimum := fmt.Sprintf("Python %d.%d or newer", minPythonMajor, minPythonMinor)
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install Python.Python.3.12  (or download from https://python.org)"
+		return "uv python install  (needs uv; " + minimum + " from https://python.org also works)"
 	case "darwin":
-		return "brew install python@3.12"
+		return "brew install python  (or: uv python install; " + minimum + " is enough)"
 	default:
-		return "sudo apt install python3.12  (or your distribution's equivalent)"
+		return "uv python install  (or your distribution's python3 package; " + minimum + " is enough)"
 	}
 }
 
 func nodeInstallHint() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install OpenJS.NodeJS.LTS"
+		return "winget install OpenJS.NodeJS.LTS  (Node " + fmt.Sprint(minNodeMajor) + " or newer)"
 	case "darwin":
-		return "brew install node@20"
+		return "brew install node  (Node " + fmt.Sprint(minNodeMajor) + " or newer)"
 	default:
-		return "use your distribution's Node 20+ package, or https://nodejs.org"
+		return fmt.Sprintf("install Node %d or newer: your distribution's nodejs package if it is new enough, otherwise https://nodejs.org/en/download or a version manager such as fnm or nvm", minNodeMajor)
 	}
 }
 
@@ -297,10 +334,10 @@ func uvInstallHint() string {
 func pnpmInstallHint() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "winget install pnpm.pnpm  (or: corepack enable && corepack prepare pnpm@latest --activate)"
+		return "winget install pnpm.pnpm  (or: corepack enable)"
 	case "darwin":
 		return "brew install pnpm"
 	default:
-		return "corepack enable && corepack prepare pnpm@latest --activate"
+		return "curl -fsSL https://get.pnpm.io/install.sh | sh -  (or: corepack enable, where corepack is installed)"
 	}
 }

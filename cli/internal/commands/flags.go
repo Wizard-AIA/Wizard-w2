@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"strconv"
 
 	"wizard/internal/exitcode"
@@ -42,6 +43,33 @@ func rejectArgs(env *Env, name string, args []string) (code int, done bool) {
 	}
 	fmt.Fprintf(env.Err, "wizard %s does not accept arguments (got %q). See `wizard %s --help`.\n", name, args[0], name)
 	return exitcode.Usage, true
+}
+
+// noFlags handles a command that takes neither flags nor arguments: --help
+// exits 0, anything else unexpected is a usage error.
+func noFlags(env *Env, name string, args []string) (code int, done bool) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	if code, done := parseFlags(env, fs, args); done {
+		return code, true
+	}
+	return rejectArgs(env, name, fs.Args())
+}
+
+// HelpEnv is the minimal Env for printing a subcommand's --help before the
+// real environment (which needs the bundled checkout) can be resolved.
+func HelpEnv(out, errw io.Writer) *Env { return &Env{Out: out, Err: errw} }
+
+// WantsHelp reports whether args ask for a subcommand's help.
+func WantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 // validPort reports whether s is a TCP port number in 1..65535.

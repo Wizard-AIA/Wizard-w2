@@ -136,7 +136,8 @@ func (p *Printer) Section(title string) {
 	if !p.T.Unicode {
 		rule = "-"
 	}
-	fmt.Fprintf(p.W, "\n%s\n%s\n", p.Bold(title), p.Dim(strings.Repeat(rule, min(utf8.RuneCountInString(title)+2, p.T.Width))))
+	// One rule width for every section keeps the page aligned.
+	fmt.Fprintf(p.W, "\n%s\n%s\n", p.Bold(title), p.Dim(strings.Repeat(rule, min(64, p.T.Width))))
 }
 
 // Step prints "[n/total] message" for a multi-step operation.

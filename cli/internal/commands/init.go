@@ -40,8 +40,11 @@ func RunInit(env *Env, args []string) int {
 	geminiKey := fs.String("gemini-key", "", "Write GEMINI_API_KEY into backend/.env.")
 	gatewayURL := fs.String("gateway-url", "", "Write GATEWAY_API_URL into backend/.env (custom_gateway provider).")
 	gatewayKey := fs.String("gateway-key", "", "Write GATEWAY_API_KEY into backend/.env (custom_gateway provider).")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseFlags(env, fs, args); done {
+		return code
+	}
+	if code, done := rejectArgs(env, "init", fs.Args()); done {
+		return code
 	}
 	explicit := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })

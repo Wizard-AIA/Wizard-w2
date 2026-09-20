@@ -71,21 +71,55 @@ func installMissingPrerequisites(env *Env, checks []ToolCheck) error {
 	}
 }
 
+// What init installs when a prerequisite is MISSING.
+//
+//  1. The host's own tools always win: anything at or above the minimum
+//     passes the check and is used as is, so a machine with Python 3.14 or
+//     Node 26 installs nothing.
+//  2. The minimum is a floor, not a target. When something is missing, init
+//     installs the current release (unversioned, and therefore linked onto
+//     PATH), because newer is fine as long as Wizard keeps working; a full
+//     init, start and analysis has been verified on Python 3.14 and Node 26.
+//  3. Only if the current release cannot be installed does init fall back to the
+//     minimum-version package, derived from the same constants the checks use so
+//     the two cannot drift.
+var (
+	pythonMinimum = fmt.Sprintf("%d.%d", minPythonMajor, minPythonMinor)
+	// nodeMinimumFormula is versioned, hence keg-only on Homebrew: its bin
+	// directory is added to PATH by platformToolPaths, and RunStart refreshes
+	// PATH so the service finds it too.
+	nodeMinimumFormula = fmt.Sprintf("node@%d", minNodeMajor)
+	// wingetPythonFallback is used only if `uv python install` fails; winget has
+	// no unversioned Python id.
+	wingetPythonFallback = "Python.Python." + pythonMinimum
+
+	// wingetPackages, in install order (uv first: it provisions Python).
+	wingetPackages = []struct{ name, id string }{
+		{"uv", "astral-sh.uv"},
+		{"Node.js", "OpenJS.NodeJS.LTS"},
+		{"pnpm", "pnpm.pnpm"},
+		{"Ollama", "Ollama.Ollama"},
+	}
+	// brewFormulae lists each tool's candidates, current release first; the
+	// first that installs wins.
+	brewFormulae = []struct {
+		name     string
+		formulae []string
+	}{
+		{"Python", []string{"python", "python@" + pythonMinimum}},
+		{"Node.js", []string{"node", nodeMinimumFormula}},
+		{"uv", []string{"uv"}},
+		{"pnpm", []string{"pnpm"}},
+		{"Ollama", []string{"ollama"}},
+	}
+)
+
 func installWindowsPrerequisites(env *Env, need map[string]bool) error {
 	if _, err := exec.LookPath("winget"); err != nil {
 		return fmt.Errorf("winget is not installed; install App Installer from the Microsoft Store, then re-run `wizard init`")
 	}
-	packages := []struct {
-		name string
-		id   string
-	}{
-		{"Python", "Python.Python.3.12"},
-		{"Node.js", "OpenJS.NodeJS.LTS"},
-		{"uv", "astral-sh.uv"},
-		{"pnpm", "pnpm.pnpm"},
-		{"Ollama", "Ollama.Ollama"},
-	}
-	for _, pkg := range packages {
+	installPythonAfterUV := need["Python"]
+	for _, pkg := range wingetPackages {
 		if !need[pkg.name] {
 			continue
 		}
@@ -99,6 +133,33 @@ func installWindowsPrerequisites(env *Env, need map[string]bool) error {
 		}
 	}
 	refreshToolPath()
+	if installPythonAfterUV {
+		if err := installPythonWithUV(env); err != nil {
+			fmt.Fprintf(env.Out, "%v\nFalling back to the minimum supported Python through winget.\n", err)
+			args := []string{"install", "--id", wingetPythonFallback, "--exact", "--source", "winget",
+				"--accept-source-agreements", "--accept-package-agreements"}
+			if werr := runStreamed(env, env.RepoRoot, "winget", args); werr != nil {
+				return fmt.Errorf("installing Python through winget failed: %w", werr)
+			}
+			refreshToolPath()
+		}
+	}
+	return nil
+}
+
+// installPythonWithUV provisions Python through uv, which picks the newest
+// stable release. Unlike a distribution package it needs no root, no
+// version-specific package name (Debian 12 and Ubuntu 22.04 have no
+// python3.12), and it leaves the system Python alone. CheckPython finds the
+// result through `uv python find`.
+func installPythonWithUV(env *Env) error {
+	if _, err := exec.LookPath("uv"); err != nil {
+		return fmt.Errorf("uv is required to provision Python but was not found on PATH; install uv first (%s)", uvInstallHint())
+	}
+	fmt.Fprintf(env.Out, "\nInstalling Python with uv (any %d.%d or newer is accepted; uv picks the newest stable)...\n", minPythonMajor, minPythonMinor)
+	if err := runStreamed(env, env.RepoRoot, "uv", []string{"python", "install"}); err != nil {
+		return fmt.Errorf("installing Python through uv failed: %w", err)
+	}
 	return nil
 }
 
@@ -106,23 +167,27 @@ func installBrewPrerequisites(env *Env, need map[string]bool) error {
 	if _, err := exec.LookPath("brew"); err != nil {
 		return fmt.Errorf("Homebrew is not installed; install it from https://brew.sh, then re-run `wizard init`")
 	}
-	packages := []struct {
-		name    string
-		formula string
-	}{
-		{"Python", "python@3.12"},
-		{"Node.js", "node@20"},
-		{"uv", "uv"},
-		{"pnpm", "pnpm"},
-		{"Ollama", "ollama"},
-	}
-	for _, pkg := range packages {
+	// The current (unversioned, linked) formula goes first. Versioned formulae
+	// such as node@20 are keg-only -- `node` never reaches PATH, which is why the
+	// old `brew install node@20` left init failing its own recheck -- and are
+	// deprecated on a schedule (node@20 is disabled on 2026-10-28), so they are
+	// only the fallback.
+	for _, pkg := range brewFormulae {
 		if !need[pkg.name] {
 			continue
 		}
-		fmt.Fprintf(env.Out, "\nInstalling %s through Homebrew...\n", pkg.name)
-		if err := runStreamed(env, env.RepoRoot, "brew", []string{"install", pkg.formula}); err != nil {
-			return fmt.Errorf("installing %s through Homebrew failed: %w", pkg.name, err)
+		var lastErr error
+		for i, formula := range pkg.formulae {
+			fmt.Fprintf(env.Out, "\nInstalling %s through Homebrew (%s)...\n", pkg.name, formula)
+			if lastErr = runStreamed(env, env.RepoRoot, "brew", []string{"install", formula}); lastErr == nil {
+				break
+			}
+			if i+1 < len(pkg.formulae) {
+				fmt.Fprintf(env.Out, "brew install %s failed; trying %s.\n", formula, pkg.formulae[i+1])
+			}
+		}
+		if lastErr != nil {
+			return fmt.Errorf("installing %s through Homebrew failed: %w", pkg.name, lastErr)
 		}
 	}
 	refreshToolPath()
@@ -138,27 +203,56 @@ func installLinuxPrerequisites(env *Env, need map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	if need["Python"] || need["Node.js"] || need["pnpm"] {
-		if err := installLinuxSystemPackages(env, packageManager, need); err != nil {
-			return err
-		}
-	}
+	// uv first: it provisions Python, so no distribution Python package (and
+	// no version-specific package name) is ever needed.
 	if need["uv"] {
 		fmt.Fprintln(env.Out, "\nInstalling uv with the official installer...")
 		if err := runStreamed(env, env.RepoRoot, "sh", []string{"-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"}); err != nil {
 			return fmt.Errorf("installing uv failed: %w", err)
 		}
+		refreshToolPath()
+	}
+	if need["Python"] {
+		if err := installPythonWithUV(env); err != nil {
+			return err
+		}
+	}
+	// Node comes from the distribution; npm is only pulled in for pnpm below.
+	if need["Node.js"] || need["pnpm"] {
+		if err := installLinuxSystemPackages(env, packageManager, need); err != nil {
+			return err
+		}
 	}
 	if need["pnpm"] {
-		fmt.Fprintln(env.Out, "\nActivating pnpm through Corepack...")
-		if err := runStreamed(env, env.RepoRoot, "corepack", []string{"enable"}); err != nil {
-			return fmt.Errorf("enabling Corepack failed: %w", err)
-		}
-		if err := runStreamed(env, env.RepoRoot, "corepack", []string{"prepare", "pnpm@latest", "--activate"}); err != nil {
-			return fmt.Errorf("activating pnpm failed: %w", err)
+		if err := installPnpmUserLevel(env); err != nil {
+			return err
 		}
 	}
 	refreshToolPath()
+	return nil
+}
+
+// installPnpmUserLevel gets pnpm without root. Corepack is the lightest route
+// but is absent from some distributions' nodejs packages (Debian, Ubuntu) and
+// `corepack enable` writes into Node's own directory, which a normal user
+// cannot; pnpm's official standalone installer needs neither.
+func installPnpmUserLevel(env *Env) error {
+	if _, err := exec.LookPath("corepack"); err == nil {
+		fmt.Fprintln(env.Out, "\nActivating pnpm through Corepack...")
+		home, _ := os.UserHomeDir()
+		bin := filepath.Join(home, ".local", "bin")
+		if err := os.MkdirAll(bin, 0o755); err == nil {
+			// --install-directory keeps the shims out of Node's root-owned prefix.
+			if runStreamed(env, env.RepoRoot, "corepack", []string{"enable", "--install-directory", bin, "pnpm"}) == nil {
+				return nil
+			}
+		}
+		fmt.Fprintln(env.Out, "Corepack could not activate pnpm; using pnpm's standalone installer instead.")
+	}
+	fmt.Fprintln(env.Out, "\nInstalling pnpm with its official installer...")
+	if err := runStreamed(env, env.RepoRoot, "sh", []string{"-c", "curl -fsSL https://get.pnpm.io/install.sh | sh -"}); err != nil {
+		return fmt.Errorf("installing pnpm failed: %w", err)
+	}
 	return nil
 }
 
@@ -171,34 +265,25 @@ func linuxPackageManager() (string, error) {
 	return "", fmt.Errorf("no supported Linux package manager found (apt-get, dnf, pacman, or apk); use the install commands printed above")
 }
 
+// installLinuxSystemPackages installs Node.js (and npm, which pnpm needs) from
+// the distribution. Python is deliberately absent: installPythonWithUV covers
+// it for every distribution, at whichever version is current.
 func installLinuxSystemPackages(env *Env, manager string, need map[string]bool) error {
 	var packages []string
 	switch manager {
 	case "apt-get":
-		if need["Python"] {
-			packages = append(packages, "python3.12", "python3.12-venv")
-		}
 		if need["Node.js"] || need["pnpm"] {
 			packages = append(packages, "nodejs", "npm")
 		}
 	case "dnf":
-		if need["Python"] {
-			packages = append(packages, "python3.12")
-		}
 		if need["Node.js"] || need["pnpm"] {
 			packages = append(packages, "nodejs", "npm")
 		}
 	case "pacman":
-		if need["Python"] {
-			packages = append(packages, "python")
-		}
 		if need["Node.js"] || need["pnpm"] {
 			packages = append(packages, "nodejs", "npm")
 		}
 	case "apk":
-		if need["Python"] {
-			packages = append(packages, "python3")
-		}
 		if need["Node.js"] || need["pnpm"] {
 			packages = append(packages, "nodejs", "npm")
 		}

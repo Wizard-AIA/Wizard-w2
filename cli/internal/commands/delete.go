@@ -17,12 +17,11 @@ func RunDelete(env *Env, args []string) int {
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "Skip the deletion confirmation prompt.")
 	keepEnv := fs.Bool("keep-env", false, "Keep backend/.env in the checkout.")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseFlags(env, fs, args); done {
+		return code
 	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(env.Err, "wizard delete does not accept positional arguments")
-		return 2
+	if code, done := rejectArgs(env, "delete", fs.Args()); done {
+		return code
 	}
 
 	if !safeDeleteTarget(env.ConfigDir) {
@@ -49,19 +48,33 @@ func RunDelete(env *Env, args []string) int {
 	if code := RunStop(env, nil); code != 0 {
 		return code
 	}
-	if err := removeIfExists(env.ConfigDir); err != nil {
-		fmt.Fprintf(env.Err, "could not delete Wizard config %q: %v\n", env.ConfigDir, err)
+	if err := deleteUserData(env, *keepEnv); err != nil {
+		fmt.Fprintf(env.Err, "%v\n", err)
 		return 1
-	}
-	if !*keepEnv {
-		if err := removeIfExists(env.BackendEnvPath()); err != nil {
-			fmt.Fprintf(env.Err, "could not delete backend/.env: %v\n", err)
-			return 1
-		}
 	}
 
 	fmt.Fprintln(env.Out, "Wizard data deleted. The checkout and CLI remain installed.")
 	return 0
+}
+
+// deleteUserData removes the user-level config directory (credentials,
+// connections, skills, logs, the managed venv) and, unless keepEnv, the
+// checkout's backend/.env. It stops nothing and prints nothing: `wizard
+// delete` and `wizard uninstall --purge` each wrap it with their own prompts
+// and messages, and both rely on the safety check here.
+func deleteUserData(env *Env, keepEnv bool) error {
+	if !safeDeleteTarget(env.ConfigDir) {
+		return fmt.Errorf("refusing to delete unsafe Wizard config path %q", env.ConfigDir)
+	}
+	if err := removeIfExists(env.ConfigDir); err != nil {
+		return fmt.Errorf("could not delete Wizard config %q: %v", env.ConfigDir, err)
+	}
+	if !keepEnv {
+		if err := removeIfExists(env.BackendEnvPath()); err != nil {
+			return fmt.Errorf("could not delete backend/.env: %v", err)
+		}
+	}
+	return nil
 }
 
 func confirmDelete(in io.Reader) bool {

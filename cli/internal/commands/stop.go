@@ -12,6 +12,9 @@ import (
 // daemon is success, not an error, the same way `docker compose down` on an
 // already-down stack is.
 func RunStop(env *Env, args []string) int {
+	if code, done := noFlags(env, "stop", args); done {
+		return code
+	}
 	_, alive := daemon.LiveAt(env.DaemonPIDPath())
 	if !alive {
 		// A previous run may have left the stop sentinel or stale pid files

@@ -15,6 +15,9 @@ import (
 // backend.log and frontend.log together, source-prefixed, until Ctrl+C.
 // Read-only -- it does not touch the daemon, only watches its logs.
 func RunAttach(env *Env, args []string) int {
+	if code, done := noFlags(env, "attach", args); done {
+		return code
+	}
 	RunStatus(env, nil)
 	_, _ = fmt.Fprintln(env.Out, "\n--- following backend.log and frontend.log (Ctrl+C to stop) ---")
 

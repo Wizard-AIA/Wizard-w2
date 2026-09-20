@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"wizard/internal/exitcode"
 )
 
 // RunLogs implements `wizard logs`: the one-shot sibling of `wizard attach`.
@@ -14,8 +16,15 @@ import (
 func RunLogs(env *Env, args []string) int {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	tail := fs.Int("tail", 0, "Also print the last N lines of each log.")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, done := parseFlags(env, fs, args); done {
+		return code
+	}
+	if code, done := rejectArgs(env, "logs", fs.Args()); done {
+		return code
+	}
+	if *tail < 0 {
+		fmt.Fprintf(env.Err, "invalid --tail %d: must be zero or more\n", *tail)
+		return exitcode.Usage
 	}
 
 	logs := []struct {
