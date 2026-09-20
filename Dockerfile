@@ -32,6 +32,7 @@ COPY --from=uv /uv /usr/local/bin/uv
 COPY requirements.lock.txt .
 RUN uv pip install --system --no-cache --compile-bytecode --require-hashes -r requirements.lock.txt
 
+COPY VERSION /app/VERSION
 COPY backend/ .
 
 # Present for deployments that do NOT mount the Docker socket. docker-compose

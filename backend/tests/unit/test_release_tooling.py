@@ -114,7 +114,11 @@ class TestRendering:
         assert "on_macos do" in formula and "on_linux do" in formula
         assert formula.count("on_arm do") == 2 and formula.count("on_intel do") == 2
         assert "Hardware::CPU" not in formula  # the style Homebrew's linter rejects
-        assert 'libexec.install Dir["*"]' in formula
+        # Release ZIPs have one versioned top-level directory. Installing that
+        # directory itself makes bin/wizard point at a nonexistent
+        # libexec/cli/wizard, which was the macOS Homebrew failure.
+        assert 'package_dir = Dir["*"].find' in formula
+        assert 'libexec.install Dir[File.join(package_dir, "*")]' in formula
         assert 'bin.install_symlink libexec/"cli/wizard"' in formula
         assert "windows" not in formula  # no Homebrew target for Windows
 

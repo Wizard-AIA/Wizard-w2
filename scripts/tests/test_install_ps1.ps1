@@ -176,11 +176,15 @@ try {
 `$env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:1'
 `$env:WIZARD_VERSION = '9.9.9'
 `$env:WIZARD_INSTALL_DIR = '$((New-Case).Replace("'", "''"))'
+`$ErrorActionPreference = 'SilentlyContinue'
+`$ProgressPreference = 'Continue'
 Invoke-Expression (Get-Content -LiteralPath '$($installer.Replace("'", "''"))' -Raw)
 Write-Output 'HOST-STILL-ALIVE'
+Write-Output "PREFERENCES=`$ErrorActionPreference/`$ProgressPreference"
 "@
     $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $tmpScript 2>&1 | Out-String
     Assert-True ($out -match 'HOST-STILL-ALIVE') 'a failing install under Invoke-Expression does not exit the host' $out
+    Assert-True ($out -match 'PREFERENCES=SilentlyContinue/Continue') 'Invoke-Expression restores the caller preference variables' $out
 }
 finally {
     if ($origPath -ne $null) { $envKey.SetValue('Path', $origPath, $(if ($origKind) { $origKind } else { [Microsoft.Win32.RegistryValueKind]::ExpandString })) } else { $envKey.DeleteValue('Path', $false) }

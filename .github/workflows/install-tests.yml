@@ -117,6 +117,11 @@ jobs:
           go build -trimpath -buildvcs=false -ldflags "-X wizard/internal/compat.BuildVersion=v9.9.9" -o "$env:RUNNER_TEMP\wizard.exe" ./cmd/wizard
           "WIZARD_TEST_EXE=$env:RUNNER_TEMP\wizard.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # `shell:` is evaluated before the matrix context exists. Run the test
+      # under the selected host explicitly so both Windows PowerShell 5.1 and
+      # PowerShell 7 exercise the same installer suite.
       - name: Run the suite under ${{ matrix.shell }}
-        shell: ${{ matrix.shell }}
-        run: .\scripts\tests\test_install_ps1.ps1
+        shell: pwsh
+        run: |
+          & ${{ matrix.shell }} -NoProfile -ExecutionPolicy Bypass -File .\scripts\tests\test_install_ps1.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

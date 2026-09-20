@@ -3,11 +3,13 @@
 package commands
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -81,15 +83,27 @@ func inUse(err error) bool {
 }
 
 // scheduleSelfCleanup removes what is left once this process has exited: a
-// running .exe cannot delete itself, so a detached cmd.exe waits a few seconds
-// and removes the install root. CmdLine is set directly because Go's argument
-// quoting would backslash-escape the quotes and cmd.exe does not understand that.
+// running .exe cannot delete itself. Use a UTF-16LE encoded PowerShell command
+// rather than interpolating an install path into cmd.exe syntax; Windows paths
+// can legally contain cmd metacharacters such as &, which must never become
+// executable text in an uninstall operation.
 func scheduleSelfCleanup(installRoot string) {
-	cmd := exec.Command("cmd.exe")
+	quotedRoot := strings.ReplaceAll(installRoot, "'", "''")
+	script := fmt.Sprintf("Start-Sleep -Seconds 3; Remove-Item -LiteralPath '%s' -Recurse -Force -ErrorAction SilentlyContinue", quotedRoot)
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encodePowerShellCommand(script))
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CmdLine:       fmt.Sprintf(`cmd.exe /d /c ping -n 4 127.0.0.1 >nul & rmdir /s /q "%s"`, installRoot),
 		HideWindow:    true,
 		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS,
 	}
 	_ = cmd.Start()
+}
+
+func encodePowerShellCommand(script string) string {
+	chars := utf16.Encode([]rune(script))
+	bytes := make([]byte, len(chars)*2)
+	for i, char := range chars {
+		bytes[2*i] = byte(char)
+		bytes[2*i+1] = byte(char >> 8)
+	}
+	return base64.StdEncoding.EncodeToString(bytes)
 }

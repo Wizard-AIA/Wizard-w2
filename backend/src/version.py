@@ -18,13 +18,19 @@ _UNKNOWN = "0.0.0+unknown"
 
 
 def _read_version() -> str:
-    # backend/src/version.py -> repository (or unpacked archive) root
-    version_file = Path(__file__).resolve().parents[2] / "VERSION"
-    try:
-        value = version_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        # A deployment that ships the backend without the repository root
-        # (a bare container image) can still say what it is.
+    # A source checkout has backend/src/version.py; the container has
+    # /app/src/version.py. Walk upward rather than relying on one layout.
+    value = ""
+    for directory in Path(__file__).resolve().parents:
+        try:
+            value = (directory / "VERSION").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            break
+    if not value:
+        # A deployment that ships the backend without the repository root can
+        # still say what it is.
         value = os.environ.get("WIZARD_VERSION", "").strip().lstrip("v")
     return value or _UNKNOWN
 

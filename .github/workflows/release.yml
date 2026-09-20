@@ -1,11 +1,11 @@
 name: Publish Release
 
 # Pipeline: verify -> build -> smoke (the exact built archives, five platforms)
-#           -> publish -> package (metadata rendered from the PUBLISHED checksums)
-#           -> verify-published (real installs from the live release).
+#           -> draft release -> package -> verify-draft -> publish-live
+#           -> verify-live.
 #
-# Nothing is published until the archives that would be published have been
-# installed and run on every platform Wizard advertises. Package metadata
+# Nothing is publicly published until the exact uploaded release assets have
+# been installed and run on every platform Wizard advertises. Package metadata
 # (Homebrew, Scoop) is never taken from a build machine: v1.0.12's formula was,
 # and `brew install` failed with "Formula reports different checksum".
 #
@@ -290,7 +290,7 @@ jobs:
           echo "--- logs"; for f in "$HOME/.config/wizard/logs/"* "$HOME/Library/Application Support/Wizard/logs/"*; do [ -f "$f" ] && { echo "== $f"; tail -n 60 "$f"; }; done || true
 
   publish:
-    name: Publish GitHub Release
+    name: Stage draft GitHub Release
     needs: [smoke, e2e]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -306,11 +306,14 @@ jobs:
       # Notes start blank rather than auto-generated: a raw commit/PR list reads as noise
       # to a consumer downloading a zip, not a changelog. Write the real paragraph by hand
       # with `gh release edit <tag> --notes-file ...` right after this job creates the release.
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           generate_release_notes: false
-          draft: false
+          # A release can be downloaded by authenticated verification jobs
+          # while draft. Do not expose it to users until those exact uploaded
+          # bytes, their checksums and the generated formula have passed.
+          draft: true
           prerelease: false
           files: |
             dist/*.zip
@@ -319,7 +322,7 @@ jobs:
             dist/install.ps1
 
   package:
-    name: Render packaging from the published checksums
+    name: Render packaging from draft-release checksums
     needs: publish
     runs-on: ubuntu-latest
     permissions:
@@ -332,10 +335,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The checksums are fetched from the release GitHub is now serving, so the
-      # formula pins exactly what users will download. There is no other source.
+      # Fetch the checksum asset from the just-created draft, not the build
+      # workspace. This is the exact release object that will later be made
+      # public, so the formula pins what users actually download.
+      - name: Download SHA256SUMS from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$RELEASE_TAG" --pattern SHA256SUMS --dir release-asset
+
       - name: Render wizard.rb, wizard.json and release.json
-        run: python scripts/release.py render --version "${RELEASE_TAG#v}" --out packaging-out
+        run: python scripts/release.py render --version "${RELEASE_TAG#v}" --sums release-asset/SHA256SUMS --out packaging-out
 
       - name: Attach them to the release
         env:
@@ -349,23 +358,8 @@ jobs:
           path: packaging-out/*
           retention-days: 14
 
-      # Downstream repos pull release.json/wizard.rb themselves (see their
-      # sync-release workflows). Pushing needs a token, which is optional.
-      - name: Tell the downstream repos a release exists
-        env:
-          PACKAGING_PUSH_TOKEN: ${{ secrets.PACKAGING_PUSH_TOKEN }}
-        run: |
-          if [ -z "$PACKAGING_PUSH_TOKEN" ]; then
-            echo "::notice::No PACKAGING_PUSH_TOKEN secret: the Homebrew tap and website pick this release up on their next scheduled sync, or run their 'Sync release' workflow."
-            exit 0
-          fi
-          for repo in Wizard-AIA/homebrew-wizard Wizard-AIA/website; do
-            curl -fsS -X POST -H "Authorization: Bearer $PACKAGING_PUSH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$repo/dispatches" -d "{\"event_type\":\"wizard-release\",\"client_payload\":{\"tag\":\"$RELEASE_TAG\"}}"
-          done
-
-  verify-published:
-    name: Verify published ${{ matrix.target }}
+  verify-draft:
+    name: Verify staged release ${{ matrix.target }}
     needs: package
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -381,24 +375,136 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # The real thing: the installer as published, fetched from GitHub, installing
-      # the release as published. No local server, no build artifacts.
-      - name: Install from the live release (Unix)
+      - name: Download the exact uploaded draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release download "$RELEASE_TAG" --dir release-assets
+
+      # Draft release assets are not anonymously fetchable. Serve the exact
+      # bytes downloaded from GitHub locally; the installer still downloads
+      # install.sh, SHA256SUMS and its archive through its normal HTTP path.
+      - name: Install from the staged release (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -eu
-          url="https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/install.sh"
+          mkdir -p "serve/$RELEASE_TAG"
+          cp release-assets/* "serve/$RELEASE_TAG/"
+          echo "$RELEASE_TAG" > serve/LATEST
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory serve >/dev/null 2>&1 &
+          sleep 2
           if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
-          curl -fsSL "$url" | sh -s -- --version "${RELEASE_TAG#v}" --yes
+          WIZARD_RELEASE_BASE_URL=http://127.0.0.1:8765 sh "release-assets/install.sh" --version "${RELEASE_TAG#v}" --yes
           if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
           $fresh 'wizard --version' | tee out.txt
           grep -q "$RELEASE_TAG" out.txt
           $fresh 'wizard --help' | grep -q Usage
-          $fresh 'wizard update --check'   # the shipped updater must parse the published SHA256SUMS and reach GitHub
           $fresh 'wizard uninstall --yes'
 
-      - name: Install from the live release (Windows)
+      - name: Install from the staged release (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force "serve/$env:RELEASE_TAG" | Out-Null
+          Copy-Item release-assets/* "serve/$env:RELEASE_TAG"
+          Set-Content serve/LATEST $env:RELEASE_TAG
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', 'serve' -WindowStyle Hidden
+          Start-Sleep 3
+          $env:WIZARD_RELEASE_BASE_URL = 'http://127.0.0.1:8765'
+          $script = Get-Content release-assets/install.ps1 -Raw
+          & ([scriptblock]::Create($script)) -Version ($env:RELEASE_TAG.TrimStart('v')) -Yes
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          $v = powershell -NoProfile -Command 'wizard --version'
+          if ($v -notmatch [regex]::Escape($env:RELEASE_TAG)) { throw "reported '$v'" }
+          powershell -NoProfile -Command 'wizard uninstall --yes'
+
+      - name: Download the rendered Homebrew formula
+        if: runner.os != 'Windows'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: packaging
+          path: packaging-out
+
+      # First audit the production formula, then change only its base URL to a
+      # local file mirror. This makes Homebrew verify and unpack the exact
+      # draft ZIP before the release is public, without weakening the formula
+      # users receive (which continues to point at GitHub Releases).
+      - name: Homebrew install, test and audit (macOS, Linux)
+        if: runner.os != 'Windows' && (matrix.target == 'darwin-arm64' || matrix.target == 'darwin-amd64' || matrix.target == 'linux-amd64')
+        shell: bash
+        run: |
+          set -eu
+          if ! command -v brew >/dev/null 2>&1; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1
+          brew tap-new --no-git local/verify
+          tap="$(brew --repository local/verify)"
+          brew audit --strict --formula packaging-out/wizard.rb
+          mirror="file://$PWD/release-assets/"
+          sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb > "$tap/Formula/wizard.rb"
+          brew install --formula local/verify/wizard
+          wizard --version | grep -q "$RELEASE_TAG"
+          wizard --help | grep -q Usage
+          brew test local/verify/wizard
+          brew uninstall wizard
+
+  publish-live:
+    name: Publish the verified release
+    needs: [verify-draft, sbom]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Make the tested draft public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+
+      # Downstream repositories pull packaging attached to this now-public
+      # release. Dispatch only after it is available to their unauthenticated
+      # workflows and their users.
+      - name: Tell downstream repositories a release exists
+        env:
+          PACKAGING_PUSH_TOKEN: ${{ secrets.PACKAGING_PUSH_TOKEN }}
+        run: |
+          if [ -z "$PACKAGING_PUSH_TOKEN" ]; then
+            echo "::notice::No PACKAGING_PUSH_TOKEN secret: the Homebrew tap and website pick this release up on their next scheduled sync, or run their 'Sync release' workflow."
+            exit 0
+          fi
+          for repo in Wizard-AIA/homebrew-wizard Wizard-AIA/website; do
+            curl -fsS -X POST -H "Authorization: Bearer $PACKAGING_PUSH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$repo/dispatches" -d "{\"event_type\":\"wizard-release\",\"client_payload\":{\"tag\":\"$RELEASE_TAG\"}}"
+          done
+
+  verify-live:
+    name: Verify public release ${{ matrix.target }}
+    needs: publish-live
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64, runner: ubuntu-latest }
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: windows-amd64, runner: windows-latest }
+    steps:
+      - name: Install from the public GitHub release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = macOS ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/install.sh" | sh -s -- --version "${RELEASE_TAG#v}" --yes
+          if [ "$RUNNER_OS" = macOS ]; then fresh='zsh -ic'; else fresh='bash -ic'; fi
+          $fresh 'wizard --version' | grep -q "$RELEASE_TAG"
+          $fresh 'wizard --help' | grep -q Usage
+          $fresh 'wizard update --check'
+          $fresh 'wizard uninstall --yes'
+
+      - name: Install from the public GitHub release (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
@@ -411,44 +517,17 @@ jobs:
           powershell -NoProfile -Command 'wizard update --check'
           powershell -NoProfile -Command 'wizard uninstall --yes'
 
-      - name: Download the rendered Homebrew formula
-        if: runner.os != 'Windows'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
-        with:
-          name: packaging
-          path: packaging-out
-
-      # Installs the rendered formula through a real (local) tap: Homebrew downloads
-      # the published archive and checks it against the formula's sha256 -- the exact
-      # step that failed for every macOS user on v1.0.12.
-      - name: Homebrew install, test and audit (macOS, Linux)
-        if: runner.os != 'Windows' && (matrix.target == 'darwin-arm64' || matrix.target == 'darwin-amd64' || matrix.target == 'linux-amd64')
-        shell: bash
-        run: |
-          set -eu
-          if ! command -v brew >/dev/null 2>&1; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
-          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1
-          brew tap-new --no-git local/verify
-          tap="$(brew --repository local/verify)"
-          mkdir -p "$tap/Formula" && cp packaging-out/wizard.rb "$tap/Formula/wizard.rb"
-          brew install --formula local/verify/wizard
-          wizard --version | grep -q "$RELEASE_TAG"
-          wizard --help | grep -q Usage
-          brew test local/verify/wizard
-          brew audit --strict --formula local/verify/wizard || echo "::warning::brew audit reported style findings (see log)"
-          brew uninstall wizard
-
-      - name: Scoop install of the rendered manifest (advisory)
+      - name: Scoop install from the public manifest (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
-          Invoke-RestMethod get.scoop.sh -outfile install-scoop.ps1
-          .\install-scoop.ps1 -RunAsAdmin
+          $ErrorActionPreference = 'Stop'
+          Invoke-RestMethod get.scoop.sh -OutFile install-scoop.ps1
+          .\install-scoop.ps1
           $env:PATH += ";$env:USERPROFILE\scoop\shims"
           Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/wizard.json" -OutFile wizard.json
           scoop install .\wizard.json
-          wizard --version
+          wizard --version | Select-String $env:RELEASE_TAG | Out-Null
           scoop uninstall wizard
 
   sbom:
@@ -466,7 +545,7 @@ jobs:
           format: spdx-json
 
   push-images:
-    needs: publish
+    needs: publish-live
     runs-on: ubuntu-latest
     permissions:
       contents: read

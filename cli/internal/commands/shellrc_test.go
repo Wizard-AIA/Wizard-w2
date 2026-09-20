@@ -105,3 +105,26 @@ func TestRemoveShellIntegrationRemovesFishDropIn(t *testing.T) {
 		t.Fatal("unrelated fish config must remain")
 	}
 }
+
+func TestRemoveShellIntegrationPreservesUserFishDropInContent(t *testing.T) {
+	home := t.TempDir()
+	dropIn := filepath.Join(home, ".config", "fish", "conf.d", "wizard.fish")
+	if err := os.MkdirAll(filepath.Dir(dropIn), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	user := "set -gx WIZARD_THEME midnight\n"
+	data := user + rcBlockStart + "\nfish_add_path x\n" + rcBlockEnd + "\n"
+	if err := os.WriteFile(dropIn, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removeShellIntegration(home, testInstall); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dropIn)
+	if err != nil {
+		t.Fatalf("a fish file with user content must remain: %v", err)
+	}
+	if string(got) != user {
+		t.Fatalf("unexpected fish content: %q", got)
+	}
+}

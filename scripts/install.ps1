@@ -50,7 +50,10 @@ $script:Repo = 'Wizard-AIA/Wizard-w2'
 $script:Supported = 'windows-amd64'
 
 # Stop on the first error, and make Invoke-WebRequest fast (its progress bar
-# slows downloads dramatically on Windows PowerShell 5.1).
+# slows downloads dramatically on Windows PowerShell 5.1). These are restored
+# below so `irm ... | iex` does not permanently change the caller's session.
+$script:OriginalErrorActionPreference = $ErrorActionPreference
+$script:OriginalProgressPreference = $ProgressPreference
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -337,16 +340,31 @@ function Install-Wizard {
             }
             Move-Item -LiteralPath $pkgDir -Destination $destination
         }
-        [void](New-Item -ItemType Directory -Path $binDir -Force)
-        Set-CurrentJunction $current $destination
-
         # bin\wizard.exe is a copy (a running program can be renamed but not
         # overwritten, and the update helper replaces it the same way).
-        if (Test-Path -LiteralPath $exe) {
-            $aside = "$exe.old-" + (Get-Date -Format 'yyyyMMddHHmmss')
-            Move-Item -LiteralPath $exe -Destination $aside
+        # Replace the launcher first, then change current. If the junction
+        # swap fails, restore the old launcher as well as the old junction so
+        # a working installation remains completely working.
+        [void](New-Item -ItemType Directory -Path $binDir -Force)
+        $nextExe = "$exe.next-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+        $aside = $null
+        Copy-Item -LiteralPath (Join-Path $destination 'cli\wizard.exe') -Destination $nextExe
+        try {
+            if (Test-Path -LiteralPath $exe) {
+                $aside = "$exe.old-" + (Get-Date -Format 'yyyyMMddHHmmss')
+                Move-Item -LiteralPath $exe -Destination $aside
+            }
+            Move-Item -LiteralPath $nextExe -Destination $exe
+            try {
+                Set-CurrentJunction $current $destination
+            } catch {
+                Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+                if ($aside -and (Test-Path -LiteralPath $aside)) { Move-Item -LiteralPath $aside -Destination $exe -Force }
+                throw
+            }
+        } finally {
+            Remove-Item -LiteralPath $nextExe -Force -ErrorAction SilentlyContinue
         }
-        Copy-Item -LiteralPath (Join-Path $destination 'cli\wizard.exe') -Destination $exe
         Get-ChildItem -LiteralPath $binDir -Filter 'wizard.exe.old-*' -ErrorAction SilentlyContinue | ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force } catch { } }
 
         # --- PATH ---
@@ -384,6 +402,9 @@ try {
     Write-Host $_.Exception.Message
     $code = 1
     if ($_.Exception.Data.Contains('WizardCode')) { $code = [int]$_.Exception.Data['WizardCode'] }
+} finally {
+    $ErrorActionPreference = $script:OriginalErrorActionPreference
+    $ProgressPreference = $script:OriginalProgressPreference
 }
 $global:LASTEXITCODE = $code
 if ($code -ne 0 -and $MyInvocation.MyCommand.Path) { exit $code }

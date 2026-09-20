@@ -193,10 +193,12 @@ normalize_tag() {
   case "$raw" in
     ""|*[!0-9.]*|.*|*.) die 2 "not a release version: '$1' (expected something like 1.0.13)" ;;
   esac
-  case "$raw" in
-    *.*.*) ;;
-    *) die 2 "not a release version: '$1' (expected X.Y.Z)" ;;
-  esac
+  # A glob such as *.*.* accepts 1.2.3.4 too. Keep the installer, release
+  # assets, package metadata and `wizard update` on the same three-component
+  # version contract.
+  if ! printf '%s\n' "$raw" | awk -F. 'NF == 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { ok=1 } END { exit(ok ? 0 : 1) }'; then
+    die 2 "not a release version: '$1' (expected X.Y.Z)"
+  fi
   echo "v$raw"
 }
 
@@ -298,18 +300,47 @@ mkdir -p "$INSTALL_DIR" 2>/dev/null || die 1 "cannot create $INSTALL_DIR (permis
 STAGE="$(mktemp -d "$INSTALL_DIR/.wizard-update-XXXXXX")" || die 1 "could not create a staging directory in $INSTALL_DIR"
 
 extract() {
-  if command -v unzip >/dev/null 2>&1; then
-    # Reject anything that could write outside the staging directory.
-    if unzip -Z1 "$1" | grep -E '(^/|(^|/)\.\.(/|$))' >/dev/null 2>&1; then
+  archive=$1 destination=$2
+  # Validate before extraction. In particular, neither unzip nor bsdtar is a
+  # suitable fallback on its own: a ZIP symlink can make a later member escape
+  # the staging directory even when every member name looks harmless.
+  if command -v unzip >/dev/null 2>&1 && command -v zipinfo >/dev/null 2>&1; then
+    unzip -Z1 "$archive" > "$TMP/archive.paths" || die 1 "could not read $ASSET as a ZIP archive"
+    if grep -E '(^/|(^|/)\.\.(/|$)|^[A-Za-z]:)' "$TMP/archive.paths" >/dev/null 2>&1; then
       die 1 "the archive contains an unsafe path; refusing to unpack it"
     fi
-    unzip -q -o "$1" -d "$2"
-  elif tar --version 2>/dev/null | grep -qi bsdtar; then
-    tar -xf "$1" -C "$2"
+    zipinfo -l "$archive" > "$TMP/archive.info" || die 1 "could not inspect $ASSET"
+    if awk '/^l/ { found=1 } END { exit(found ? 0 : 1) }' "$TMP/archive.info"; then
+      die 1 "the archive contains a symbolic link; refusing to unpack it"
+    fi
+    unzip -q -o "$archive" -d "$destination"
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$2"
+    # Python's ZipInfo exposes Unix mode bits, so this fallback applies the
+    # same path and symlink rules before it calls extractall.
+    python3 - "$archive" "$destination" <<'PY'
+import posixpath
+import stat
+import sys
+import zipfile
+
+archive, destination = sys.argv[1:]
+with zipfile.ZipFile(archive) as zf:
+    for info in zf.infolist():
+        name = info.filename.replace('\\', '/')
+        normalized = posixpath.normpath(name)
+        mode = info.external_attr >> 16
+        if (name.startswith('/') or normalized == '..' or normalized.startswith('../')
+                or (len(name) >= 2 and name[1] == ':')
+                or stat.S_IFMT(mode) == stat.S_IFLNK):
+            raise SystemExit('unsafe ZIP member: ' + info.filename)
+    zf.extractall(destination)
+PY
   else
-    die 3 "cannot unpack a .zip: none of unzip, bsdtar or python3 was found. Install unzip and re-run."
+    die 3 "cannot unpack a verified .zip: install unzip and zipinfo (or python3), then re-run."
+  fi
+  # Defence in depth for ZIP tools whose metadata reporting differs by host.
+  if find "$destination" -type l -print -quit | grep -q .; then
+    die 1 "the archive produced a symbolic link; refusing to install it"
   fi
 }
 step "Unpacking"

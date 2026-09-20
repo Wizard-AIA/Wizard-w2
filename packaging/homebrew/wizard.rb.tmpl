@@ -12,7 +12,14 @@ class Wizard < Formula
     # The archive is the whole application (backend/, frontend/, requirements)
     # plus the CLI. It belongs in libexec, not the keg root; the CLI finds it
     # from its own resolved path, so the symlink in bin/ works from anywhere.
-    libexec.install Dir["*"]
+    # Release ZIPs intentionally contain one versioned top-level directory so
+    # direct installs can retain the previous package for rollback. Homebrew
+    # owns the versioned keg already, so install the *contents* of that one
+    # directory under libexec; installing the directory itself would make the
+    # launcher point at a nonexistent libexec/cli/wizard.
+    package_dir = Dir["*"].find { |entry| File.directory?(entry) && File.executable?(File.join(entry, "cli", "wizard")) }
+    odie "Wizard release archive has no application directory" unless package_dir
+    libexec.install Dir[File.join(package_dir, "*")]
     bin.install_symlink libexec/"cli/wizard"
   end
 

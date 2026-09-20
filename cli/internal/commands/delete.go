@@ -120,5 +120,61 @@ func safeDeleteTarget(path string) bool {
 			return false
 		}
 	}
-	return filepath.Dir(clean) != clean
+	if filepath.Dir(clean) == clean {
+		return false
+	}
+	// os.RemoveAll deliberately does not follow a symlink passed as its final
+	// argument, but the operating system resolves symlinked *parents* before
+	// RemoveAll sees the path. A user-controlled WIZARD_CONFIG_DIR such as
+	// /tmp/link/wizard must never allow deletion outside the intended tree.
+	return !hasSymlinkComponent(clean)
+}
+
+// hasSymlinkComponent reports whether an existing component of path is a
+// symlink. Missing suffixes are fine: config directories are created lazily.
+// An unreadable component is treated as unsafe because its type cannot be
+// established before a destructive operation.
+func hasSymlinkComponent(path string) bool {
+	volume := filepath.VolumeName(path)
+	remainder := strings.TrimPrefix(path, volume)
+	current := volume + string(filepath.Separator)
+	for _, component := range strings.Split(remainder, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			// macOS exposes its normal temporary directories through /var and
+			// /tmp symlinks into /private. These are OS-owned aliases, not a
+			// caller-controlled escape, and tests as well as real CI commonly
+			// receive paths through them. Every other symlinked parent is unsafe.
+			if isCanonicalSystemAlias(current) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func isCanonicalSystemAlias(path string) bool {
+	clean := filepath.Clean(path)
+	var expected string
+	switch clean {
+	case string(filepath.Separator) + "var":
+		expected = string(filepath.Separator) + "private" + string(filepath.Separator) + "var"
+	case string(filepath.Separator) + "tmp":
+		expected = string(filepath.Separator) + "private" + string(filepath.Separator) + "tmp"
+	default:
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	return err == nil && filepath.Clean(resolved) == expected
 }

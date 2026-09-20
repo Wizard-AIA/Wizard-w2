@@ -113,13 +113,29 @@ func removeShellIntegration(home, installRoot string) ([]string, error) {
 		}
 		changedFiles = append(changedFiles, path)
 	}
-	// Fish loads drop-ins from conf.d; the installer owns this file outright.
+	// Fish loads drop-ins from conf.d. New installs use a dedicated file, but a
+	// user may already have created wizard.fish for unrelated configuration.
+	// Remove only our marked block and delete the file only when it was entirely
+	// ours, never an existing user's settings.
 	dropIn := filepath.Join(home, ".config", "fish", "conf.d", "wizard.fish")
-	if data, err := os.ReadFile(dropIn); err == nil && strings.Contains(string(data), rcBlockStart) {
-		if err := os.Remove(dropIn); err != nil {
-			return changedFiles, err
+	if data, err := os.ReadFile(dropIn); err == nil {
+		stripped, changed := stripWizardShellIntegration(string(data), installRoot)
+		if changed {
+			if strings.TrimSpace(stripped) == "" {
+				if err := os.Remove(dropIn); err != nil {
+					return changedFiles, err
+				}
+			} else {
+				info, err := os.Stat(dropIn)
+				if err != nil {
+					return changedFiles, err
+				}
+				if err := os.WriteFile(dropIn, []byte(stripped), info.Mode().Perm()); err != nil {
+					return changedFiles, err
+				}
+			}
+			changedFiles = append(changedFiles, dropIn)
 		}
-		changedFiles = append(changedFiles, dropIn)
 	}
 	return changedFiles, nil
 }

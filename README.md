@@ -64,7 +64,7 @@ irm https://wizardw2.vercel.app/install.ps1 | iex
 scoop install https://github.com/Wizard-AIA/Wizard-w2/releases/latest/download/wizard.json
 ```
 
-**Any platform, manual download.** Take the archive for your platform from the [latest release](https://github.com/Wizard-AIA/Wizard-w2/releases/latest), check it against `SHA256SUMS`, extract it, and run `./cli/wizard init`.
+**Any platform, manual download.** Take the archive for your platform from the [latest release](https://github.com/Wizard-AIA/Wizard-w2/releases/latest), check it against `SHA256SUMS`, extract it, change into the extracted `Wizard-v<version>-<platform>` directory, and run `./cli/wizard init`.
 
 Every option also has an environment variable (`WIZARD_VERSION`, `WIZARD_INSTALL_DIR`, `WIZARD_NO_MODIFY_PATH`), and `WIZARD_RELEASE_BASE_URL` points the installers at an internal mirror.
 

@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,6 +47,17 @@ func TestSwapCurrentJunctionRepointsAndSurvivesSpacesInPaths(t *testing.T) {
 		if _, err := os.Lstat(leftover); err == nil {
 			t.Errorf("%s was left behind", leftover)
 		}
+	}
+}
+
+func TestEncodePowerShellCommandUsesUtf16LE(t *testing.T) {
+	encoded := encodePowerShellCommand("Remove-Item -LiteralPath 'C:\\A&B'")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) < 4 || decoded[1] != 0 || decoded[3] != 0 {
+		t.Fatalf("encoded command is not UTF-16LE: %x", decoded[:4])
 	}
 }
 

@@ -21,7 +21,7 @@ trap cleanup EXIT INT TERM
 # ---- a toolbox PATH containing only what the installer may use ---------------
 
 TOOLS="$WORK/tools"; mkdir -p "$TOOLS"
-for tool in awk sed tr cat mktemp mv cp ln rm mkdir rmdir chmod dirname basename wc grep sort head tail date tar unzip zip \
+for tool in awk sed tr cat mktemp mv cp ln rm mkdir rmdir chmod dirname basename wc grep sort head tail date unzip zip zipinfo find \
             curl wget sha256sum shasum openssl sysctl python3 env id ls touch cut expr uname; do
   path="$(command -v "$tool" 2>/dev/null || true)"
   case "$path" in /*) ln -sf "$path" "$TOOLS/$tool" ;; esac
@@ -150,6 +150,33 @@ run_suite() {
   make_release v9.9.5 v0.0.1     # the binary inside claims another version
   exit_is 1 "a binary that reports the wrong version is refused" --version 9.9.5
   expect "the old install (none here) was not switched" sh -c "! test -e '$INSTALL/current'"
+
+  new_case
+  make_release v9.9.4
+  python3 - "$SERVER_ROOT/v9.9.4/Wizard-v9.9.4-$OS-$ARCH.zip" <<'PY'
+import sys
+import zipfile
+with zipfile.ZipFile(sys.argv[1], 'a') as zf:
+    zf.writestr('../../outside-wizard-stage', 'unsafe')
+PY
+  (cd "$SERVER_ROOT/v9.9.4" && if command -v sha256sum >/dev/null 2>&1; then sha256sum "Wizard-v9.9.4-$OS-$ARCH.zip"; else shasum -a 256 "Wizard-v9.9.4-$OS-$ARCH.zip"; fi > SHA256SUMS)
+  exit_is 1 "an archive with a traversal member is refused before extraction" --version 9.9.4
+  expect "an unsafe archive leaves no current package" sh -c "! test -e '$INSTALL/current'"
+
+  new_case
+  make_release v9.9.3
+  python3 - "$SERVER_ROOT/v9.9.3/Wizard-v9.9.3-$OS-$ARCH.zip" <<'PY'
+import stat
+import sys
+import zipfile
+with zipfile.ZipFile(sys.argv[1], 'a') as zf:
+    info = zipfile.ZipInfo('link')
+    info.create_system = 3
+    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    zf.writestr(info, '/tmp/unsafe')
+PY
+  (cd "$SERVER_ROOT/v9.9.3" && if command -v sha256sum >/dev/null 2>&1; then sha256sum "Wizard-v9.9.3-$OS-$ARCH.zip"; else shasum -a 256 "Wizard-v9.9.3-$OS-$ARCH.zip"; fi > SHA256SUMS)
+  exit_is 1 "an archive with a symbolic link is refused before extraction" --version 9.9.3
 
   # -- platform ---------------------------------------------------------------
   new_case
