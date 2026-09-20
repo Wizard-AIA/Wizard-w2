@@ -107,6 +107,11 @@ func createJunction(link, target string) error {
 // swapCurrentJunction repoints current at target atomically enough that a
 // failure at any step leaves the previous junction in place.
 func swapCurrentJunction(current, target string) error {
+	// mklink /J succeeds for a target that does not exist, which would leave
+	// `current` pointing at nothing. Verified on windows-latest.
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		return fmt.Errorf("the new release directory %s does not exist", target)
+	}
 	next, prev := current+".next", current+".prev"
 	_ = os.Remove(next)
 	_ = os.Remove(prev)
