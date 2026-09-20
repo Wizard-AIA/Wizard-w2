@@ -452,10 +452,11 @@ jobs:
           mirror="file://$PWD/release-assets/"
           # Homebrew infers a version from a github.com release URL, but from a bare
           # file name ("Wizard-v1.0.13-darwin-arm64") it would read "64", so the
-          # mirrored copy states the version explicitly. The production formula
-          # keeps the github.com URLs and lets Homebrew infer it.
+          # mirrored copy states the version explicitly (before `license`, which is
+          # where brew audit wants it). The production formula keeps the github.com
+          # URLs and lets Homebrew infer it.
           sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb \
-            | awk -v v="${RELEASE_TAG#v}" '{ print } /^  license /{ print "  version \"" v "\"" }' > "$tap/Formula/wizard.rb"
+            | awk -v v="${RELEASE_TAG#v}" '/^  license /{ print "  version \"" v "\"" } { print }' > "$tap/Formula/wizard.rb"
           brew trust local/verify 2>/dev/null || true
           brew audit --strict --formula local/verify/wizard
           brew install --formula local/verify/wizard

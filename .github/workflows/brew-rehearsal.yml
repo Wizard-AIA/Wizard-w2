@@ -61,7 +61,7 @@ jobs:
           # file name ("Wizard-v1.0.13-darwin-arm64") it would read "64", so the
           # mirrored copy states the version explicitly.
           sed "s|https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/|$mirror|g" packaging-out/wizard.rb \
-            | awk -v v="${RELEASE_TAG#v}" '{ print } /^  license /{ print "  version \"" v "\"" }' > "$tap/Formula/wizard.rb"
+            | awk -v v="${RELEASE_TAG#v}" '/^  license /{ print "  version \"" v "\"" } { print }' > "$tap/Formula/wizard.rb"
           brew trust local/verify 2>/dev/null || true
           brew audit --strict --formula local/verify/wizard
           brew install --formula local/verify/wizard
@@ -94,11 +94,14 @@ jobs:
           Start-Sleep 3
           $manifest = Get-Content packaging-out/wizard.json -Raw | ConvertFrom-Json
           $manifest.architecture.'64bit'.url = "http://127.0.0.1:8766/releases/download/$tag/Wizard-$tag-windows-amd64.zip"
-          $manifest | ConvertTo-Json -Depth 10 | Set-Content local-wizard.json -Encoding utf8
+          # Scoop names the app after the manifest file, and Wizard's install-kind
+          # detection looks for scoop\apps\wizard, so the file must be wizard.json.
+          New-Item -ItemType Directory -Force local | Out-Null
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content local/wizard.json -Encoding utf8
           Invoke-RestMethod get.scoop.sh -OutFile install-scoop.ps1
           .\install-scoop.ps1 -RunAsAdmin
           $env:PATH += ";$env:USERPROFILE\scoop\shims"
-          scoop install .\local-wizard.json
+          scoop install .\local\wizard.json
           $v = wizard --version
           Write-Host $v
           if ($v -notmatch [regex]::Escape($tag)) { throw "reported '$v'" }
