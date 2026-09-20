@@ -372,6 +372,10 @@ jobs:
     needs: package
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      # GitHub hides a draft release from a token without write access ("release
+      # not found"). This job only downloads from it, but it must be able to see it.
+      contents: write
     strategy:
       fail-fast: false
       matrix:
