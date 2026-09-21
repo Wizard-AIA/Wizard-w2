@@ -18,6 +18,9 @@ interface ComposerProps {
   acceptedFormats: string[]
   mode: AnalysisMode
   onModeChange: (mode: AnalysisMode) => void
+
+  onInterrupt: (content: string, mode: AnalysisMode) => void
+  restoredDraft?: { text: string; nonce: number } | null
 }
 
 const MAX_HEIGHT = 200
@@ -34,17 +37,17 @@ const MODES: { key: AnalysisMode; label: string; title: string }[] = [
   {
     key: "auto",
     label: "Auto",
-    title: "The agent decides how deep to go, and stops as soon as it can answer",
+    title: "The agent decides how deep to go. Greetings and quick questions are answered directly.",
   },
   {
     key: "fast",
     label: "Fast",
-    title: "One pass: write the code, run it, answer. No investigation, no verification",
+    title: "No planning and no verification pass. Greetings and quick questions are answered the same way in every depth.",
   },
   {
     key: "deep",
     label: "Deep",
-    title: "A rigorous multi-agent investigation. Deploys independent reviewers to challenge findings, demands cross-verified evidence, and iterates until high confidence is reached.",
+    title: "Always investigates and verifies analysis questions. Greetings and quick questions are still answered directly.",
   },
 ]
 
@@ -59,6 +62,8 @@ export function Composer({
   acceptedFormats,
   mode,
   onModeChange,
+  onInterrupt,
+  restoredDraft,
 }: ComposerProps) {
   const [value, setValue] = useState("")
   const [dragging, setDragging] = useState(false)
@@ -75,13 +80,31 @@ export function Composer({
 
   useEffect(autoResize, [value, autoResize])
 
+  // A message sent while a turn ran and was refused comes back here. The state is
+  // adjusted while rendering (React's pattern for "a prop changed") rather than
+  // in an effect, so the text appears in the same paint and nothing cascades.
+  // Text the user has typed since is never overwritten.
+  const [handledDraft, setHandledDraft] = useState<number | null>(null)
+  if (restoredDraft && restoredDraft.nonce !== handledDraft) {
+    setHandledDraft(restoredDraft.nonce)
+    if (!value.trim()) setValue(restoredDraft.text)
+  }
+  const draftNonce = restoredDraft?.nonce
+  useEffect(() => {
+    if (draftNonce !== undefined) textareaRef.current?.focus()
+  }, [draftNonce])
+
   const submit = useCallback(() => {
     const trimmed = value.trim()
-    if (!trimmed || isRunning || disabled) return
-    onSend(trimmed, mode)
+    if (!trimmed || disabled) return
+    if (isRunning) {
+      onInterrupt(trimmed, mode)
+    } else {
+      onSend(trimmed, mode)
+    }
     setValue("")
     requestAnimationFrame(autoResize)
-  }, [autoResize, disabled, isRunning, mode, onSend, value])
+  }, [autoResize, disabled, isRunning, mode, onSend, onInterrupt, value])
 
   const handleFiles = useCallback(
     (files: FileList | null) => {
@@ -147,7 +170,7 @@ export function Composer({
             disabled={disabled}
             title={disabled ? "Waiting for your approval above" : undefined}
             placeholder={
-              hasData ? "Ask anything about your data…" : "Attach a dataset, then ask away…"
+              hasData ? "Ask anything about your data…" : "Ask anything, or attach a dataset to analyze…"
             }
             aria-label="Message"
             className="max-h-[200px] flex-1 resize-none bg-transparent py-1 text-[15px] leading-7 placeholder:text-muted-foreground/70 focus:outline-none disabled:opacity-50"
@@ -224,6 +247,7 @@ export function Composer({
               className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5"
               role="radiogroup"
               aria-label="Analysis depth"
+              title="Analysis depth. Your choice stays until you change it."
             >
               {MODES.map((option) => (
                 <button

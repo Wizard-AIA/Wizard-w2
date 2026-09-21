@@ -23,6 +23,7 @@ import { SkillPromotion } from "@/components/chat/skill-promotion"
 import { StepTimeline } from "@/components/chat/step-timeline"
 import { exportUrl, workspaceFileUrl } from "@/lib/api"
 import type { Artifact, ChatMessage } from "@/lib/types"
+import { routeLabel } from "@/lib/route-label"
 import { cn } from "@/lib/utils"
 
 interface MessageProps {
@@ -243,6 +244,12 @@ export function Message({
             </div>
           )}
 
+          {/* What was done, once it is done. Not while a plan waits for approval: the
+              work has not happened yet. Conversation has no label by design. */}
+          {!message.streaming && !message.error && !message.approval && message.phase !== "cancelled" && (
+            <RouteChip route={message.route} />
+          )}
+
           {message.route?.needs_data && onUpload && (
             <div className="mt-3">
               <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px] font-medium shadow-xs transition-colors hover:border-brand/40">
@@ -411,6 +418,16 @@ export function Message({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function RouteChip({ route }: { route: ChatMessage["route"] }) {
+  const label = routeLabel(route)
+  if (!label) return null
+  return (
+    <div className="mt-2 text-[11.5px] text-muted-foreground" title={route?.reasons?.join("; ")}>
+      {label}
     </div>
   )
 }

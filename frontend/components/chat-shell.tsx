@@ -75,6 +75,8 @@ export function ChatShell() {
     clearSkillCandidate,
     busyAlert,
     cancel,
+    interrupt,
+    restoredDraft,
   } = chat
 
   const onArtifact = useCallback((artifact: Artifact) => {
@@ -218,15 +220,17 @@ export function ChatShell() {
 
         {busyAlert && (
           <div className="mx-auto mb-2 w-full max-w-3xl px-4">
-            <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-500">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-2 text-[13px] text-foreground" role="status">
                <AlertTriangle className="h-4 w-4" />
-               This workspace is already running a task. Wait for it or stop it first.
+               A task is still running. Wait for it, or press Stop.
             </div>
           </div>
         )}
         <Composer
           onSend={handleSend}
           onStop={cancel}
+          onInterrupt={interrupt}
+          restoredDraft={restoredDraft}
           onUpload={(file) => void uploadDataset(file)}
           isRunning={isRunning}
           isUploading={uploading}

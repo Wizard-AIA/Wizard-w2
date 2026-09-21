@@ -58,11 +58,16 @@ browser errors.
 ## Composer & Permission Controls
 
 The composer holds **two independent dials**:
-1. **Analysis Depth**: Auto / Fast / Deep segmented control.
+1. **Analysis Depth**: Auto / Fast / Deep segmented control. A preference that stays until changed. Auto lets the agent decide depth; Fast is a single pass without verification; Deep always investigates and verifies.
 2. **Permission Profile**: `components/chat/permission-control.tsx` popover.
 
 A popover is used instead of a third segmented control group to prevent visual
 crowding. The full per-category permission matrix lives on `/settings`.
+
+### Interruption & Draft Recovery
+
+- **Enter while running**: Pressing Enter while a turn runs submits the text via `interrupt`. The backend can reject it if busy, passing the input back via `restoredDraft`.
+- **Restored Draft**: When an interruption is refused and returned via `restoredDraft`, the composer refills automatically if it's empty.
 
 ### Mid-Run Permission Prompts
 
@@ -77,6 +82,7 @@ place over the existing turn rather than starting a new turn.
 
 - `components/chat/investigation-trail.tsx` renders granular agent steps.
 - `components/chat/answer-trust.tsx` renders confidence and verification checks.
+- **Route Chip**: Each finished message (except conversation and failed/cancelled) shows a route chip indicating how the turn was routed (e.g. 'Investigated', 'Answered directly', 'Planned, then investigated', 'Plan only', 'Ran the approved plan').
 - `components/chat/skill-credit.tsx` sits beside trust surfaces, rendering which
   skills informed the analysis with direct links to `/skills`.
 - `skill` frames are deduped by name in the hook.
