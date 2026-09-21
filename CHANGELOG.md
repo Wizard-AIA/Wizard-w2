@@ -59,6 +59,28 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   message length and phrase fragments (`hi` matched inside `which`).
 
 ### Fixed
+- **Council reviewers and chart descriptions ignored the data policy.** A
+  reviewer sent execution output to its model without the session's data mode
+  or redaction rule, and a chart (the data drawn) went to a cloud vision model
+  under a schema-only policy. Both now follow the same rule as the manager: a
+  reviewer whose model the policy does not trust with values does not ask, and
+  such a chart is not described. A schema question under a schema-only policy
+  sends column names, types and counts, never example values.
+- **Two browser tabs on one session could run turns at the same time**, and a
+  dataset could be switched, uploaded or deleted under a running turn. One
+  turn at a time per session now holds across the WebSocket, REST and SSE, and
+  dataset changes answer `409` while a turn runs.
+- **The answer cache replaced entries instead of keeping them.** It was keyed on
+  the question alone, so the same words asked of another dataset overwrote the
+  earlier solution. It is now keyed on the question and the data it was written
+  for; existing caches are upgraded in place on first start.
+- A message that only names a column ("my region is Europe") no longer runs an
+  analysis; "outline the analysis but do not run it" plans and stops; creating a
+  column is treated as a transformation, not a question about structure.
+- The escalation marker only counts when it is the whole reply, so text echoed
+  from data cannot start an analysis.
+- Typing "go ahead" (or anything else) clears the earlier message's stale
+  Approve box. Slow clients no longer lose the frame that ends a turn.
 - **A browser tab left open across a backend restart** (an upgrade, `wizard
   stop` then `start`) showed four `404 Session not found` errors on load
   (`/api/data-mode`, `/api/usage`, `/api/permissions`, `/api/session`) and kept

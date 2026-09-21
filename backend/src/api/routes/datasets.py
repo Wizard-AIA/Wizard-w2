@@ -9,7 +9,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 
-from src.api.deps import SESSION_HEADER, get_session, require_api_key, require_dataset
+from src.api.deps import (
+    SESSION_HEADER,
+    ensure_idle,
+    get_session,
+    require_api_key,
+    require_dataset,
+    require_idle_session,
+)
 from src.api.schemas import (
     DatasetSummary,
     DocumentSummary,
@@ -48,7 +55,7 @@ async def upload_dataset(
     response: Response,
     file: UploadFile = File(...),
     clean: bool = Query(default=True, description="Run the automatic semantic cleaning pass."),
-    session: Session = Depends(get_session),
+    session: Session = Depends(require_idle_session),
 ) -> UploadResponse:
     """Ingests a file into the caller's session.
 
@@ -97,6 +104,8 @@ async def upload_dataset(
 
             catalog = await asyncio.to_thread(CatalogEngine.analyze, df)
 
+        # Parsing took time; a turn may have started since the request arrived.
+        ensure_idle(session)
         handle = session.add_dataset(
             name=filename,
             df=df,
@@ -196,7 +205,7 @@ async def delete_document(name: str, session: Session = Depends(get_session)) ->
     response_model=SessionResponse,
     dependencies=[Depends(require_api_key)],
 )
-async def activate_dataset(name: str, session: Session = Depends(get_session)) -> SessionResponse:
+async def activate_dataset(name: str, session: Session = Depends(require_idle_session)) -> SessionResponse:
     """Switches which loaded table is bound to `df` in the sandbox."""
     if not session.set_active(os.path.basename(name)):
         raise HTTPException(status_code=404, detail=f"No dataset named '{name}' in this session.")
@@ -204,7 +213,7 @@ async def activate_dataset(name: str, session: Session = Depends(get_session)) -
 
 
 @router.delete("/datasets/{name}", dependencies=[Depends(require_api_key)])
-async def delete_dataset(name: str, session: Session = Depends(get_session)) -> dict:
+async def delete_dataset(name: str, session: Session = Depends(require_idle_session)) -> dict:
     if not session.remove_dataset(os.path.basename(name)):
         raise HTTPException(status_code=404, detail=f"No dataset named '{name}' in this session.")
     return {"message": f"Removed '{name}'.", "active_dataset": session.active_dataset}

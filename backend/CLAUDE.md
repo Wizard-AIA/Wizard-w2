@@ -180,6 +180,8 @@ orient (plan) → [plan gate] → loop → verify → answer
 
 - Every browser gets a `Session` (own datasets, documents, catalog, history, workspace, container). No global dataset state.
 - `DatasetHandle.table_key`: sanitised name for generated code (`Q3 sales (final).csv` → `tables['q3_sales_final']`).
+- **One turn at a time per session, on every transport.** WS, REST and SSE all take `deps.turn_lock(session.id)` for the length of a turn (a second window gets `error {code: "busy"}`). Anything that changes a session's datasets depends on `require_idle_session` and answers 409 mid-turn. A turn must release the lock however it ends: WS uses an idempotent `_Lease` plus a done-callback, because a task cancelled before it starts never reaches its own `finally`.
+- Every model call a turn makes (manager, worker, council reviewers, vision) carries the session's `data_mode` and honours `_redact_for`. A new secondary call that skips that is a data-policy bug.
 
 ### Data mode
 

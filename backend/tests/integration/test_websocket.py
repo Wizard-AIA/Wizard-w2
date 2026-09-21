@@ -462,3 +462,90 @@ def test_an_answer_for_a_request_that_is_gone_is_ignored(client: TestClient, ses
         websocket.send_json({"type": "ping"})
 
         assert websocket.receive_json()["type"] == "pong"
+
+
+# --------------------------------------------------------------------------- #
+# One turn at a time per session, across windows and across REST
+# --------------------------------------------------------------------------- #
+def _park_a_turn_on_consent(websocket) -> None:
+    """Starts a turn that then waits for a human, so it stays running as long as the test needs."""
+    websocket.receive_json()
+    websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+    collect_until(websocket, {"approval_required", "final", "error"})
+
+
+def test_a_second_window_cannot_start_a_turn_while_one_runs(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with (
+        client.websocket_connect(f"/ws/chat?session={session_with_data}") as first,
+        client.websocket_connect(f"/ws/chat?session={session_with_data}") as second,
+    ):
+        _park_a_turn_on_consent(first)
+        second.receive_json()
+
+        second.send_json({"type": "message", "content": "hello from the other tab", "mode": "auto"})
+        refused = second.receive_json()
+        assert refused["type"] == "error" and refused["code"] == "busy"
+
+        rows = session_manager.get(session_with_data).history()
+        assert not any("other tab" in str(row.get("content")) for row in rows), "a refused message is not history"
+
+        first.send_json({"type": "cancel"})
+        collect_until(first, {"cancelled"})
+
+        # The lock is free again: the other window can now run a turn.
+        monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(["Hello!"]))
+        second.send_json({"type": "message", "content": "hello from the other tab", "mode": "auto"})
+        assert collect_until(second, {"final", "error"})[-1]["type"] == "final"
+
+
+def test_a_cancelled_turn_releases_the_session(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    from src.api.deps import session_busy
+
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        _park_a_turn_on_consent(websocket)
+        assert session_busy(session_with_data)
+        websocket.send_json({"type": "cancel"})
+        collect_until(websocket, {"cancelled"})
+    assert not session_busy(session_with_data)
+
+
+def test_an_upload_rechecks_after_parsing_because_a_turn_may_have_started(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """Parsing takes time. Idle when the request arrived is not idle when the frame is ready to be added."""
+    answers = iter([False, True])
+    monkeypatch.setattr("src.api.deps.session_busy", lambda _session_id: next(answers))
+    csv = ("late.csv", b"x,y\n1,2\n", "text/csv")
+
+    response = client.post(
+        "/api/datasets?clean=false", headers={"X-Session-Id": session_with_data}, files={"file": csv}
+    )
+
+    assert response.status_code == 409
+    assert "late.csv" not in session_manager.get(session_with_data).datasets
+
+
+def test_the_datasets_cannot_change_under_a_running_turn(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+    headers = {"X-Session-Id": session_with_data}
+    csv = ("other.csv", b"x,y\n1,2\n", "text/csv")
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        _park_a_turn_on_consent(websocket)
+
+        assert client.post("/api/datasets/data.csv/activate", headers=headers).status_code == 409
+        assert client.delete("/api/datasets/data.csv", headers=headers).status_code == 409
+        assert client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code == 409
+
+        websocket.send_json({"type": "cancel"})
+        collect_until(websocket, {"cancelled"})
+
+    assert client.post("/api/datasets/data.csv/activate", headers=headers).status_code == 200
+    assert client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code == 200

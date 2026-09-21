@@ -14,16 +14,22 @@ from src.config import settings
 from src.utils.logging import logger
 
 
-SCHEMA_STATEMENTS = (
-    """
+#: A cached solution belongs to a question *and* the data it was written for: the
+#: same words asked of another dataset, or through another workflow, are a
+#: different entry. Keyed on the question alone, each one overwrote the last.
+SEMANTIC_CACHE_TABLE = """
     CREATE TABLE IF NOT EXISTS semantic_cache (
-        query TEXT PRIMARY KEY,
-        schema_hash TEXT,
+        query TEXT NOT NULL,
+        schema_hash TEXT NOT NULL DEFAULT '',
         columns TEXT,
         code TEXT,
-        embedding BLOB
+        embedding BLOB,
+        PRIMARY KEY (query, schema_hash)
     )
-    """,
+    """
+
+SCHEMA_STATEMENTS = (
+    SEMANTIC_CACHE_TABLE,
     """
     CREATE TABLE IF NOT EXISTS trajectories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,12 +322,34 @@ class DatabaseManager:
                 logger.debug("Connection close failed during shutdown", error=str(exc))
             self._local.conn = None
 
+    @staticmethod
+    def _rekey_semantic_cache(conn: sqlite3.Connection) -> None:
+        """Moves a cache created with `query` as its only key to `(query, schema_hash)`.
+
+        SQLite cannot change a primary key in place, so the table is rebuilt and
+        its rows copied across. Databases created by v1.0.13 and earlier have the
+        old shape; a database that already has the new one is left alone.
+        """
+        key = sorted(row["name"] for row in conn.execute("PRAGMA table_info(semantic_cache)").fetchall() if row["pk"])
+        if key == ["query", "schema_hash"]:
+            return
+        logger.info("Migrating database", table="semantic_cache", change="primary key is now (query, schema_hash)")
+        conn.execute("ALTER TABLE semantic_cache RENAME TO semantic_cache_old")
+        conn.execute(SEMANTIC_CACHE_TABLE)
+        conn.execute(
+            "INSERT OR IGNORE INTO semantic_cache (query, schema_hash, columns, code, embedding) "
+            "SELECT query, COALESCE(schema_hash, ''), columns, code, embedding FROM semantic_cache_old"
+        )
+        conn.execute("DROP TABLE semantic_cache_old")
+
     def _init_db(self):
         """Creates tables and indexes, then applies additive column migrations."""
         try:
             with self._write() as conn:
                 for statement in SCHEMA_STATEMENTS:
                     conn.execute(statement)
+
+                self._rekey_semantic_cache(conn)
 
                 for table, column, coltype in MIGRATIONS:
                     cursor = conn.execute(f"PRAGMA table_info({table})")

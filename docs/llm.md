@@ -41,9 +41,17 @@ A provider limit is not guessed from a model's name (`"mini"` is inside
 visibly.
 
 `resolved.explain()` answers "why did this call get N tokens" without prompt
-text or secrets. Two calls sit outside a turn and use `settings.output_budget`
-directly, which resolves to the same number: dataset cleaning
-(`agent/flow.py`) and the council's one-line reviews (`agent/council.py`).
+text or secrets. Every model call inside a turn is sized and counted this way:
+the manager and worker calls through `AnalysisOrchestrator._budget`, the
+council's reviews and the chart description through `resolve_generation`, with
+each reported to the turn trace. One call sits outside a turn and uses
+`settings.output_budget` directly, which resolves to the same number: dataset
+cleaning on upload (`agent/flow.py`).
+
+Every one of those calls also carries the session's data mode and data policy. A
+council reviewer whose model the policy does not trust with values does not ask
+(its deterministic findings stand alone), and a chart is not described by such a
+model, because a chart is the data drawn.
 
 #### Adapters
 

@@ -17,11 +17,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response, WebSock
 from fastapi.responses import StreamingResponse
 
 from src.api.deps import (
+    BUSY_DETAIL,
     SESSION_HEADER,
     get_consent_broker,
     get_orchestrator,
     require_api_key,
     resolve_chat_session,
+    session_locks,
+    turn_lock,
     ws_client_ip,
     ws_client_key,
     ws_gate,
@@ -41,7 +44,26 @@ from src.utils.logging import logger
 
 router = APIRouter(tags=["chat"])
 
-_session_locks: dict[str, asyncio.Lock] = {}
+_session_locks = session_locks  # the shared per-session arbiter, see `deps.py`
+
+
+class _Lease:
+    """A held turn lock that can be released more than once.
+
+    A turn releases it when it finishes, and a done-callback releases it too, so a
+    task cancelled before it ever started (its own `finally` never runs) cannot
+    leave the session locked.
+    """
+
+    def __init__(self, lock: asyncio.Lock):
+        self._lock = lock
+        self._held = True
+
+    def release(self) -> None:
+        if self._held:
+            self._held = False
+            self._lock.release()
+
 
 _TERMINAL_TYPES = frozenset({EventType.FINAL, EventType.ERROR, EventType.CANCELLED})
 
@@ -509,7 +531,17 @@ async def websocket_chat(
                     # `fast` here would have made approving a plan silently
                     # reduce the work done to carry it out.
                     mode = "auto" if mode == "planning" else mode
-            else:
+
+            # Another window on this session may be running a turn. The check and
+            # the acquire have no await between them, so nothing can slip in.
+            lock = turn_lock(session.id)
+            if lock.locked():
+                await websocket.send_json({"type": EventType.ERROR.value, "content": BUSY_DETAIL, "code": "busy"})
+                continue
+            await lock.acquire()
+            lease = _Lease(lock)
+            if kind != "approval":
+                # After the lock: a message another window's turn refused is not history.
                 session.append_message("user", instruction)
 
             turn_emitter = TerminalEmitter(emitter)
@@ -523,6 +555,7 @@ async def websocket_chat(
                 run_approved_plan: str | None,
                 run_approved_search: str | None,
                 run_emitter: TerminalEmitter,
+                lease: _Lease,
             ):
                 """Runs one turn and reports its own outcome.
 
@@ -579,10 +612,12 @@ async def websocket_chat(
                     await run_emitter(Event(type=EventType.ERROR, data={"content": message, "code": "internal"}))
                 finally:
                     consent_broker.abandon(run_session.id)
+                    lease.release()
 
             current_run = asyncio.ensure_future(
-                run_turn(session, instruction, mode, approved_plan, approved_search, turn_emitter)
+                run_turn(session, instruction, mode, approved_plan, approved_search, turn_emitter, lease)
             )
+            current_run.add_done_callback(lambda _task, held=lease: held.release())
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)

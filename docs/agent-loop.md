@@ -35,9 +35,15 @@ The transport never begins or ends a turn: `AnalysisOrchestrator.run` owns
 
 A message arriving while another turn runs is checked after consent answers.
 An interrupt intent such as `stop` cancels the running turn. Other messages
-receive `error {code: "busy"}` and do not affect it. REST and SSE share the
-same per-session lock; SSE appends the user message once and cancels and
-interrupts its background task when the client disconnects.
+receive `error {code: "busy"}` and do not affect it. REST, SSE and WebSocket
+share one per-session lock (`deps.turn_lock`), so a second browser tab on the
+same session is refused with `busy` while the first has a turn running, and its
+message is not written to history. The lock is released when the turn ends or is
+cancelled, including a task cancelled before it started. Anything that changes a
+session's datasets (upload, activate, delete, a connection import) answers `409`
+while a turn is running, and an upload checks again after parsing, because a turn
+may have started in the meantime. SSE appends the user message once and cancels
+and interrupts its background task when the client disconnects.
 
 The transport tracks terminal frames and emits `error {code: "internal"}` if
 an orchestrator returns without one. Duplicate terminal events are suppressed.
