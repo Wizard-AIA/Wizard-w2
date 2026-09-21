@@ -130,6 +130,31 @@ async def test_a_denied_install_leaves_the_turn_alive(loaded_session: Session, s
     assert any("deny" in warning for warning in result.warnings)
 
 
+@pytest.mark.usefixtures("real_routing")
+async def test_code_that_never_ran_is_not_cached_as_the_answer(loaded_session: Session, stub_llm) -> None:
+    """A declined install leaves code that was written but never executed.
+
+    The turn carries on (see above), so it has no error and is not blocked, and
+    the answer cache took that as success. The same question then replayed the
+    unrun code and asked for the same install again. Found in a live run: two
+    identical asks, the second one served from the cache at similarity 1.0.
+    """
+    from src.core.database import db_mgr
+
+    loaded_session.permissions.profile = "custom"
+    loaded_session.permissions.set_ruling("library_install", "deny")
+    stub_llm([CODE_NEEDING_A_LIBRARY, "The answer."])  # a `direct` turn: code, then the answer
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="calculate the total of column A", mode="auto", emitter=EventCollector()
+    )
+
+    assert result.route["workflow"] == "direct"
+    # Matched on the code, not the query: the cache lowercases the question it stores.
+    cached = [entry for entry in db_mgr.get_cache_entries() if "lifelines" in entry["code"]]
+    assert cached == [], "code that was never executed must not be served again as a solution"
+
+
 async def test_code_that_needs_nothing_new_is_never_gated(loaded_session: Session, stub_llm) -> None:
     """The gate must be quiet on the ordinary case, or it is unusable.
 

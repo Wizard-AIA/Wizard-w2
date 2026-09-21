@@ -71,6 +71,12 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   message length and phrase fragments (`hi` matched inside `which`).
 
 ### Fixed
+- **Code that never ran was stored as the answer to a question.** Declining a
+  library install leaves code that was written but not executed, with no error
+  and no block, and the answer cache took that as a success. Asking the same
+  question again replayed the unrun code and asked for the same install again.
+  Only code whose last execution succeeded is cached now. Found by running the
+  routing flow against a live model.
 - **Council reviewers and chart descriptions ignored the data policy.** A
   reviewer sent execution output to its model without the session's data mode
   or redaction rule, and a chart (the data drawn) went to a cloud vision model

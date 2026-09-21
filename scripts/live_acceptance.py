@@ -92,6 +92,8 @@ def configure_environment(key: str, model: str, backend: str, timeout: int) -> N
             "API_PROVIDER": "gemini",
             "GEMINI_API_KEY": key,
             "MODEL_NAME": model,
+            # Left empty, the registry picks its own preferred worker model, so the run would test two models.
+            "WORKER_MODEL_NAME": model,
             "DATA_MODE": "cloud-only",
             "EXECUTION_BACKEND": backend,
             "SANDBOX_ENABLED": "false",
@@ -104,23 +106,49 @@ def configure_environment(key: str, model: str, backend: str, timeout: int) -> N
     )
 
 
-def run_turn(websocket, message: str) -> tuple[list[dict], float]:
+def run_turn(websocket, message: str, approve: bool = False) -> tuple[list[dict], float]:
+    """One turn. A mid-turn permission prompt (`approval_required` with an id) is answered
+    like the UI would, so the turn is not left waiting for its consent timeout."""
     started = time.monotonic()
     websocket.send_json({"type": "message", "content": message, "mode": "auto"})
     frames: list[dict] = []
     while True:
         frame = websocket.receive_json()
         frames.append(frame)
+        if frame.get("type") == "approval_required" and frame.get("id"):
+            websocket.send_json(
+                {
+                    "type": "approval",
+                    "approved": approve,
+                    "id": frame["id"],
+                    "tool": frame.get("tool", ""),
+                    "content": frame.get("content", ""),
+                }
+            )
+            continue
         if frame.get("type") in {"final", "error", "cancelled"} or (
             frame.get("type") == "approval_required" and not frame.get("id")
         ):
             return frames, time.monotonic() - started
 
 
+def frame_text(frame: dict) -> str:
+    """What a terminal frame says: `content` on an error frame, `response` on a final one."""
+    return str(frame.get("response") or frame.get("content") or frame.get("message") or "").strip()
+
+
 def is_quota_error(frames: list[dict]) -> bool:
     last = frames[-1]
-    text = str(last.get("message") or last.get("error") or last.get("response") or "")
-    return last.get("type") == "error" and any(t in text for t in ("429", "RESOURCE_EXHAUSTED", "quota"))
+    return last.get("type") == "error" and any(t in frame_text(last) for t in ("429", "RESOURCE_EXHAUSTED", "quota"))
+
+
+def is_provider_outage(frames: list[dict]) -> bool:
+    """The provider was unavailable (overloaded, or stopped streaming). Not something Wizard did."""
+    last = frames[-1]
+    text = frame_text(last).lower()
+    return last.get("type") == "error" and any(
+        t in text for t in ("503", "unavailable", "overloaded", "no streaming chunk", "timed out", "connection")
+    )
 
 
 def main() -> int:
@@ -129,6 +157,8 @@ def main() -> int:
     parser.add_argument("--backend", default="host", choices=["host", "inprocess", "docker"])
     parser.add_argument("--pace", type=float, default=20.0, help="seconds between turns (free-tier quota)")
     parser.add_argument("--timeout", type=int, default=240, help="per-turn agent timeout in seconds")
+    parser.add_argument("--approve", action="store_true", help="grant mid-turn permission prompts (default: deny)")
+    parser.add_argument("--only", default="", help="comma-separated turn numbers to run, e.g. 2,3,4 (default: all)")
     args = parser.parse_args()
 
     key = sys.stdin.read().strip()
@@ -144,7 +174,9 @@ def main() -> int:
     from src.api.api import app
     from src.core.session import session_manager
 
+    only = {int(n) for n in args.only.split(",") if n.strip()}
     failures: list[str] = []
+    outages: list[int] = []
     with TestClient(app) as client:
         upload = client.post("/api/datasets?clean=false", files={"file": ("employees.csv", dataset_csv(), "text/csv")})
         upload.raise_for_status()
@@ -156,11 +188,13 @@ def main() -> int:
         with client.websocket_connect(f"/ws/chat?session={session_id}") as websocket:
             websocket.receive_json()
             for index, (message, workflow, must_have, must_not) in enumerate(TURNS, start=1):
-                frames, elapsed = run_turn(websocket, message)
+                if only and index not in only:
+                    continue
+                frames, elapsed = run_turn(websocket, message, args.approve)
                 if is_quota_error(frames):
                     print("  (rate limited, waiting 65s and retrying once)")
                     time.sleep(65)
-                    frames, elapsed = run_turn(websocket, message)
+                    frames, elapsed = run_turn(websocket, message, args.approve)
 
                 last = frames[-1]
                 # Announced once, first, as its own frame, so it exists even for a turn that errors or stops at the plan gate.
@@ -176,23 +210,31 @@ def main() -> int:
                 if types & must_not:
                     problems.append(f"unexpected frames {sorted(types & must_not)}")
 
-                verdict = "PASS" if not problems else "FAIL"
+                outage = bool(problems) and is_provider_outage(frames)
+                verdict = "PASS" if not problems else "PROVIDER" if outage else "FAIL"
                 print(f"\n[{index}/{len(TURNS)}] {verdict}  {message[:70]!r}")
                 shown = {k: route.get(k) for k in ("workflow", "complexity", "plan", "verify", "escalate")}
                 print(f"  route={shown}  frames={len(frames)}  {elapsed:.1f}s")
-                text = str(last.get("response") or last.get("message") or "").strip().replace("\n", " ")
+                for asked in (f for f in frames if f.get("type") == "approval_required" and f.get("id")):
+                    detail = {k: str(v)[:110] for k, v in asked.items() if k not in {"type", "id", "at"}}
+                    print(f"  permission asked ({'granted' if args.approve else 'denied'}): {detail}")
+                text = frame_text(last).replace("\n", " ")
                 print(f"  reply: {text[:260]}")
                 for problem in problems:
                     print(f"  problem: {problem}")
-                    failures.append(f"turn {index}: {problem}")
+                if outage:
+                    outages.append(index)
+                else:
+                    failures.extend(f"turn {index}: {problem}" for problem in problems)
 
-                if index < len(TURNS):
-                    time.sleep(args.pace)
+                time.sleep(args.pace)
 
     session_manager.shutdown()
+    ran = len(only) if only else len(TURNS)
     failed_turns = {failure.split(":")[0] for failure in failures}
-    print(f"\n{len(TURNS) - len(failed_turns)}/{len(TURNS)} turns met their expectation")
-    return 1 if failures else 0
+    print(f"\n{ran - len(failed_turns) - len(outages)}/{ran} turns met their expectation", end="")
+    print(f", {len(outages)} lost to the provider being unavailable (turns {outages})" if outages else "")
+    return 1 if failures else 3 if outages else 0
 
 
 if __name__ == "__main__":

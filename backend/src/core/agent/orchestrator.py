@@ -2976,11 +2976,22 @@ class AnalysisOrchestrator:
         for candidate in candidates:
             await emit(emitter, EventType.SKILL_CANDIDATE, **candidate.to_dict())
 
+    @staticmethod
+    def _last_code_ran_ok(state: RunState) -> bool:
+        """Whether the code the turn ended with was executed and succeeded.
+
+        `state.code` is what was last *written*. A declined install leaves code that
+        never ran, with no error and no block (the turn carries on), so "has code
+        and no error" is not the same as "worked". Only what ran is worth replaying.
+        """
+        code_steps = [step for step in state.investigation.steps if step.kind == ActionKind.CODE]
+        return bool(code_steps) and code_steps[-1].ok
+
     async def _finalize(self, state: RunState, session: Session, emitter: Emitter | None):
         """Persists what was learned and emits the terminal event."""
         columns = [str(c) for c in session.df.columns] if session.df is not None else []
 
-        if state.code and not state.error and not state.blocked:
+        if state.code and not state.error and not state.blocked and self._last_code_ran_ok(state):
             semantic_cache.add(state.instruction, columns, state.code, scope=self._cache_scope(session, state.route))
 
             if state.retry_count > 0 and state.failed_code:
