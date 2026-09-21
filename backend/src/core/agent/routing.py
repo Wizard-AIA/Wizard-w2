@@ -452,7 +452,9 @@ _MEAN_VERB_PREV = frozenset(
 )
 
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
-_CLAUSE_SPLIT = re.compile(r"[;\n]|,\s+(?:and\s+|then\s+)?|\s+and\s+then\s+|\s+then\s+|\s+and\s+(?=\w)", re.IGNORECASE)
+#: Written for normalised text (`_normalised`): single spaces only, so no pattern
+#: here needs a `\s+` that could backtrack over a long run of them.
+_CLAUSE_SPLIT = re.compile(r"[;\n]|, (?:and |then )?| and then | then | and (?=\w)", re.IGNORECASE)
 
 #: "data types" and "how big is this" are structure; a bare "type" is not ("what type of customer churned").
 _TYPE_OF_COLUMNS = re.compile(
@@ -586,13 +588,15 @@ _MAX_ROUTED_CHARS = 4000
 
 
 def _normalised(message: str | None, limit: int = _MAX_ROUTED_CHARS) -> str:
-    """Whitespace collapsed to single spaces, and bounded.
+    """Whitespace inside a line collapsed to single spaces, blank lines dropped, and bounded.
 
     Every pattern here is written for single spaces. A run of thousands of them
     is what makes an otherwise ordinary regular expression backtrack badly, so
-    the input a pattern sees is one it cannot be attacked with.
+    the input a pattern sees is one it cannot be attacked with. Line breaks stay:
+    they separate clauses.
     """
-    return " ".join((message or "").split())[:limit]
+    lines = (" ".join(line.split()) for line in (message or "").splitlines())
+    return "\n".join(line for line in lines if line)[:limit]
 
 
 def is_interrupt_intent(message: str) -> bool:

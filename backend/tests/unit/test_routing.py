@@ -380,26 +380,34 @@ def test_data_that_contains_the_word_is_not_an_interrupt(message: str) -> None:
     assert not is_interrupt_intent(message)
 
 
-@pytest.mark.parametrize(
-    "hostile",
-    [
-        "enough" + " " * 200_000 + "x",
-        "stop" + " it" * 50_000 + "!" + " " * 50_000 + "x",
-        "why " + "and " * 60_000,
-        "then" + " " * 200_000 + "and then" + " " * 200_000 + "x",
-        "a," + " " * 200_000 + "b",
-        "why " * 60_000 + "you?",
-        "create " + "a " * 60_000 + "column",
-    ],
-)
-def test_hostile_input_is_routed_in_bounded_time(hostile: str) -> None:
+#: Built inside the test, not in the parametrisation: a 200,000 character test id
+#: is not something every platform's test runner and cache can store.
+HOSTILE = {
+    "spaces-after-enough": lambda: "enough" + " " * 200_000 + "x",
+    "repeated-stop-words": lambda: "stop" + " it" * 50_000 + "!" + " " * 50_000 + "x",
+    "repeated-and": lambda: "why " + "and " * 60_000,
+    "spaces-around-then": lambda: "then" + " " * 200_000 + "and then" + " " * 200_000 + "x",
+    "spaces-after-comma": lambda: "a," + " " * 200_000 + "b",
+    "repeated-why": lambda: "why " * 60_000 + "you?",
+    "repeated-article": lambda: "create " + "a " * 60_000 + "column",
+    "newlines-and-spaces": lambda: ("x" + " " * 5_000 + "\n") * 100,
+}
+
+
+@pytest.mark.parametrize("case", list(HOSTILE))
+def test_hostile_input_is_routed_in_bounded_time(case: str) -> None:
     """A chat message is user-controlled. Long runs of spaces or repeated words must not stall the router."""
     import time
 
+    hostile = HOSTILE[case]()
     started = time.perf_counter()
     is_interrupt_intent(hostile)
     route_turn(hostile, AFTER_ANALYSIS)
     assert time.perf_counter() - started < 0.5
+
+
+def test_line_breaks_still_separate_clauses() -> None:
+    assert extract_signals("average salary\nplot churn").n_clauses == 2
 
 
 def test_whitespace_does_not_change_a_route() -> None:
