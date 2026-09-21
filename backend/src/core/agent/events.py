@@ -32,6 +32,18 @@ class EventType(StrEnum):
     FINAL = "final"
 
     # ------------------------------------------------------------------ #
+    # Turn lifecycle (v1.0.14).
+    #
+    # `route` says which workflow this message was given and why, before any
+    # work starts, so the UI renders what the backend is actually doing
+    # instead of guessing. `cancelled` is the terminal frame of an interrupted
+    # turn: every turn now ends in exactly one of `final`, `error`,
+    # `approval_required` (plan gate) or `cancelled`.
+    # ------------------------------------------------------------------ #
+    ROUTE = "route"  # {intent, workflow, complexity, plan, verify, escalate, deep, needs_data, reasons, source, mode}
+    CANCELLED = "cancelled"  # {reason}
+
+    # ------------------------------------------------------------------ #
     # Investigation frames.
     #
     # The run is a loop, not a pipeline, so "which step of five are we on" no
@@ -83,6 +95,8 @@ class EventType(StrEnum):
 
 class Phase(StrEnum):
     IDLE = "idle"
+    ROUTING = "routing"  # the message was received and is being routed (no model call)
+    RESPONDING = "responding"  # a conversational reply is streaming; no tools are running
     PLANNING = "planning"
     AWAITING_APPROVAL = "awaiting_approval"
     SEARCHING = "searching"
@@ -99,6 +113,7 @@ class Phase(StrEnum):
     ANSWERING = "answering"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
