@@ -91,7 +91,7 @@ async def test_an_install_is_declined_when_nobody_can_be_asked(loaded_session: S
     collector = EventCollector()
 
     result = await orchestrator.run(
-        session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=collector
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=collector
     )
 
     assert result.status == "completed"
@@ -104,7 +104,7 @@ async def test_auto_approve_installs_without_asking(loaded_session: Session, stu
     collector = EventCollector()
 
     result = await orchestrator.run(
-        session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=collector
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=collector
     )
 
     assert not collector.of_type(EventType.APPROVAL_REQUIRED)
@@ -123,11 +123,36 @@ async def test_a_denied_install_leaves_the_turn_alive(loaded_session: Session, s
     stub_llm(_script(CODE_NEEDING_A_LIBRARY))
 
     result = await orchestrator.run(
-        session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=EventCollector()
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=EventCollector()
     )
 
     assert result.status == "completed"
     assert any("deny" in warning for warning in result.warnings)
+
+
+@pytest.mark.usefixtures("real_routing")
+async def test_code_that_never_ran_is_not_cached_as_the_answer(loaded_session: Session, stub_llm) -> None:
+    """A declined install leaves code that was written but never executed.
+
+    The turn carries on (see above), so it has no error and is not blocked, and
+    the answer cache took that as success. The same question then replayed the
+    unrun code and asked for the same install again. Found in a live run: two
+    identical asks, the second one served from the cache at similarity 1.0.
+    """
+    from src.core.database import db_mgr
+
+    loaded_session.permissions.profile = "custom"
+    loaded_session.permissions.set_ruling("library_install", "deny")
+    stub_llm([CODE_NEEDING_A_LIBRARY, "The answer."])  # a `direct` turn: code, then the answer
+
+    result = await orchestrator.run(
+        session=loaded_session, instruction="calculate the total of column A", mode="auto", emitter=EventCollector()
+    )
+
+    assert result.route["workflow"] == "direct"
+    # Matched on the code, not the query: the cache lowercases the question it stores.
+    cached = [entry for entry in db_mgr.get_cache_entries() if "lifelines" in entry["code"]]
+    assert cached == [], "code that was never executed must not be served again as a solution"
 
 
 async def test_code_that_needs_nothing_new_is_never_gated(loaded_session: Session, stub_llm) -> None:
@@ -156,7 +181,9 @@ async def test_a_grant_is_remembered_for_the_rest_of_the_session(loaded_session:
     stub_llm(_script(CODE_NEEDING_A_LIBRARY))
     collector = EventCollector()
 
-    await orchestrator.run(session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=collector)
+    await orchestrator.run(
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=collector
+    )
 
     assert not collector.of_type(EventType.APPROVAL_REQUIRED)
 
@@ -169,7 +196,7 @@ async def test_consent_is_asked_for_when_the_transport_can_carry_it(loaded_sessi
     task = asyncio.ensure_future(
         orchestrator.run(
             session=loaded_session,
-            instruction="Fit a survival curve",
+            instruction="Calculate a survival curve",
             mode="fast",
             emitter=collector,
             can_prompt=True,
@@ -252,14 +279,14 @@ async def test_the_profile_changes_consent_without_changing_depth(loaded_session
     loaded_session.permissions.profile = "auto-approve"
     stub_llm(_script(CODE_NEEDING_A_LIBRARY))
     permissive = await orchestrator.run(
-        session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=EventCollector()
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=EventCollector()
     )
 
     loaded_session.permissions.profile = "custom"
     loaded_session.permissions.set_ruling("library_install", "deny")
     stub_llm(_script(CODE_NEEDING_A_LIBRARY))
     strict = await orchestrator.run(
-        session=loaded_session, instruction="Fit a survival curve", mode="fast", emitter=EventCollector()
+        session=loaded_session, instruction="Calculate a survival curve", mode="fast", emitter=EventCollector()
     )
 
     assert permissive.iterations == strict.iterations, "the profile changed the iteration budget"

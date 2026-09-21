@@ -19,11 +19,11 @@ function memoryStore(initial: string | null): SessionStore & { value: string | n
 const BACKEND_MESSAGE = "Session not found or expired. Create a new session and re-upload your data."
 
 test("a 404 only means the session is gone when the backend says so", () => {
-  assert.equal(isSessionGone(404, BACKEND_MESSAGE), true)
+  assert.equal(isSessionGone(404, { message: BACKEND_MESSAGE }), true)
   // A missing file or dataset is a 404 too; it must not cost the user their session.
-  assert.equal(isSessionGone(404, "File not found."), false)
-  assert.equal(isSessionGone(404, "No dataset named 'x' in this session"), false)
-  assert.equal(isSessionGone(500, BACKEND_MESSAGE), false)
+  assert.equal(isSessionGone(404, { message: "File not found." }), false)
+  assert.equal(isSessionGone(404, { message: "No dataset named .x. in this session" }), false)
+  assert.equal(isSessionGone(500, { message: BACKEND_MESSAGE }), false)
 })
 
 test("only reads are replayed after recovery", () => {

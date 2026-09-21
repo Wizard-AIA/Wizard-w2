@@ -44,3 +44,55 @@ async def test_architect_flags_a_pandas_antipattern() -> None:
 
     assert review["applicable"] is True
     assert review["feedback"]
+
+
+# --------------------------------------------------------------------------- #
+# A reviewer is a model call like any other: bound by the data policy, and counted
+# --------------------------------------------------------------------------- #
+class _RecordingLLM:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def acomplete(self, prompt: str, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        return "Check the sample size."
+
+
+CLAIM = ("run a t-test", "stats.ttest_ind(a, b)", "The groups differ significantly.")
+
+
+async def test_a_reviewer_asks_nothing_when_the_policy_keeps_values_off_its_model(monkeypatch) -> None:
+    from src.core.agent.council import ReviewGuard
+
+    llm = _RecordingLLM()
+    monkeypatch.setattr("src.core.agent.council.llm_provider", llm)
+
+    review = await StatisticianAgent().review(*CLAIM, guard=ReviewGuard(redact=True))
+
+    assert llm.calls == [], "execution output must not go to a model the policy does not trust with values"
+    assert review["feedback"], "the deterministic finding stands without the model"
+
+
+async def test_a_reviewer_carries_the_data_mode_and_session_and_reports_its_call(monkeypatch) -> None:
+    from src.config import settings
+    from src.core.agent.council import ReviewGuard
+
+    llm = _RecordingLLM()
+    monkeypatch.setattr("src.core.agent.council.llm_provider", llm)
+    recorded: list[tuple] = []
+
+    guard = ReviewGuard(data_mode="local-only", session_id="s-1", record=lambda *args: recorded.append(args))
+    review = await StatisticianAgent().review(*CLAIM, guard=guard)
+
+    assert len(llm.calls) == 1
+    assert llm.calls[0]["data_mode"] == "local-only" and llm.calls[0]["session_id"] == "s-1"
+    assert llm.calls[0]["max_tokens"] == settings.output_budget("review")
+    assert [entry[0] for entry in recorded] == ["review"] and recorded[0][2] == len(llm.calls[0]["prompt"])
+    assert "Check the sample size." in review["feedback"]
+
+
+async def test_a_reviewer_without_a_guard_behaves_as_before(monkeypatch) -> None:
+    llm = _RecordingLLM()
+    monkeypatch.setattr("src.core.agent.council.llm_provider", llm)
+    await StatisticianAgent().review(*CLAIM)
+    assert len(llm.calls) == 1 and llm.calls[0]["data_mode"] is None

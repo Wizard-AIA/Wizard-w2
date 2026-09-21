@@ -14,6 +14,40 @@ Historically the WebSocket handler re-implemented the node loop by hand, and
 the two copies drifted until the semantic cache and the fast-path router
 applied to REST only.
 
+## Turn transport lifecycle
+
+Every received message emits `status {phase: "routing"}` before model work.
+The backend then emits a `route` frame describing the selected workflow. A
+turn ends with exactly one terminal frame: `final`, `error`, plan-gate
+`approval_required` without an id, or `cancelled`. Permission
+`approval_required` frames with an id are pauses inside the same turn.
+
+`cancel` and a disconnect cancel the current task, interrupt the executor in a
+thread, abandon consent, release child runtimes, and await the task for at most
+five seconds. The orchestrator ends its own turn on cancellation, so nothing
+transient outlives it; the chart code from the turn before is kept. The terminal cancellation reason
+is `user` or `disconnect`. A cancel with no running turn only
+returns an idle status.
+
+The transport never begins or ends a turn: `AnalysisOrchestrator.run` owns
+`Session.task`, so a transport that also ended it could wipe the plan a typed
+"go ahead" is about to run.
+
+A message arriving while another turn runs is checked after consent answers.
+An interrupt intent such as `stop` cancels the running turn. Other messages
+receive `error {code: "busy"}` and do not affect it. REST, SSE and WebSocket
+share one per-session lock (`deps.turn_lock`), so a second browser tab on the
+same session is refused with `busy` while the first has a turn running, and its
+message is not written to history. The lock is released when the turn ends or is
+cancelled, including a task cancelled before it started. Anything that changes a
+session's datasets (upload, activate, delete, a connection import) answers `409`
+while a turn is running, and an upload checks again after parsing, because a turn
+may have started in the meantime. SSE appends the user message once and cancels
+and interrupts its background task when the client disconnects.
+
+The transport tracks terminal frames and emits `error {code: "internal"}` if
+an orchestrator returns without one. Duplicate terminal events are suppressed.
+
 ---
 
 ## Event Protocol — `events.py`

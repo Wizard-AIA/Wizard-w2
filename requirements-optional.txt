@@ -7,15 +7,9 @@
 # set; without it the app uses an in-process cache and queue.
 redis>=8.1.0
 
-# Talk to an OpenAI-compatible endpoint instead of a local Ollama daemon
-# (API_PROVIDER=openai, gemini, custom_gateway, or lmstudio -- Gemini's own
-# API speaks this dialect through its /v1beta/openai compatibility route).
-langchain-openai>=1.6.2
-
-# Anthropic's Messages API, which is not OpenAI-shaped and needs its own client.
-# Only required when a role is assigned to the `anthropic` provider; without it
-# that provider reports what to install rather than failing obscurely.
-langchain-anthropic>=1.7.2
+# The cloud provider clients (`langchain-openai` for OpenAI, Gemini, LM Studio
+# and custom gateways; `langchain-anthropic` for Anthropic) moved into
+# `requirements.txt` in v1.0.14, so they are no longer listed here.
 
 # ---------------------------------------------------------------------------
 # Data source connectors

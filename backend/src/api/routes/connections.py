@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from src.api.deps import SESSION_HEADER, get_connection_store, get_session, require_api_key
+from src.api.deps import SESSION_HEADER, get_connection_store, get_session, require_api_key, require_idle_session
 from src.api.schemas import (
     ConnectionImportRequest,
     ConnectionImportResponse,
@@ -339,7 +339,7 @@ async def import_from_connection(
     connection_id: str,
     request: ConnectionImportRequest,
     response: Response,
-    session: Session = Depends(get_session),
+    session: Session = Depends(require_idle_session),
     connection_store: ConnectionStore = Depends(get_connection_store),
 ) -> ConnectionImportResponse:
     """Reads one table into the session, exactly as an upload would.

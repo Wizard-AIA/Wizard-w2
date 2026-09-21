@@ -32,6 +32,8 @@ from typing import Any
 
 from src.config import settings
 from src.core.data_mode import check_provider
+from src.core.llm.adapters import adapter_for
+from src.core.llm.generation import GenerationConfig
 from src.core.llm.resources import LOCAL_PROVIDERS, ResidentPlan, plan_for_models
 from src.core.llm.router import TaskTier
 from src.core.llm.usage import extract_usage, usage_ledger
@@ -494,12 +496,17 @@ class LLMProvider:
                 from langchain_ollama import ChatOllama
 
                 logger.info("Initializing ChatOllama client", model=spec.model, temperature=spec.temperature)
+                generation = adapter_for(spec.provider, spec.api_style, spec.model).translate(
+                    GenerationConfig(
+                        max_output_tokens=spec.max_tokens,
+                        temperature=spec.temperature,
+                        num_ctx=spec.num_ctx,
+                    )
+                )
                 return ChatOllama(
                     model=spec.model,
                     base_url=spec.base_url or settings.OLLAMA_BASE_URL,
-                    temperature=spec.temperature,
-                    num_predict=spec.max_tokens,
-                    num_ctx=spec.num_ctx,
+                    **generation.values,
                     num_thread=settings.LLM_NUM_THREAD,
                     repeat_penalty=1.1,
                     # The manager and worker alternate every iteration, so an
@@ -519,33 +526,36 @@ class LLMProvider:
             if spec.api_style == "anthropic":
                 try:
                     from langchain_anthropic import ChatAnthropic
-                except ImportError as exc:  # pragma: no cover - depends on optional extra
+                except ImportError as exc:  # pragma: no cover - only if the install skipped requirements.txt
                     raise LLMUnavailableError(
                         "Anthropic support needs the `langchain-anthropic` package. "
-                        "Install it with `uv pip install -r requirements-optional.txt`."
+                        "Install it with `uv pip install -r requirements.txt`."
                     ) from exc
 
                 logger.info("Initializing ChatAnthropic client", model=spec.model)
                 # Assembled as a dict because the client's own annotations want a
                 # SecretStr, which it coerces from a plain string at runtime.
+                generation = adapter_for(spec.provider, spec.api_style, spec.model).translate(
+                    GenerationConfig(
+                        max_output_tokens=spec.max_tokens,
+                        temperature=spec.temperature,
+                        timeout_s=settings.LLM_REQUEST_TIMEOUT,
+                    )
+                )
                 anthropic_kwargs: dict[str, Any] = {
                     "model_name": spec.model,
                     "base_url": spec.base_url or None,
                     "api_key": spec.api_key or None,
-                    "temperature": spec.temperature,
-                    # Anthropic requires an output bound; the per-purpose budget is it.
-                    "max_tokens_to_sample": spec.max_tokens,
-                    "timeout": settings.LLM_REQUEST_TIMEOUT,
-                    "stop": None,
+                    **generation.values,
                 }
                 return ChatAnthropic(**anthropic_kwargs)
 
             try:
                 from langchain_openai import ChatOpenAI
-            except ImportError as exc:  # pragma: no cover - depends on optional extra
+            except ImportError as exc:  # pragma: no cover - only if the install skipped requirements.txt
                 raise LLMUnavailableError(
                     "OpenAI, Gemini, and gateway support needs the `langchain-openai` package. "
-                    "Install it with `uv pip install -r requirements-optional.txt`."
+                    "Install it with `uv pip install -r requirements.txt`."
                 ) from exc
 
             # LM Studio, vLLM, llama.cpp's server and hosted gateways all speak
@@ -557,13 +567,20 @@ class LLMProvider:
                 model=spec.model,
                 base_url=spec.base_url or "<default>",
             )
+            # Gemini is reached through its OpenAI-compatible route, so it takes
+            # the same names as every other compatible server.
+            generation = adapter_for("", spec.api_style, spec.model).translate(
+                GenerationConfig(
+                    max_output_tokens=spec.max_tokens,
+                    temperature=spec.temperature,
+                    timeout_s=settings.LLM_REQUEST_TIMEOUT,
+                )
+            )
             openai_kwargs: dict[str, Any] = {
                 "model": spec.model,
                 "base_url": spec.base_url or None,
                 "api_key": spec.api_key or "not-required",
-                "temperature": spec.temperature,
-                "max_tokens": spec.max_tokens,
-                "timeout": settings.LLM_REQUEST_TIMEOUT,
+                **generation.values,
             }
             return ChatOpenAI(**openai_kwargs)
         except LLMUnavailableError:
@@ -744,9 +761,12 @@ class LLMProvider:
         provider: str | None = None,
         data_mode: str | None = None,
         session_id: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Multimodal description of a rendered chart."""
-        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2, provider=provider, data_mode=data_mode)
+        spec = self.resolve(
+            LLMRole.VISION, model=model, temperature=0.2, provider=provider, max_tokens=max_tokens, data_mode=data_mode
+        )
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))

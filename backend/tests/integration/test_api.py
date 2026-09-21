@@ -406,9 +406,19 @@ def test_report_accepts_a_mode_and_rejects_an_unknown_one(client: TestClient) ->
 # --------------------------------------------------------------------------- #
 # Chat validation
 # --------------------------------------------------------------------------- #
-def test_chat_requires_a_dataset(client: TestClient) -> None:
+def test_chat_works_before_a_dataset_is_loaded(client: TestClient) -> None:
+    """v1.0.14: a greeting needs no data. The reply says what is missing when it matters."""
     response = client.post("/api/chat", json={"message": "hello"})
-    assert response.status_code == 412
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["route"]["workflow"] == "converse"
+
+
+def test_an_analysis_request_without_a_dataset_is_answered_not_refused(client: TestClient) -> None:
+    response = client.post("/api/chat", json={"message": "calculate the average salary"})
+    assert response.status_code == 200
+    assert response.json()["route"]["needs_data"] is True
 
 
 def test_chat_rejects_an_empty_message(client: TestClient, simple_df: pd.DataFrame) -> None:

@@ -573,6 +573,7 @@ class ChatResponse(BaseModel):
     #: Which skills informed this turn. Empty is the ordinary case and means
     #: nothing matched, not that the feature is off.
     skills_used: list[str] = Field(default_factory=list)
+    route: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillSummary(BaseModel):

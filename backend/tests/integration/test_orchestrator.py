@@ -14,10 +14,16 @@ import pytest
 
 from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import AnalysisOrchestrator, orchestrator
+from src.core.agent.routing import PlanPolicy, TurnContext, Workflow, route_turn
 from src.core.database import db_mgr
 from src.core.llm.provider import LLMUnavailableError
 from src.core.semantic_cache import semantic_cache
 from src.core.session import Session
+
+
+# These tests are about the loop (iterations, verification, subagents, skills), not
+# about which workflow a message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
 
 
 class ScriptedLLM:
@@ -78,15 +84,17 @@ def stub_llm(monkeypatch):
     ["show first 5 rows", "show columns", "how many rows are there", "preview dataset"],
 )
 def test_simple_requests_bypass_planning(instruction: str) -> None:
-    assert AnalysisOrchestrator.is_simple(instruction)
+    route = route_turn(instruction, TurnContext(has_dataset=True, columns=("A", "B", "C")))
+    assert route.plan is PlanPolicy.NONE and route.workflow is Workflow.INSPECT
 
 
 @pytest.mark.parametrize(
     "instruction",
     ["build a regression model", "plot revenue against spend", "find and explain outliers"],
 )
-def test_complex_requests_do_not_bypass_planning(instruction: str) -> None:
-    assert not AnalysisOrchestrator.is_simple(instruction)
+def test_complex_requests_are_not_schema_questions(instruction: str) -> None:
+    route = route_turn(instruction, TurnContext(has_dataset=True, columns=("A", "B", "C")))
+    assert route.workflow is not Workflow.INSPECT
 
 
 def test_visual_revision_detection() -> None:
@@ -412,14 +420,16 @@ async def test_retries_are_bounded(loaded_session: Session, stub_llm) -> None:
 # --------------------------------------------------------------------------- #
 # Failure modes
 # --------------------------------------------------------------------------- #
-async def test_missing_dataset_is_reported(session: Session, stub_llm) -> None:
-    stub_llm([])
+async def test_missing_dataset_is_explained_in_conversation(session: Session, stub_llm, real_routing) -> None:
+    stub_llm(["I need a file first. Upload a CSV and I will analyse it."])
     collector = EventCollector()
 
     result = await orchestrator.run(session=session, instruction="analyse", mode="fast", emitter=collector)
 
-    assert result.status == "failed"
-    assert collector.of_type(EventType.ERROR)
+    assert result.status == "completed"
+    assert result.route["workflow"] == "converse" and result.route["needs_data"] is True
+    assert "upload" in result.answer.lower()
+    assert not collector.of_type(EventType.ERROR)
 
 
 async def test_unreachable_model_produces_a_clear_message(loaded_session: Session, monkeypatch) -> None:

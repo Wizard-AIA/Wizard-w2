@@ -13,6 +13,64 @@ temperature, max_tokens, num_ctx)`, so per-session model selection is cheap.
 Every entry point has a streaming twin (`astream`, `stream_to`), and every one
 takes `max_tokens`.
 
+### Generation configuration
+
+`src.core.llm.generation.resolve_generation(purpose, *, mode="auto",
+workflow="agentic", provider=None, model=None, temperature=None,
+override=None)` decides how many tokens a call may produce and records why. It
+returns `ResolvedGeneration` with `.config`, `.provenance`, `.dropped`,
+`.explain()` and `.to_dict()`. The orchestrator calls it for every model call in
+a turn (`AnalysisOrchestrator._budget`), which is also where the turn trace
+counts calls and prompt size.
+
+Precedence, lowest to highest:
+
+1. The purpose's configured budget (`LLM_MAX_TOKENS_PLAN|DECISION|CODE|ANSWER|REVIEW|CONVERSE`).
+2. Mode. `deep` widens `plan`, `code` and `answer` by 1.5x. `fast` changes no
+   budget: it saves calls (no planner, no verification), and a program cut off
+   mid-statement is a failed call, so it never shrinks one.
+3. Workflow. A `direct` or `inspect` answer is capped at 1536 tokens; it states
+   a result the code already computed.
+4. The user's temperature setting.
+5. A per-request override.
+6. `MAX_TOKENS`, the process ceiling. This is a clamp, not an override: nothing
+   above it may raise it back.
+
+A provider limit is not guessed from a model's name (`"mini"` is inside
+`"gemini"`). A provider that rejects a value reports it and the call fails
+visibly.
+
+`resolved.explain()` answers "why did this call get N tokens" without prompt
+text or secrets. Every model call inside a turn is sized and counted this way:
+the manager and worker calls through `AnalysisOrchestrator._budget`, the
+council's reviews and the chart description through `resolve_generation`, with
+each reported to the turn trace. One call sits outside a turn and uses
+`settings.output_budget` directly, which resolves to the same number: dataset
+cleaning on upload (`agent/flow.py`).
+
+Every one of those calls also carries the session's data mode and data policy. A
+council reviewer whose model the policy does not trust with values does not ask
+(its deterministic findings stand alone), and a chart is not described by such a
+model, because a chart is the data drawn.
+
+#### Adapters
+
+`src.core.llm.adapters` translates the normalized config into constructor
+arguments and reports what the provider cannot represent (`dropped`).
+
+| Family | Output limit | Notes |
+|---|---|---|
+| Ollama | `num_predict` | Also `num_ctx`, `top_k`, `top_p`, `stop`; timeout goes in `client_kwargs`. |
+| OpenAI-compatible (OpenAI, Gemini's compatible route, LM Studio, others) | `max_tokens` | Always this name. `langchain-openai` maps it to `max_completion_tokens` for the models that need that; choosing by model name here would only duplicate and eventually contradict it. `top_k` and `num_ctx` are dropped. |
+| Anthropic | `max_tokens_to_sample` | The alias of `ChatAnthropic.max_tokens`; the spelling this codebase used before v1.0.14. |
+
+Verified against the real clients: `langchain-ollama 1.1.0`, `langchain-openai`
+and `langchain-anthropic 1.7` (constructor fields probed, and the adapter
+payload builds each client in `test_generation.py`). Those two tests skip where
+the optional packages are not installed, so CI covers the payload shape only.
+If a client renames a field, the call fails at construction; it does not
+silently drop the budget.
+
 ---
 
 ## Output Budgets

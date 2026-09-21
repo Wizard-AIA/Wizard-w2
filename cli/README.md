@@ -184,12 +184,12 @@ A few things this does for you beyond writing the flag values into
   and leaves `MODEL_NAME`/`WORKER_MODEL_NAME` empty (auto-select on that
   provider) unless you pin one yourself.
 - Any provider other than plain `ollama` — including `lmstudio` — needs
-  `langchain-openai` (Anthropic needs `langchain-anthropic` too), which is
-  not in the base `requirements.txt`/`requirements-local.txt` install.
-  `wizard init`/`wizard update` read `API_PROVIDER`/`DATA_MODE` back out of
-  `backend/.env` and add `requirements-optional.txt` to the install
-  automatically when one of them needs it, so a cloud/hybrid setup ends up
-  with a working client, not an `ImportError` on the first turn.
+  `langchain-openai` (Anthropic needs `langchain-anthropic` too). Both are in
+  the base `requirements.txt` since v1.0.14, so a cloud/hybrid setup has a
+  working client, not an `ImportError` on the first turn.
+  `wizard init`/`wizard update` still read `API_PROVIDER`/`DATA_MODE` back out
+  of `backend/.env` and add `requirements-optional.txt` (Redis and the
+  connector drivers) when one of them is cloud or hybrid.
 - A cloud provider missing its key (e.g. `--provider anthropic` with no
   `--anthropic-key`) does not fail the run — it prints where to add the key
   (`wizard init --anthropic-key ...` again, a hand-edit of `backend/.env`,

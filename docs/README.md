@@ -8,6 +8,7 @@ Welcome to the technical documentation for **Wizard w2**, a local-first autonomo
 
 ### Core Architecture & Agent Loop
 - [`docs/architecture.md`](architecture.md) — System topology, cross-cutting architectural invariants, and subsystem directory index.
+- [`docs/routing.md`](routing.md) — How each message is routed to the smallest workflow that serves it: converse, inspect, direct, agentic, plan-only. Modes as policy, escalation, task state, frames, and how to debug a route.
 - [`docs/agent-loop.md`](agent-loop.md) — Orchestrator loop, event protocol frames, plan & permission gates, deterministic decisions, subagents, grounding/trust layer, and script/notebook export.
 - [`docs/runtime.md`](runtime.md) — Execution backends (`host`/`docker`/`inprocess`), daemon TCP protocol & preloading, session state, reference documents, context budgeting, and SQLite persistence.
 

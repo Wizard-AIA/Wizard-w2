@@ -29,6 +29,11 @@ from src.core.agent.orchestrator import AnalysisOrchestrator, orchestrator
 from src.core.session import Session
 
 
+# These tests are about the loop (iterations, verification, subagents, skills), not
+# about which workflow a message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
+
+
 CODE = "```python\nprint(df['A'].sum())\n```"
 DECIDE_CODE = "ACTION: code\nGOAL: compute it"
 

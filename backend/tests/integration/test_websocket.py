@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 from collections.abc import AsyncIterator, Iterator
 
 import pandas as pd
@@ -11,6 +12,11 @@ from fastapi.testclient import TestClient
 
 from src.api.api import app
 from src.core.session import session_manager
+
+
+# These tests are about the loop (iterations, verification, subagents, skills), not
+# about which workflow a message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
 
 
 @pytest.fixture
@@ -84,14 +90,18 @@ def test_ping_is_answered(client: TestClient) -> None:
         assert websocket.receive_json()["type"] == "pong"
 
 
-def test_message_without_a_dataset_is_rejected(client: TestClient) -> None:
+@pytest.mark.usefixtures("real_routing")
+def test_message_without_a_dataset_is_answered_in_conversation(client: TestClient) -> None:
+    """v1.0.14: no dataset is something to explain, not an error frame."""
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.receive_json()
         websocket.send_json({"type": "message", "content": "analyse this", "mode": "fast"})
 
-        frame = websocket.receive_json()
-        assert frame["type"] == "error"
-        assert "dataset" in frame["content"].lower()
+        frames = collect_until(websocket, {"final", "error"})
+    assert frames[-1]["type"] == "final"
+    route = next(frame for frame in frames if frame["type"] == "route")
+    assert route["workflow"] == "converse" and route["needs_data"] is True
+    assert frames[0]["type"] == "status" and frames[0]["phase"] == "routing"
 
 
 def test_a_reaped_session_is_re_announced_rather_than_stranding_the_socket(
@@ -191,6 +201,84 @@ def test_planning_mode_emits_an_approval_request(client: TestClient, session_wit
 
     reasoning = "".join(f["content"] for f in frames if f["type"] == "reasoning_delta")
     assert "Thinking it through" in reasoning
+
+
+def test_the_transport_leaves_the_waiting_plan_and_its_request_alone(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """The orchestrator owns the turn. A transport that also ended it, without the
+    request, would wipe what a typed "go ahead" needs to run the right question."""
+    monkeypatch.setattr(
+        "src.core.agent.orchestrator.llm_provider",
+        StreamingStub(["<thought>Thinking.</thought>\n1. Load\n2. Summarise"]),
+    )
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "summarise the table", "mode": "planning"})
+        collect_until(websocket, {"approval_required", "error", "final"})
+        live = session_manager.get(session_with_data)
+        # The frame is emitted before the turn finishes; wait for it to settle.
+        for _ in range(100):
+            if live.task.status == "awaiting_plan":
+                break
+            time.sleep(0.02)
+
+    assert live.task.status == "awaiting_plan"
+    assert "Summarise" in (live.task.pending_plan or "")
+    assert live.task.pending_instruction == "summarise the table"
+
+
+@pytest.mark.usefixtures("real_routing")
+def test_acceptance_flow_analysis_then_hi_then_a_schema_question_on_one_socket(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """The v1.0.14 symptom, end to end over the real socket: `hi` after an analysis
+    must not plan, write code or run anything, and must not disturb what came before."""
+    stub = StreamingStub(
+        [
+            "```python\nprint(df['A'].sum())\n```",  # code for the analysis
+            "The total of A is 15.",  # its answer
+            "Hello again! What would you like to look at?",  # the reply to `hi`
+            "The table has 5 rows and 3 columns.",  # the schema answer
+        ]
+    )
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", stub)
+    analysis_only = {"plan_delta", "step_start", "code", "stdout", "iteration_start", "action", "verification"}
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+
+        websocket.send_json({"type": "message", "content": "calculate the total of column A", "mode": "auto"})
+        first = collect_until(websocket, {"final", "error"})
+        assert first[-1]["type"] == "final" and first[-1]["route"]["workflow"] == "direct"
+        assert {f["type"] for f in first} & {"code", "stdout"}
+
+        websocket.send_json({"type": "message", "content": "hi", "mode": "auto"})
+        second = collect_until(websocket, {"final", "error"})
+        assert second[-1]["type"] == "final" and second[-1]["route"]["workflow"] == "converse"
+        assert not {f["type"] for f in second} & analysis_only, "hi must not run anything analysis-shaped"
+        assert "Hello again" in second[-1]["response"]
+
+        websocket.send_json({"type": "message", "content": "how many rows are there?", "mode": "auto"})
+        third = collect_until(websocket, {"final", "error"})
+        assert third[-1]["route"]["workflow"] == "inspect"
+        assert "code" not in {f["type"] for f in third}
+
+    assert not stub.responses, "every scripted call was used: one per model call, no extras"
+
+
+def test_a_turn_announces_its_route_once_and_first(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(["Hello."]))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "hi", "mode": "auto"})
+        frames = collect_until(websocket, {"final", "error"})
+
+    routing = [f for f in frames if f["type"] == "status" and f.get("phase") == "routing"]
+    assert len(routing) == 1, "the transport and the orchestrator both announced routing"
+    assert frames[0]["type"] == "status" and frames[0]["phase"] == "routing"
 
 
 def test_approval_resumes_the_run(client: TestClient, session_with_data: str, monkeypatch) -> None:
@@ -360,16 +448,10 @@ def test_cancel_reaches_a_run_that_is_waiting_for_consent(
         collect_until(websocket, {"approval_required", "final", "error"})
         websocket.send_json({"type": "cancel"})
 
-        # Not `collect_until`: releasing the paused run lets it finish, so its
-        # own frames and the acknowledgement race, and either order is correct.
-        acknowledged = False
-        for _ in range(200):
-            frame = websocket.receive_json()
-            if frame["type"] == "status" and frame["content"] == "Cancelled":
-                acknowledged = True
-                break
+        # A cancelled turn ends in exactly one terminal frame: `cancelled`.
+        frames = collect_until(websocket, {"cancelled"})
 
-    assert acknowledged
+    assert frames[-1]["type"] == "cancelled" and frames[-1]["reason"] == "user"
 
 
 def test_an_answer_for_a_request_that_is_gone_is_ignored(client: TestClient, session_with_data: str) -> None:
@@ -380,3 +462,93 @@ def test_an_answer_for_a_request_that_is_gone_is_ignored(client: TestClient, ses
         websocket.send_json({"type": "ping"})
 
         assert websocket.receive_json()["type"] == "pong"
+
+
+# --------------------------------------------------------------------------- #
+# One turn at a time per session, across windows and across REST
+# --------------------------------------------------------------------------- #
+def _park_a_turn_on_consent(websocket) -> None:
+    """Starts a turn that then waits for a human, so it stays running as long as the test needs."""
+    websocket.receive_json()
+    websocket.send_json({"type": "message", "content": "fit a survival model", "mode": "fast"})
+    collect_until(websocket, {"approval_required", "final", "error"})
+
+
+def test_a_second_window_cannot_start_a_turn_while_one_runs(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+
+    with (
+        client.websocket_connect(f"/ws/chat?session={session_with_data}") as first,
+        client.websocket_connect(f"/ws/chat?session={session_with_data}") as second,
+    ):
+        _park_a_turn_on_consent(first)
+        second.receive_json()
+
+        second.send_json({"type": "message", "content": "hello from the other tab", "mode": "auto"})
+        refused = second.receive_json()
+        assert refused["type"] == "error" and refused["code"] == "busy"
+
+        rows = session_manager.get(session_with_data).history()
+        assert not any("other tab" in str(row.get("content")) for row in rows), "a refused message is not history"
+
+        first.send_json({"type": "cancel"})
+        collect_until(first, {"cancelled"})
+
+        # The lock is free again: the other window can now run a turn.
+        monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(["Hello!"]))
+        second.send_json({"type": "message", "content": "hello from the other tab", "mode": "auto"})
+        assert collect_until(second, {"final", "error"})[-1]["type"] == "final"
+
+
+def test_a_cancelled_turn_releases_the_session(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    from src.api.deps import session_busy
+
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        _park_a_turn_on_consent(websocket)
+        assert session_busy(session_with_data)
+        websocket.send_json({"type": "cancel"})
+        collect_until(websocket, {"cancelled"})
+    assert not session_busy(session_with_data)
+
+
+def test_an_upload_rechecks_after_parsing_because_a_turn_may_have_started(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """Parsing takes time. Idle when the request arrived is not idle when the frame is ready to be added."""
+    answers = iter([False, True])
+    monkeypatch.setattr("src.api.deps.session_busy", lambda _session_id: next(answers))
+    csv = ("late.csv", b"x,y\n1,2\n", "text/csv")
+
+    response = client.post(
+        "/api/datasets?clean=false", headers={"X-Session-Id": session_with_data}, files={"file": csv}
+    )
+
+    assert response.status_code == 409
+    assert "late.csv" not in session_manager.get(session_with_data).datasets
+
+
+def test_the_datasets_cannot_change_under_a_running_turn(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(INSTALL_SCRIPT))
+    headers = {"X-Session-Id": session_with_data}
+    csv = ("other.csv", b"x,y\n1,2\n", "text/csv")
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        _park_a_turn_on_consent(websocket)
+
+        refused = [
+            client.post("/api/datasets/data.csv/activate", headers=headers).status_code,
+            client.delete("/api/datasets/data.csv", headers=headers).status_code,
+            client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code,
+        ]
+        assert refused == [409, 409, 409]
+
+        websocket.send_json({"type": "cancel"})
+        collect_until(websocket, {"cancelled"})
+
+    assert client.post("/api/datasets/data.csv/activate", headers=headers).status_code == 200
+    assert client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code == 200

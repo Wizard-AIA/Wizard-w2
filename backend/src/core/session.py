@@ -159,6 +159,32 @@ class ModelPreferences:
         }
 
 
+@dataclass
+class TaskState:
+    """What the session is doing *right now*. Transient by design.
+
+    Four kinds of state used to share one bag of attributes and one lifetime:
+    conversation context (history, datasets), task state (this), UI state, and
+    user preference (mode, permissions). A finished task must not define the next
+    message, so this is the only place a task leaves anything behind, and it is
+    small on purpose. It is never a source of *intent*: routing reads the message,
+    and reads this only to know what a reply may refer to.
+    """
+
+    #: idle | running | awaiting_plan
+    status: str = "idle"
+    workflow: str = ""
+    turn: int = 0
+    #: A plan the user has been shown and has not decided on yet.
+    pending_plan: str | None = None
+    #: The request that plan answers, so "execute the plan" runs *that* request
+    #: and not the words "execute the plan".
+    pending_instruction: str = ""
+    #: Code of the last completed turn. Used only to revise a chart the user is
+    #: still looking at, and dropped whenever the data underneath it changes.
+    last_code: str | None = None
+
+
 class Session:
     def __init__(self, session_id: str):
         self.id = session_id
@@ -178,6 +204,7 @@ class Session:
         # this one decides what is asked about among what already is.
         self.permissions = PermissionState(profile=settings.AGENT_PERMISSION_PROFILE)
         self.executor = CodeExecutor(session_id)
+        self.task = TaskState()
         self._lock = threading.Lock()
         # Composite ids of subagents spawned from a `parallel` action (Milestone
         # 7). A subagent is a scoped child, not a new top-level session -- it
@@ -191,6 +218,85 @@ class Session:
         self._understanding_cache = _BoundedCache()
         self._validation_cache = _BoundedCache()
         self._verification_cache = _BoundedCache()
+
+    # ------------------------------------------------------------------ #
+    # Task state. See `TaskState`.
+    # ------------------------------------------------------------------ #
+    def begin_turn(self, workflow: str = "") -> int:
+        """Marks a turn as running. Returns its number."""
+        self.task.turn += 1
+        self.task.status = "running"
+        self.task.workflow = workflow
+        return self.task.turn
+
+    def end_turn(self, *, code: str | None = None, awaiting_plan: str | None = None, instruction: str = "") -> None:
+        """Ends the running turn. Everything transient about it is dropped.
+
+        ``code`` is kept only when the turn produced some; a conversational or
+        failed turn must not erase the chart the user is still looking at, and
+        must not keep the code of an earlier, unrelated one alive either, so a
+        turn with no code leaves the previous value as it was.
+        """
+        if code:
+            self.task.last_code = code
+        self.task.pending_plan = awaiting_plan
+        self.task.pending_instruction = instruction if awaiting_plan else ""
+        self.task.status = "awaiting_plan" if awaiting_plan else "idle"
+        self.task.workflow = ""
+
+    def reset_task(self) -> None:
+        """Drops what a task leaves behind. Called when its premise changes.
+
+        A dataset was added, switched or removed: the plan that was waiting and
+        the chart code were about data that no longer stands. A cancelled turn
+        does not call this; the chart from the turn before it is still on screen. Conversation history is deliberately untouched.
+        """
+        self.task.pending_plan = None
+        self.task.pending_instruction = ""
+        self.task.last_code = None
+        if self.task.status == "awaiting_plan":
+            self.task.status = "idle"
+
+    def turn_context(self, last_turn: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The session facts routing may read. Plain values, no session object.
+
+        ``last_turn`` is passed in when the caller already fetched it, so one
+        turn costs one history read.
+        """
+        handle = self.active_handle
+        columns: tuple[str, ...] = ()
+        if handle is not None:
+            # Bounded: routing matches every name against the message, and a
+            # wide frame should not make the router the slowest part of a turn.
+            columns = tuple(str(column) for column in list(handle.df.columns)[:2000])
+        return {
+            "has_dataset": handle is not None,
+            "columns": columns,
+            "table_names": tuple(h.table_key for h in self.datasets.values()),
+            "has_prior_turn": last_turn is not None or bool(db_mgr.get_last_assistant_turn(self.id)),
+            "pending_plan": bool(self.task.pending_plan),
+        }
+
+    def last_task_digest(self, budget: int = 1800) -> dict[str, Any] | None:
+        """A compact record of the last turn that actually did analytic work.
+
+        Read back from the persisted message rather than kept in memory, so it
+        survives a restart and is the same thing the export route sees.
+        Conversational turns are skipped: "why did you choose that chart" after a
+        "thanks" still means the chart.
+        """
+        row = db_mgr.get_last_assistant_turn(self.id, tasks_only=True)
+        if row is None:
+            return None
+        meta = row.get("meta") or {}
+        steps = [str(step.get("goal", "")).strip() for step in meta.get("steps", []) if isinstance(step, dict)]
+        return {
+            "instruction": self._compact_text(str(meta.get("instruction", "")), 300),
+            "answer": self._compact_text(str(row.get("content", "")), budget // 2),
+            "code": self._compact_text(str(meta.get("code", "")), budget // 2),
+            "steps": [goal for goal in steps if goal][:8],
+            "workflow": str(meta.get("workflow", "")),
+        }
 
     # ------------------------------------------------------------------ #
     def touch(self):
@@ -270,6 +376,8 @@ class Session:
             if make_active or self.active_dataset is None:
                 self.active_dataset = name
         self.touch()
+        if make_active:
+            self.reset_task()
         self._materialize(handle, is_active=self.active_dataset == name)
         return handle
 
@@ -279,6 +387,7 @@ class Session:
             return False
         with self._lock:
             self.active_dataset = name
+        self.reset_task()
         self._materialize(handle, is_active=True)
         self.executor.reload_dataset()
         return True
@@ -293,6 +402,7 @@ class Session:
             # Dropped with the dataset, so re-uploading a file of the same name
             # does not silently inherit a policy the user set for a different one.
             self.data_policy.forget(name)
+        self.reset_task()
         db_mgr.delete_schema(name, session_id=self.id)
         for suffix in ("", ".feather"):
             (self.workspace / f"{name}{suffix}").unlink(missing_ok=True)
@@ -444,8 +554,14 @@ class Session:
     # ------------------------------------------------------------------ #
     # Deterministic inspection
     # ------------------------------------------------------------------ #
-    def inspect(self, goal: str = "", max_columns: int = 60) -> str:
+    def inspect(self, goal: str = "", max_columns: int = 60, redact: bool = False) -> str:
         """Describes the data without generating or running any code.
+
+        ``redact`` is for a description that is about to be sent to a model the
+        data policy does not trust with values. It keeps the shape (names, types,
+        null and distinct counts) and drops every actual value: the example
+        column, the distributions (which state a minimum and a median) and the
+        first rows.
 
         Schema, null structure and value distributions are facts about a frame.
         Making the agent write and execute Python to discover them costs a code
@@ -471,8 +587,12 @@ class Session:
         if truncated:
             lines.append(f"Describing {len(columns)} of {len(frame.columns)} columns, chosen for relevance.")
 
-        lines.append("\n| column | dtype | nulls | distinct | example |")
-        lines.append("| --- | --- | --- | --- | --- |")
+        if redact:
+            lines.append("\n| column | dtype | nulls | distinct |")
+            lines.append("| --- | --- | --- | --- |")
+        else:
+            lines.append("\n| column | dtype | nulls | distinct | example |")
+            lines.append("| --- | --- | --- | --- | --- |")
         for column in columns:
             series = frame[column]
             null_pct = (series.isna().mean() * 100) if len(frame) else 0.0
@@ -480,12 +600,18 @@ class Session:
                 distinct = int(series.nunique(dropna=True))
             except (TypeError, ValueError):
                 distinct = -1
+            distinct_text = "n/a" if distinct < 0 else f"{distinct:,}"
+            if redact:
+                lines.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {distinct_text} |")
+                continue
             try:
                 example = str(series.dropna().iloc[0])[:40]
             except (IndexError, KeyError):
                 example = ""
-            distinct_text = "n/a" if distinct < 0 else f"{distinct:,}"
             lines.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {distinct_text} | {example} |")
+
+        if redact:
+            return "\n".join(lines)
 
         # The goal steers what detail is worth spending characters on.
         named = [c for c in columns if mentions_column(goal or "", c)]

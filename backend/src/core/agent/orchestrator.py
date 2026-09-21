@@ -49,6 +49,7 @@ import hashlib
 import posixpath
 import re
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -56,7 +57,15 @@ from src.config import TierBudget, settings
 from src.core.agent import export
 from src.core.agent.actions import ActionKind, Decision, Investigation, Step, parse_decision
 from src.core.agent.consent import ConsentRequest, consent_broker
-from src.core.agent.council import TheCouncil
+from src.core.agent.conversation import (
+    FALLBACK_REPLY,
+    NEEDS_DATA_REPLY,
+    EscalationGate,
+    create_conversation_prompt,
+    dataset_brief,
+    render_last_task,
+)
+from src.core.agent.council import ReviewGuard, TheCouncil
 from src.core.agent.events import BranchEmitter, Emitter, EventType, Phase, emit
 from src.core.agent.grounding import (
     GroundingReport,
@@ -64,6 +73,18 @@ from src.core.agent.grounding import (
     assumptions_from_profile,
     check_grounding,
 )
+from src.core.agent.routing import (
+    Complexity,
+    Intent,
+    PlanPolicy,
+    Route,
+    TurnContext,
+    Workflow,
+    apply_mode,
+    escalate,
+    route_turn,
+)
+from src.core.agent.trace import TurnTrace
 from src.core.analysis import competing, confidence, critic, stopping, understanding
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.runs import ExecutedStep, capture, dataset_files_from_session, dataset_manifest_from_session
@@ -73,7 +94,8 @@ from src.core.analysis.validation.registry import cache_key as validation_cache_
 from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
-from src.core.llm import LLMRole, TaskTier, classify_task_complexity, llm_provider, model_registry
+from src.core.llm import LLMRole, TaskTier, llm_provider, model_registry
+from src.core.llm.generation import resolve_generation
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
 from src.core.llm.usage import SessionUsage, usage_ledger
@@ -114,35 +136,6 @@ VISUAL_KEYWORDS = frozenset(
     {"color", "colour", "legend", "font", "axis", "label", "grid", "title", "theme", "style", "palette", "annotate"}
 )
 
-#: Requests whose answer is a single deterministic frame operation. Routing
-#: these without a planning round-trip is the one piece of the old keyword
-#: router worth keeping: it is free, it is never wrong for these phrasings, and
-#: it saves a full manager call on the most common question a user asks first.
-#: Everything else now goes to the loop, which decides its own depth.
-SIMPLE_PATTERNS = (
-    "show first",
-    "show top",
-    "show head",
-    "display head",
-    "display first",
-    "show last",
-    "show tail",
-    "display tail",
-    "display last",
-    "show columns",
-    "list columns",
-    "what columns",
-    "column names",
-    "shape of",
-    "how many rows",
-    "number of rows",
-    "dataset dimensions",
-    "preview dataset",
-    "preview table",
-    "describe the data",
-    "head of",
-)
-
 #: Modes accepted from the transport. ``planning`` is the legacy name for
 #: "investigate thoroughly but let me approve the plan first", kept so existing
 #: clients and stored sessions keep working.
@@ -170,6 +163,11 @@ class RunState:
     task_tier: TaskTier = TaskTier.STANDARD
     manager_model: str | None = None
     phase: Phase = Phase.IDLE
+    #: What routing decided for this message. Set once per turn (twice when a
+    #: conversational reply escalates), before any model is called.
+    route: Route | None = None
+    #: What this turn decided and cost. Written to the log when the turn ends.
+    trace: TurnTrace = field(default_factory=lambda: TurnTrace(turn_id=uuid.uuid4().hex[:8]))
 
     thought: str = ""
     plan: str = ""
@@ -275,6 +273,8 @@ class RunResult:
     message_id: int | None = None
     #: The turn's structured analytical state -- see `core/analysis/state.py`.
     analysis: dict[str, Any] = field(default_factory=dict)
+    #: Which workflow this message was given, and why. See `core/agent/routing.py`.
+    route: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -301,6 +301,7 @@ class RunResult:
             "skills_used": self.skills_used,
             "message_id": self.message_id,
             "analysis": self.analysis,
+            "route": self.route,
         }
 
 
@@ -365,12 +366,6 @@ class AnalysisOrchestrator:
     # Routing helpers
     # ------------------------------------------------------------------ #
     @staticmethod
-    def is_simple(instruction: str) -> bool:
-        """Cheap keyword routing so trivial inspection skips a planning round-trip."""
-        lowered = instruction.lower().strip()
-        return any(pattern in lowered for pattern in SIMPLE_PATTERNS)
-
-    @staticmethod
     def is_visual_revision(instruction: str, previous_code: str | None) -> bool:
         if not previous_code:
             return False
@@ -387,6 +382,31 @@ class AnalysisOrchestrator:
     @staticmethod
     def _manager_model(state: RunState, session: Session) -> str | None:
         return state.manager_model or session.models.manager
+
+    @staticmethod
+    def _budget(state: RunState, session: Session, purpose: str, prompt: str, role: LLMRole) -> int:
+        """The output allowance for one model call, and the record that it was made.
+
+        Every model call in a turn passes through here, so the turn's trace counts
+        calls and prompt size from one place rather than from each call site.
+        """
+        if role is LLMRole.MANAGER:
+            model = state.manager_model or session.models.manager
+            provider = session.models.manager_provider
+        else:
+            model = session.models.worker
+            provider = session.models.worker_provider
+        route = state.route
+        resolved = resolve_generation(
+            purpose,
+            mode="deep" if route is not None and route.deep else state.mode,
+            workflow=route.workflow.value if route is not None else "agentic",
+            provider=provider,
+            model=model,
+        )
+        state.trace.record_call(purpose, resolved.config.max_output_tokens, len(prompt), model or "")
+        logger.debug("Generation budget", detail=resolved.explain())
+        return resolved.config.max_output_tokens
 
     @staticmethod
     def _redact_for(session: Session, role: str) -> bool:
@@ -606,6 +626,68 @@ class AnalysisOrchestrator:
     # ------------------------------------------------------------------ #
     # Main entry point
     # ------------------------------------------------------------------ #
+    def _decide_route(
+        self,
+        session: Session,
+        instruction: str,
+        mode: str,
+        last_task: dict[str, Any] | None,
+        approved_plan: str | None,
+        approved_search: str | None,
+    ) -> tuple[Route, str, str | None]:
+        """Routes one message. Returns the route, the instruction to run, and a plan to resume.
+
+        A button-approved plan or search skips routing: the user has already
+        decided, and re-deciding could downgrade what they approved. A typed
+        confirmation ("execute the plan") resolves to the waiting plan and the
+        request it belongs to, so the words of the confirmation are never run.
+        """
+        if approved_plan is not None or approved_search is not None:
+            approved = Route(
+                intent=Intent.INVESTIGATION,
+                workflow=Workflow.AGENTIC,
+                complexity=Complexity.MODERATE,
+                verify=True,
+                reasons=("continues a plan or search the user approved",),
+                source="approval",
+            )
+            return approved, instruction, approved_plan
+
+        route = route_turn(instruction, TurnContext(**session.turn_context(last_task)), mode)
+        if route.workflow is Workflow.EXECUTE_PLAN:
+            plan = session.task.pending_plan
+            if plan:
+                return route, session.task.pending_instruction or instruction, plan
+            # Nothing is waiting after all; it was only conversation.
+            route = route.with_(
+                intent=Intent.CONVERSATION,
+                workflow=Workflow.CONVERSE,
+                complexity=Complexity.TRIVIAL,
+                escalate=True,
+                source="rules",
+            )
+        return self._apply_deployment_policy(route), instruction, None
+
+    @staticmethod
+    def _apply_deployment_policy(route: Route) -> Route:
+        """Deployment-wide plan approval is a *policy*, applied over intent like a mode.
+
+        `AGENT_REQUIRE_APPROVAL` used to gate whatever reached the planner. A
+        route that plans nothing (a greeting, a schema question, one figure)
+        would now slip past it, so the setting is applied as the `planning` mode
+        for every route that would run analysis.
+        """
+        if settings.AGENT_REQUIRE_APPROVAL and route.source != "approval":
+            return apply_mode(route, "planning")
+        return route
+
+    async def _announce(self, state: RunState, route: Route, emitter: Emitter | None) -> None:
+        state.trace.escalated = state.trace.escalated or state.route is not None
+        state.trace.observe_route(route)
+        state.route = route
+        state.task_tier = route.task_tier
+        await emit(emitter, EventType.ROUTE, **route.to_dict(), mode=state.mode)
+
     async def run(
         self,
         session: Session,
@@ -623,23 +705,91 @@ class AnalysisOrchestrator:
         question and carry an answer back. Only the WebSocket can; a REST turn
         has no reply channel, so there an `ask` becomes a denial with a reason
         rather than a request nobody will ever see.
+
+        Every message is routed fresh (`routing.route_turn`). What a finished
+        turn leaves behind is the small `Session.task` record and nothing else,
+        so the next message is judged on what it says, not on what came before.
         """
         mode = self.normalise_mode(mode)
+        # Routed before the state exists: a typed "execute the plan" resolves to
+        # the request that plan belongs to, and everything the state derives from
+        # the instruction (its objective, its evidence graph) must be built from
+        # that request, not from the words of the confirmation.
+        last_task = session.last_task_digest()
+        route, instruction, resumed_plan = self._decide_route(
+            session, instruction, mode, last_task, approved_plan, approved_search
+        )
         state = RunState(instruction=instruction, mode=mode, can_prompt=can_prompt)
         state.usage_snapshot = usage_ledger.snapshot_many([session.id])
-
-        if session.df is None:
-            await emit(emitter, EventType.ERROR, content="No dataset is loaded for this session.")
-            return self._result(state, "failed")
-
+        state.trace.mode = mode
+        started = time.monotonic()
+        session.begin_turn()
         try:
-            state.task_tier = classify_task_complexity(
-                instruction,
-                {
-                    "has_documents": session.has_documents,
-                    "multi_step": instruction.count(" and ") >= 2,
-                },
+            result = await self._run(
+                state,
+                session,
+                emitter,
+                route,
+                last_task,
+                resumed_plan if resumed_plan is not None else approved_plan,
+                approved_search,
+                previous_code or session.task.last_code,
             )
+        except BaseException as exc:
+            # Cancelled, crashed or interrupted: nothing transient outlives the
+            # turn, so no plan is left waiting and no code left to revise.
+            session.end_turn()
+            self._log_trace(state, "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed", started)
+            raise
+
+        pending = result.pending_approval or {}
+        waiting_plan = pending.get("plan") if pending.get("tool") == "execute_plan" else None
+        session.end_turn(
+            code=state.code if result.status == "completed" and state.code else None,
+            awaiting_plan=waiting_plan,
+            instruction=state.instruction,
+        )
+        self._log_trace(state, result.status, started)
+        return result
+
+    @staticmethod
+    def _log_trace(state: RunState, reason: str, started: float) -> None:
+        trace = state.trace
+        trace.termination_reason = reason if reason in ("completed", "cancelled", "awaiting_approval") else "failed"
+        trace.actions = [entry["kind"] for entry in state.action_log]
+        trace.latency_ms = int((time.monotonic() - started) * 1000)
+        logger.info("Turn trace", **trace.to_log())
+
+    async def _run(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        route: Route,
+        last_task: dict[str, Any] | None,
+        approved_plan: str | None,
+        approved_search: str | None,
+        previous_code: str | None,
+    ) -> RunResult:
+        mode = state.mode
+        try:
+            state.phase = Phase.ROUTING
+            await emit(emitter, EventType.STATUS, content="Understanding the request", phase=Phase.ROUTING.value)
+            await self._announce(state, route, emitter)
+
+            if route.workflow is Workflow.CONVERSE:
+                if await self._converse(state, session, emitter, route, last_task):
+                    return self._result(state, "completed")
+                # The reply said this needs the data: same turn, analysis workflow.
+                route = self._apply_deployment_policy(escalate(route, session.has_data, mode))
+                await self._announce(state, route, emitter)
+
+            if session.df is None:
+                await emit(
+                    emitter, EventType.ERROR, content="No dataset is loaded for this session.", code="no_dataset"
+                )
+                return self._result(state, "failed")
+
             selector = getattr(llm_provider, "model_for_task", None)
             if selector is not None:
                 state.manager_model = await asyncio.to_thread(
@@ -649,7 +799,7 @@ class AnalysisOrchestrator:
                     session.models.manager,
                     session.models.manager_provider,
                 )
-            budget = await self._budget_for(session, mode, state.manager_model)
+            budget = await self._budget_for(session, route.budget_mode(mode), state.manager_model)
             state.tier = budget.tier
 
             if approved_search is not None:
@@ -724,7 +874,7 @@ class AnalysisOrchestrator:
             # A policy decision, not a fault: the user's own words back, with no
             # "check that the provider is running" advice attached to them.
             logger.info("Run refused by the data mode", reason=str(exc))
-            await emit(emitter, EventType.ERROR, content=str(exc))
+            await emit(emitter, EventType.ERROR, content=str(exc), code="data_mode")
             state.answer = str(exc)
             return self._result(state, "failed")
         except LLMUnavailableError as exc:
@@ -740,22 +890,160 @@ class AnalysisOrchestrator:
                     "Check that the provider is running and that a model is installed."
                 )
             logger.error("Run aborted, LLM unavailable", error=err_msg)
-            await emit(emitter, EventType.ERROR, content=message)
+            await emit(emitter, EventType.ERROR, content=message, code="llm_unavailable")
             state.answer = message
             return self._result(state, "failed")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             message = safe_error_message(exc, "Run failed unexpectedly", session=session.id)
-            await emit(emitter, EventType.ERROR, content=message)
+            await emit(emitter, EventType.ERROR, content=message, code="internal")
             state.answer = f"The analysis failed unexpectedly: {message}"
             return self._result(state, "failed")
+
+    # ------------------------------------------------------------------ #
+    # Conversation: one reply, no tools
+    # ------------------------------------------------------------------ #
+    async def _converse(
+        self,
+        state: RunState,
+        session: Session,
+        emitter: Emitter | None,
+        route: Route,
+        last_task: dict[str, Any] | None,
+    ) -> bool:
+        """Replies in conversation. Returns False when the reply handed the turn to the loop.
+
+        No planner, no code, no execution, no verification, no cache and no
+        working memory: see `conversation.py`. Where routing was unsure whether
+        this was chat or a request, the model may answer or ask for the data.
+        """
+        state.phase = Phase.RESPONDING
+        await emit(emitter, EventType.STATUS, content="Replying", phase=Phase.RESPONDING.value)
+
+        can_escalate = route.escalate and session.has_data
+        redact = self._redact_for(session, "manager")
+        prompt = create_conversation_prompt(
+            state.instruction,
+            history=session.history_prompt(limit=6, redact_sensitive=redact),
+            dataset=dataset_brief(session),
+            last_task=render_last_task(last_task, redact_sensitive=redact),
+            needs_data=route.needs_data or (route.escalate and not session.has_data),
+            can_escalate=can_escalate,
+        )
+
+        selector = getattr(llm_provider, "model_for_task", None)
+        if selector is not None:
+            state.manager_model = await asyncio.to_thread(
+                selector,
+                LLMRole.MANAGER,
+                state.task_tier,
+                session.models.manager,
+                session.models.manager_provider,
+            )
+
+        chunks: list[str] = []
+        gate = EscalationGate(can_escalate)
+        provider = session.models.manager_provider or getattr(settings, "API_PROVIDER", "unknown")
+        model = self._manager_model(state, session) or getattr(settings, "MODEL_NAME", "unknown")
+        splitter = ReasoningStream(provider=provider, model=model)
+
+        async def emit_visible(text: str) -> None:
+            shown = gate.feed(text)
+            if shown:
+                chunks.append(shown)
+                await emit(emitter, EventType.CONTENT_DELTA, content=shown)
+
+        async def emit_pieces(pieces: list[tuple[bool, str]]) -> None:
+            for is_reasoning, text in pieces:
+                if not text:
+                    continue
+                if is_reasoning:
+                    await emit(emitter, EventType.REASONING_DELTA, content=text)
+                else:
+                    await emit_visible(text)
+
+        async def on_delta(delta: str) -> None:
+            await emit_pieces(splitter.feed(delta))
+
+        try:
+            await llm_provider.stream_to(
+                prompt,
+                on_delta=on_delta,
+                role=LLMRole.MANAGER,
+                model=self._manager_model(state, session),
+                temperature=session.models.temperature,
+                provider=session.models.manager_provider,
+                max_tokens=self._budget(state, session, "converse", prompt, LLMRole.MANAGER),
+                data_mode=session.data_mode,
+                session_id=session.id,
+            )
+            await emit_pieces(splitter.flush())
+            tail = gate.flush()
+            if tail:
+                chunks.append(tail)
+                await emit(emitter, EventType.CONTENT_DELTA, content=tail)
+        except LLMUnavailableError:
+            # A greeting should not become an error because the model is down.
+            chunks = []
+            gate.escalated = False
+            fallback = NEEDS_DATA_REPLY if route.needs_data else FALLBACK_REPLY
+            chunks.append(fallback)
+            await emit(emitter, EventType.CONTENT_DELTA, content=fallback)
+
+        if gate.escalated:
+            if session.has_data:
+                return False
+            chunks = [NEEDS_DATA_REPLY]
+            await emit(emitter, EventType.CONTENT_DELTA, content=NEEDS_DATA_REPLY)
+
+        state.answer = "".join(chunks).strip()
+        if not state.answer:
+            state.answer = NEEDS_DATA_REPLY if route.needs_data else FALLBACK_REPLY
+            await emit(emitter, EventType.CONTENT_DELTA, content=state.answer)
+
+        await self._finalize_conversation(state, session, emitter)
+        return True
+
+    async def _finalize_conversation(self, state: RunState, session: Session, emitter: Emitter | None) -> None:
+        """Persists a conversational reply and ends the turn. Nothing else is learned from it."""
+        state.message_id = session.append_message(
+            "assistant",
+            state.answer,
+            {"instruction": state.instruction, "workflow": Workflow.CONVERSE.value},
+        )
+        state.phase = Phase.DONE
+        state.usage = usage_ledger.totals_since(state.usage_snapshot, [session.id])
+        if state.usage.get("any_cloud"):
+            await emit(emitter, EventType.USAGE, **state.usage)
+        await emit(
+            emitter,
+            EventType.FINAL,
+            response=state.answer,
+            code="",
+            artifacts=[],
+            warnings=state.warnings,
+            downloads=[],
+            elapsed_ms=state.elapsed_ms,
+            findings=[],
+            assumptions=[],
+            iterations=0,
+            tier=state.tier,
+            grounding=state.grounding.to_dict(),
+            verification="",
+            usage=state.usage,
+            skills_used=[],
+            message_id=state.message_id,
+            analysis={},
+            route=state.route.to_dict() if state.route else {},
+            status="completed",
+        )
 
     # ------------------------------------------------------------------ #
     # Orientation: the opening plan
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _cache_scope(session: Session) -> str:
+    def _cache_scope(session: Session, route: Route | None = None) -> str:
         """Identity dimensions that must never share a generated-code cache.
 
         The scope intentionally contains hashes and policy booleans only. It
@@ -765,7 +1053,11 @@ class AnalysisOrchestrator:
         handle = session.active_handle
         dataset_hash = handle.content_hash if handle is not None else "no-dataset"
         policy = handle and session.data_policy.schema_only_for(handle.name, handle.origin)
-        return f"dataset={dataset_hash}|mode={session.data_mode}|schema_only={bool(policy)}"
+        # One-shot answers (direct/inspect) are not verified; an investigation is.
+        # Keeping them apart means a solution that was never re-derived cannot be
+        # replayed as if it had been.
+        family = "agentic" if route is None or route.workflow not in (Workflow.DIRECT, Workflow.INSPECT) else "direct"
+        return f"dataset={dataset_hash}|mode={session.data_mode}|schema_only={bool(policy)}|flow={family}"
 
     async def _orient(
         self,
@@ -785,8 +1077,14 @@ class AnalysisOrchestrator:
         columns = [str(c) for c in session.df.columns]
         self._ensure_understanding(state, session)
 
+        route = state.route or Route(Intent.INVESTIGATION, Workflow.AGENTIC, Complexity.MODERATE)
+
         # 1. Exact/semantic cache: a verified solution for this exact question.
-        cached = semantic_cache.lookup(state.instruction, columns, scope=self._cache_scope(session))
+        # Skipped when the user asked to see a plan first: a cache hit would run
+        # code they were promised a chance to approve.
+        cached = None
+        if route.plan not in (PlanPolicy.GATED, PlanPolicy.ONLY):
+            cached = semantic_cache.lookup(state.instruction, columns, scope=self._cache_scope(session, route))
         if cached:
             state.code = runtime_backend.rebind_workspace_paths(cached, session.id)
             state.from_cache = True
@@ -795,13 +1093,13 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.STATUS, content="Reusing a verified solution", phase=Phase.GENERATING.value)
             return True
 
-        # 2. Deterministic fast path for trivial inspection.
-        if self.is_simple(state.instruction):
-            state.plan = f"Directly answer the inspection request: {state.instruction}"
-            state.analysis.plan.revise(state.plan, why="Simple inspection request; planning was skipped.")
-            await emit(
-                emitter, EventType.STATUS, content="Simple request, skipping planning", phase=Phase.GENERATING.value
-            )
+        # 2. Routing decided this message does not need a planner: the loop's
+        # first action is enough. Planning costs a manager round-trip and a row
+        # in the UI, and buys nothing for one figure or a schema question.
+        if route.plan is PlanPolicy.NONE:
+            state.plan = f"Answer directly: {state.instruction}"
+            state.analysis.plan.revise(state.plan, why=f"Routed as {route.workflow.value}; no planning step needed.")
+            await emit(emitter, EventType.STATUS, content="Working on it", phase=Phase.GENERATING.value)
             return True
 
         state.phase = Phase.PLANNING
@@ -888,9 +1186,10 @@ class AnalysisOrchestrator:
                 await emit(emitter, EventType.APPROVAL_REQUIRED, **state.pending_approval)
                 return False
 
-        # Plan approval is opt-in. `planning` mode is the legacy way of asking
-        # for it per-request; AGENT_REQUIRE_APPROVAL is the deployment-wide way.
-        if state.mode == "planning" or settings.AGENT_REQUIRE_APPROVAL:
+        # Plan approval is a routing policy: an explicit plan request, the legacy
+        # `planning` mode and AGENT_REQUIRE_APPROVAL all arrive here as the
+        # route's plan policy, so there is one place that decides it.
+        if route.plan in (PlanPolicy.GATED, PlanPolicy.ONLY):
             state.pending_approval = {
                 "tool": "execute_plan",
                 "plan": state.plan,
@@ -947,7 +1246,7 @@ class AnalysisOrchestrator:
             model=self._manager_model(state, session),
             temperature=session.models.temperature,
             provider=session.models.manager_provider,
-            max_tokens=settings.output_budget("plan"),
+            max_tokens=self._budget(state, session, "plan", prompt, LLMRole.MANAGER),
             data_mode=session.data_mode,
             session_id=session.id,
         )
@@ -1135,6 +1434,10 @@ class AnalysisOrchestrator:
         a fast run exactly as cheap as the old single-shot pipeline.
         """
         if iteration == 1:
+            if state.route is not None and state.route.workflow is Workflow.INSPECT:
+                # A question about the frame's shape is answered from the frame:
+                # no code to write, nothing to execute, no model call here.
+                return Decision(kind=ActionKind.INSPECT, goal=state.instruction)
             return Decision(kind=ActionKind.CODE, goal=state.instruction)
 
         # A cached solution is executed, not re-decided.
@@ -1168,7 +1471,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("decision"),
+                max_tokens=self._budget(state, session, "decision", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -1241,7 +1544,11 @@ class AnalysisOrchestrator:
         state.phase = Phase.INSPECTING
         await emit(emitter, EventType.STATUS, content="Examining the data", phase=Phase.INSPECTING.value)
 
-        summary = await asyncio.to_thread(session.inspect, decision.goal, budget.max_columns)
+        # Sized for the model that will read it: under a schema-only policy with a
+        # cloud manager the description keeps the shape and drops every value.
+        summary = await asyncio.to_thread(
+            session.inspect, decision.goal, budget.max_columns, self._redact_for(session, "manager")
+        )
 
         profile = self._ensure_understanding(state, session)
         notes = understanding.render(profile) if profile else ""
@@ -1257,6 +1564,8 @@ class AnalysisOrchestrator:
                 ok=True,
             )
         )
+        if state.route is not None and state.route.workflow is Workflow.INSPECT:
+            state.output = summary
         await emit(
             emitter,
             EventType.OBSERVATION,
@@ -1420,7 +1729,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("plan"),
+                max_tokens=self._budget(state, session, "plan", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -2030,7 +2339,7 @@ class AnalysisOrchestrator:
             model=session.models.worker,
             temperature=session.models.temperature,
             provider=session.models.worker_provider,
-            max_tokens=settings.output_budget("code"),
+            max_tokens=self._budget(state, session, "code", prompt, LLMRole.WORKER),
             data_mode=session.data_mode,
             session_id=session.id,
         )
@@ -2151,6 +2460,8 @@ class AnalysisOrchestrator:
         """
         if not settings.AGENT_VERIFY or not budget.allow_verification:
             return
+        if state.route is not None and not state.route.verify:
+            return
         if state.blocked or state.error or not state.code or state.from_cache:
             return
 
@@ -2175,13 +2486,14 @@ class AnalysisOrchestrator:
             status, detail = cached
         else:
             try:
+                verification_prompt = create_verification_prompt(state.instruction, state.code, state.output)
                 raw = await llm_provider.acomplete(
-                    create_verification_prompt(state.instruction, state.code, state.output),
+                    verification_prompt,
                     role=LLMRole.WORKER,
                     model=session.models.worker,
                     temperature=session.models.temperature,
                     provider=session.models.worker_provider,
-                    max_tokens=settings.output_budget("code"),
+                    max_tokens=self._budget(state, session, "code", verification_prompt, LLMRole.WORKER),
                     data_mode=session.data_mode,
                     session_id=session.id,
                 )
@@ -2407,15 +2719,31 @@ class AnalysisOrchestrator:
     async def _review(self, state: RunState, session: Session, emitter: Emitter | None):
         if not settings.COUNCIL_ENABLED or state.error:
             return
+        # The council reviews an investigation. A one-shot answer or a schema
+        # question has no plan or verification to review, and the review would
+        # add a step to the UI and possibly a model call to a two-second turn.
+        if state.route is not None and state.route.workflow in (Workflow.DIRECT, Workflow.INSPECT):
+            return
 
         state.phase = Phase.REVIEWING
         await emit(emitter, EventType.STEP_START, id="review", label="Reviewing results", kind="review")
 
+        guard = ReviewGuard(
+            data_mode=session.data_mode,
+            session_id=session.id,
+            redact=self._redact_for(session, "manager"),
+            record=state.trace.record_call,
+        )
         tasks: list[asyncio.Task] = [
-            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output, session.models))
+            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output, session.models, guard))
         ]
         if settings.VISION_ENABLED and state.image:
-            tasks.append(asyncio.ensure_future(self._describe_plot(state.image, session)))
+            if self._redact_for(session, "vision"):
+                # A chart is the data drawn: its bars and points are the values the
+                # policy keeps off a cloud model, so it is not sent.
+                logger.debug("Vision description skipped by the data policy")
+            else:
+                tasks.append(asyncio.ensure_future(self._describe_plot(state, session)))
 
         try:
             outcomes = await asyncio.wait_for(
@@ -2443,14 +2771,19 @@ class AnalysisOrchestrator:
 
         await emit(emitter, EventType.STEP_END, id="review", ok=True, duration_ms=state.elapsed_ms)
 
-    async def _describe_plot(self, image: str, session: Session) -> str:
+    async def _describe_plot(self, state: RunState, session: Session) -> str:
+        model = session.models.vision
+        provider = session.models.vision_provider
+        budget = resolve_generation("review", provider=provider, model=model).config.max_output_tokens
+        state.trace.record_call("review", budget, 0, model or "")  # an image has no prompt length
         try:
             return await llm_provider.describe_image(
-                image,
-                model=session.models.vision,
-                provider=session.models.vision_provider,
+                state.image,
+                model=model,
+                provider=provider,
                 data_mode=session.data_mode,
                 session_id=session.id,
+                max_tokens=budget,
             )
         except Exception as exc:
             logger.debug("Vision description unavailable", error=str(exc))
@@ -2487,7 +2820,7 @@ class AnalysisOrchestrator:
 
         prompt = create_answer_prompt(
             state.instruction,
-            state.code,
+            state.code or "# No code was needed: this was answered from the dataset's schema and profile.",
             state.output,
             state.plan,
             findings=state.investigation.findings,
@@ -2530,7 +2863,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("answer"),
+                max_tokens=self._budget(state, session, "answer", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -2643,12 +2976,23 @@ class AnalysisOrchestrator:
         for candidate in candidates:
             await emit(emitter, EventType.SKILL_CANDIDATE, **candidate.to_dict())
 
+    @staticmethod
+    def _last_code_ran_ok(state: RunState) -> bool:
+        """Whether the code the turn ended with was executed and succeeded.
+
+        `state.code` is what was last *written*. A declined install leaves code that
+        never ran, with no error and no block (the turn carries on), so "has code
+        and no error" is not the same as "worked". Only what ran is worth replaying.
+        """
+        code_steps = [step for step in state.investigation.steps if step.kind == ActionKind.CODE]
+        return bool(code_steps) and code_steps[-1].ok
+
     async def _finalize(self, state: RunState, session: Session, emitter: Emitter | None):
         """Persists what was learned and emits the terminal event."""
         columns = [str(c) for c in session.df.columns] if session.df is not None else []
 
-        if state.code and not state.error and not state.blocked:
-            semantic_cache.add(state.instruction, columns, state.code, scope=self._cache_scope(session))
+        if state.code and not state.error and not state.blocked and self._last_code_ran_ok(state):
+            semantic_cache.add(state.instruction, columns, state.code, scope=self._cache_scope(session, state.route))
 
             if state.retry_count > 0 and state.failed_code:
                 try:
@@ -2690,14 +3034,17 @@ class AnalysisOrchestrator:
             await emit(emitter, EventType.ASSUMPTION, text=note, kind="summary")
 
         quality = Evaluator.score_execution(state.output, instruction=state.instruction)
-        working_memory.add_interaction(
-            instruction=state.instruction,
-            plan=state.plan,
-            code=state.code,
-            result=state.answer or state.output,
-            meta={"quality_score": quality.get("score", 100), "cached": state.from_cache},
-            session_id=session.id,
-        )
+        if state.code:
+            # Working memory feeds later plans. A schema question or a failed
+            # turn has no solution in it worth carrying into an unrelated task.
+            working_memory.add_interaction(
+                instruction=state.instruction,
+                plan=state.plan,
+                code=state.code,
+                result=state.answer or state.output,
+                meta={"quality_score": quality.get("score", 100), "cached": state.from_cache},
+                session_id=session.id,
+            )
         # The question and the ordered, real executed steps -- not just the last
         # code string -- so a turn can be re-exported after a later turn has run
         # in the same session and overwritten the workspace's `analysis.py`.
@@ -2717,7 +3064,12 @@ class AnalysisOrchestrator:
         state.message_id = session.append_message(
             "assistant",
             state.answer,
-            {"code": state.code, "instruction": state.instruction, "steps": exported_steps},
+            {
+                "code": state.code,
+                "instruction": state.instruction,
+                "steps": exported_steps,
+                "workflow": state.route.workflow.value if state.route else "",
+            },
         )
 
         try:
@@ -2801,6 +3153,8 @@ class AnalysisOrchestrator:
             skills_used=state.skills_used,
             message_id=state.message_id,
             analysis=state.analysis.to_dict(),
+            route=state.route.to_dict() if state.route else {},
+            status="completed",
         )
 
     @staticmethod
@@ -2900,6 +3254,7 @@ class AnalysisOrchestrator:
             skills_used=state.skills_used,
             message_id=state.message_id,
             analysis=state.analysis.to_dict(),
+            route=state.route.to_dict() if state.route else {},
         )
 
 

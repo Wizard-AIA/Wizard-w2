@@ -164,7 +164,7 @@ def test_the_anthropic_client_is_actually_constructible(monkeypatch: pytest.Monk
     this one. No network call is made: constructing the client does not talk to
     anything.
     """
-    pytest.importorskip("langchain_anthropic", reason="optional extra; see requirements-optional.txt")
+    pytest.importorskip("langchain_anthropic", reason="not installed here; it is in requirements.txt")
 
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
     spec = llm_provider.resolve(

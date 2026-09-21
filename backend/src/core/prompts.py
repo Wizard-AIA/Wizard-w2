@@ -23,6 +23,20 @@ from src.core.rag.retriever import context_retriever
 MAX_CATEGORICAL_COLUMNS = 12
 MAX_UNIQUE_VALUES_SHOWN = 8
 MAX_WARNINGS = 8
+MAX_ANSWER_CODE_CHARS = 16_000
+MAX_ANSWER_OUTPUT_CHARS = 12_000
+MAX_ANSWER_FINDINGS_CHARS = 4_000
+MAX_HISTORY_CHARS = 6_000
+MAX_DECISION_TRANSCRIPT_CHARS = 8_000
+
+
+def prompt_chars(prompt: str) -> int:
+    """Return prompt size for trace accounting without exposing prompt text."""
+    return len(prompt)
+
+
+def _cap_text(text: str, limit: int) -> str:
+    return _middle_out(text, limit) if len(text) > limit else text
 
 
 def _describe_columns(df: pd.DataFrame, columns: list[str], redact: bool = False) -> str:
@@ -419,7 +433,11 @@ def create_prompt(
 
     error_block = ""
     if previous_error:
-        failed_code_section = f"\n<failed_code>\n```python\n{failed_code}\n```\n</failed_code>\n" if failed_code else ""
+        failed_code_section = (
+            f"\n<failed_code>\n```python\n{_cap_text(failed_code, MAX_ANSWER_CODE_CHARS)}\n```\n</failed_code>\n"
+            if failed_code
+            else ""
+        )
         try:
             col_types = ", ".join(f"{c} ({df[c].dtype})" for c in df.columns[:40])
             nan_cols = [f"{c} ({df[c].isna().sum()} nulls)" for c in df.columns if df[c].isna().any()]
@@ -440,7 +458,7 @@ def create_prompt(
 
         error_block = (
             f"{failed_code_section}"
-            f"\n<previous_error>\n{previous_error}\n</previous_error>\n"
+            f"\n<previous_error>\n{_cap_text(previous_error, 6000)}\n</previous_error>\n"
             f"{diagnostics}"
             "<error_handling>\n"
             "The previous code attempt failed execution. Follow these instructions carefully:\n"
@@ -457,7 +475,7 @@ def create_prompt(
     revision_block = ""
     if previous_code:
         revision_block = (
-            f"\n<previous_code>\n{previous_code}\n</previous_code>\n"
+            f"\n<previous_code>\n{_cap_text(previous_code, MAX_ANSWER_CODE_CHARS)}\n</previous_code>\n"
             "<revision_instruction>\nThe user wants to refine the output above. Keep the data logic and change "
             "only what they asked for.\n</revision_instruction>\n"
         )
@@ -466,7 +484,8 @@ def create_prompt(
     if few_shot_examples:
         parts = ["\n<worked_examples>"]
         for index, example in enumerate(few_shot_examples, start=1):
-            parts.append(f"Example {index} - {example.get('task')}:\n```python\n{example.get('code')}\n```")
+            example_code = _cap_text(str(example.get("code") or ""), 4000)
+            parts.append(f"Example {index} - {example.get('task')}:\n```python\n{example_code}\n```")
         parts.append("</worked_examples>\n")
         examples_block = "\n".join(parts)
 
@@ -552,10 +571,13 @@ def create_planning_prompt(
     revision_block = ""
     if previous_code:
         revision_block = (
-            f"\n<previous_code>\n{previous_code}\n</previous_code>\n"
+            f"\n<previous_code>\n{_cap_text(previous_code, MAX_ANSWER_CODE_CHARS)}\n</previous_code>\n"
             "<revision_instruction>\nPlan only the visual/formatting changes the user asked for; the data logic "
             "already works.\n</revision_instruction>\n"
         )
+
+    bounded_history = _cap_text(history, MAX_HISTORY_CHARS)
+    bounded_memory = _cap_text(memory_context, MAX_HISTORY_CHARS)
 
     if mode == "fast":
         return f"""<role>
@@ -563,7 +585,7 @@ You are a fast analytical planner. Produce a terse, concrete, numbered implement
 </role>
 
 {context}
-{skills}{history}{revision_block}
+{skills}{bounded_history}{revision_block}
 <user_request>
 {instruction}
 </user_request>
@@ -579,7 +601,7 @@ your plan -- you do not write Python code yourself.
 </role>
 
 {context}
-{skills}{memory_context}{history}{revision_block}
+{skills}{bounded_memory}{bounded_history}{revision_block}
 <user_request>
 {instruction}
 </user_request>
@@ -676,7 +698,7 @@ def create_decision_prompt(
 
     findings_block = ""
     if findings:
-        joined = "\n".join(f"- {item}" for item in findings)
+        joined = _cap_text("\n".join(f"- {item}" for item in findings), MAX_ANSWER_FINDINGS_CHARS)
         findings_block = f"\n<established_so_far>\n{joined}\n</established_so_far>\n"
 
     urgency = ""
@@ -702,7 +724,7 @@ the empirical evidence obtained so far, assess the remaining budget, and decide 
 </working_plan>
 {findings_block}
 <what_has_happened>
-{transcript}
+{_cap_text(transcript, MAX_DECISION_TRANSCRIPT_CHARS)}
 </what_has_happened>
 
 <budget>
@@ -742,7 +764,7 @@ You are the Principal Data Scientist revising your analytical strategy based on 
 </previous_plan>
 
 <what_the_data_showed>
-{transcript}
+{_cap_text(transcript, MAX_DECISION_TRANSCRIPT_CHARS)}
 </what_the_data_showed>
 
 <instructions>
@@ -816,18 +838,20 @@ def create_answer_prompt(
     threw away exactly the summary lines an analysis prints last, which is where
     the answer usually lives.
     """
-    trimmed = _middle_out(output, 12000)
+    trimmed = _middle_out(output, MAX_ANSWER_OUTPUT_CHARS)
+    code = _cap_text(code, MAX_ANSWER_CODE_CHARS)
+    plan = _cap_text(plan, MAX_HISTORY_CHARS)
 
     plan_block = f"\n<plan_followed>\n{plan}\n</plan_followed>\n" if plan else ""
 
     findings_block = ""
     if findings:
-        joined = "\n".join(f"- {item}" for item in findings)
+        joined = _cap_text("\n".join(f"- {item}" for item in findings), MAX_ANSWER_FINDINGS_CHARS)
         findings_block = f"\n<findings>\n{joined}\n</findings>\n"
 
     assumptions_block = ""
     if assumptions:
-        joined = "\n".join(f"- {item}" for item in assumptions)
+        joined = _cap_text("\n".join(f"- {item}" for item in assumptions), MAX_ANSWER_FINDINGS_CHARS)
         assumptions_block = (
             f"\n<assumptions_made>\n{joined}\n</assumptions_made>\n"
             "<assumption_handling>\nThese are reported to the user separately. Mention one only "
@@ -838,7 +862,7 @@ def create_answer_prompt(
 
     critic_block = ""
     if critic_findings:
-        joined = "\n".join(f"- {item}" for item in critic_findings)
+        joined = _cap_text("\n".join(f"- {item}" for item in critic_findings), MAX_ANSWER_FINDINGS_CHARS)
         critic_block = f"\n<critic_findings>\n{joined}\n</critic_findings>\n"
 
     critic_instruction = (

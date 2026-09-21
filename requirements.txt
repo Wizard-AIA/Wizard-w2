@@ -45,10 +45,23 @@ tabulate==0.10.0
 # Required to ingest .xlsx/.xls uploads.
 openpyxl==3.1.5
 
-# Model access
+# Model access. One client per provider family (see `src/providers.py`):
+#   langchain-ollama     Ollama, the local default
+#   langchain-openai     OpenAI, Gemini (its /v1beta/openai route), LM Studio, custom gateways
+#   langchain-anthropic  Anthropic's Messages API
+# `langchain-core` is imported directly by `src/core/llm`, so it is declared
+# rather than left to arrive through a transitive pin.
 langchain>=1.4.0,<1.5.0
+langchain-core>=1.6.2
 langchain-ollama==1.1.0
 langchain-openai>=1.6.2
+langchain-anthropic>=1.7.2
+
+# Reading PDF and Word documents attached as context (`core/ingest/documents.py`).
+# Both are pure Python. Without them the upload is refused with a message asking
+# for Markdown or text instead, which is a feature the UI offers, not an extra.
+pypdf>=6.0.0
+python-docx>=1.2.0
 
 # Execution sandbox
 docker==7.2.0

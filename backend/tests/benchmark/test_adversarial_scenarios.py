@@ -30,6 +30,11 @@ from src.core.session import Session, session_manager
 from src.core.tools.catalog import CatalogEngine
 
 
+# These grade the loop (iterations, verification, critic findings), so every
+# question runs the full workflow whatever its wording routes to. See
+# `full_pipeline` in conftest.py. Routing has its own suites.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
+
 SCENARIOS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "benchmark_harness"
 if str(SCENARIOS_DIR) not in sys.path:
     sys.path.insert(0, str(SCENARIOS_DIR))

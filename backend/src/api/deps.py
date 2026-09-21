@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import time
 from collections import defaultdict, deque
 from functools import lru_cache
 from threading import Lock
 
-from fastapi import Header, HTTPException, Query, Request, WebSocket
+from fastapi import Depends, Header, HTTPException, Query, Request, WebSocket
 
 from src.config import settings
 from src.core.agent.consent import ConsentBroker, consent_broker
@@ -104,6 +105,50 @@ def require_dataset(x_session_id: str | None = Header(default=None, alias=SESSIO
             detail="No dataset loaded. Upload a file before running an analysis.",
         )
     return session
+
+
+# --------------------------------------------------------------------------- #
+# One turn at a time per session, whichever way it arrives
+#
+# A `Session` is one object: its dataset frame, its executor, its consent state,
+# its task record. Two turns on it at once (two tabs on one socket each, a REST
+# call while a stream runs) would mutate those together. Every chat transport
+# takes this lock for the length of a turn, and anything that changes the
+# dataset asks whether it is held first.
+# --------------------------------------------------------------------------- #
+session_locks: dict[str, asyncio.Lock] = {}
+
+BUSY_DETAIL = "A task is still running on this session. Wait for it to finish, or stop it first."
+
+
+def turn_lock(session_id: str) -> asyncio.Lock:
+    return session_locks.setdefault(session_id, asyncio.Lock())
+
+
+def session_busy(session_id: str) -> bool:
+    lock = session_locks.get(session_id)
+    return lock is not None and lock.locked()
+
+
+def ensure_idle(session: Session) -> None:
+    """Refuses a change to the session's data while a turn is reading it."""
+    if session_busy(session.id):
+        raise HTTPException(status_code=409, detail=BUSY_DETAIL)
+
+
+def require_idle_session(session: Session = Depends(get_session)) -> Session:
+    """A session for a request that changes its datasets: it must not be mid-turn."""
+    ensure_idle(session)
+    return session
+
+
+def resolve_chat_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
+    """Resolve a chat session without requiring an uploaded dataset.
+
+    Conversation turns are valid before data exists. Endpoints that genuinely
+    operate on rows continue to depend on :func:`require_dataset`.
+    """
+    return get_session(x_session_id)
 
 
 # Below: factory functions for FastAPI's `Depends()`, one per process-wide

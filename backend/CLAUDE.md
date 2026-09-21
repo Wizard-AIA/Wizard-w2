@@ -9,7 +9,7 @@ Loads only when work touches `backend/`. Global rules: [root CLAUDE.md](../CLAUD
 # Install
 uv pip install --system -r requirements.txt              # API server only (root file)
 uv pip install --system -r requirements-local.txt         # analysis toolkit (Docker-less)
-uv pip install --system -r requirements-optional.txt      # Redis / OpenAI gateway
+uv pip install --system -r requirements-optional.txt      # Redis, connector drivers
 
 # Run
 uvicorn src.api.api:app --reload --port 8000              # from backend/
@@ -56,7 +56,9 @@ Shared LLM stubs in `tests/stubs.py` + `stub_llm` fixture. `from stubs import Sc
 
 ### Call count matters
 
-The loop changes call count: `fast` = plan → code → answer; `auto` adds decision + verification calls. A test scripting N responses that gets `"Done."` is usually missing the verification entry.
+Routing and the loop change call count. Conversation = 1 call; a schema question (`inspect`) = 1; a single figure or chart (`direct`) = code → answer; a complex question adds plan, decision and verification calls. A test scripting N responses that gets `"Done."` is usually missing one of those entries.
+
+Loop tests that are not about routing pin the old full pipeline with the `full_pipeline` fixture (`conftest.py`, applied as a module `pytestmark`), so rewording their question cannot change what they exercise. A test about routing uses `real_routing`. `test_turn_behavior.py` asserts what *ran* (LLM call counts, frames, state), never prose.
 
 ### Regression tests
 
@@ -98,7 +100,16 @@ src/
 
 ### One request path
 
-`POST /api/chat` and `WS /ws/chat` both call `AnalysisOrchestrator.run`. The transport translates events into frames — it **must not** contain workflow logic.
+`POST /api/chat`, `POST /api/chat/stream` and `WS /ws/chat` all call `AnalysisOrchestrator.run`. The transport translates events into frames — it **must not** contain workflow logic, and it **must not** begin or end a turn: the orchestrator owns `Session.task` (`begin_turn` / `end_turn`), and a transport that ended a turn without the instruction would wipe the plan a typed "go ahead" runs.
+
+### Routing
+
+- Every message is routed fresh by `routing.route_turn` (pure: no model call, no I/O) **before** any model runs, into `converse | inspect | direct | agentic | plan_only | execute_plan`. See [docs/routing.md](../docs/routing.md).
+- **No keyword lists and no phrase matching.** Routing reads weighted evidence (`Signals`) matched on whole tokens. No task evidence means conversation. Unsure means converse with `escalate=True`: the reply may be `ESCALATE_SENTINEL`, which `EscalationGate` hides and which re-routes the same turn as analysis.
+- Mode (`auto|fast|deep|planning`) is applied last by `apply_mode` as **policy**. It never promotes conversation or inspect to analysis. An explicit plan request wins over any mode.
+- Transient task state lives only in `Session.task`. Conversation history, the semantic cache and working memory must not decide the next route.
+- Every turn ends in **exactly one** terminal frame: `final`, `error` (with a `code`), plan-gate `approval_required` without an `id`, or `cancelled`. `TerminalEmitter` in `chat.py` enforces it.
+- Every model call gets its output limit from `AnalysisOrchestrator._budget` (which calls `llm.generation.resolve_generation`) and is counted in the turn's `TurnTrace`, logged once as `Turn trace` (no message or prompt text).
 
 ### Event protocol
 
@@ -126,7 +137,7 @@ orient (plan) → [plan gate] → loop → verify → answer
 - An approved plan skips `_orient` entirely (cannot re-fire) and must not be downgraded to `fast`.
 - `parse_decision` **never raises** — malformed output → default (`code` mid-run, `answer` on last iteration).
 - `inspect` is deterministic from the frame (no LLM call).
-- Modes: `auto` (agent picks depth), `fast` (one shot, **no verification**), `deep`. `planning` = legacy alias for "deep + gate the plan".
+- Modes: `auto` (the router picks the workflow), `fast` (no planner, **no verification**), `deep` (full investigation with verification for analytic work). `planning` = legacy wire value for "gate the plan"; the UI no longer sends it. `AGENT_REQUIRE_APPROVAL` is folded in as the same policy. Neither changes a greeting or a schema question.
 - **Below balanced tier**: deterministic decisions (`allow_decisions=False`). Succeeded-and-printed → stop; otherwise → code. `deep` restores the round-trip on every tier.
 - `AGENT_TURN_TIMEOUT` checked **before** an iteration is claimed, never mid-call.
 - Under `local-only`, `SEARCH:` is **refused** (not gated) — no consent can make it allowed.
@@ -169,6 +180,8 @@ orient (plan) → [plan gate] → loop → verify → answer
 
 - Every browser gets a `Session` (own datasets, documents, catalog, history, workspace, container). No global dataset state.
 - `DatasetHandle.table_key`: sanitised name for generated code (`Q3 sales (final).csv` → `tables['q3_sales_final']`).
+- **One turn at a time per session, on every transport.** WS, REST and SSE all take `deps.turn_lock(session.id)` for the length of a turn (a second window gets `error {code: "busy"}`). Anything that changes a session's datasets depends on `require_idle_session` and answers 409 mid-turn. A turn must release the lock however it ends: WS uses an idempotent `_Lease` plus a done-callback, because a task cancelled before it starts never reaches its own `finally`.
+- Every model call a turn makes (manager, worker, council reviewers, vision) carries the session's `data_mode` and honours `_redact_for`. A new secondary call that skips that is a data-policy bug.
 
 ### Data mode
 
@@ -217,7 +230,8 @@ orient (plan) → [plan gate] → loop → verify → answer
 - Provider is **per-request**, not process-wide. `ModelSpec` carries resolved `base_url` (part of cache key). **Never read provider URL from `settings` directly** — use `settings.provider_root_url` / `provider_openai_base_url` / `provider_api_key`.
 - `providers.py` is beside `config.py`, not under `core/llm/` (import cycle avoidance).
 - `is_cloud()` treats unknown providers as cloud (safe direction for data-mode check).
-- `settings.output_budget("decision"|"plan"|"code"|"answer"|"review")` — pass the budget for the call's purpose. `max_tokens` is part of the client cache key.
+- Output limits come from `resolve_generation(purpose, mode=, workflow=, provider=, model=)` (`llm/generation.py`), reached through `AnalysisOrchestrator._budget`. Purposes: `plan|decision|code|answer|review|converse`. Fast mode does not shrink any budget; deep widens plan/code/answer 1.5x; `MAX_TOKENS` is a ceiling nothing may raise. `max_tokens` is part of the client cache key. Do not guess a limit from a model name.
+- Provider spelling lives in `llm/adapters.py` (Ollama `num_predict`, OpenAI-compatible `max_tokens`, Anthropic `max_tokens_to_sample`). See [docs/llm.md](../docs/llm.md).
 - See [docs/llm.md](../docs/llm.md) for memory fitting, registry, embeddings, downloading.
 
 ### Reasoning models
@@ -266,6 +280,7 @@ Ruff line-length 120, `E501` disabled (formatter owns line length).
 For design rationale, historical context, and implementation details beyond these rules:
 
 - [docs/architecture.md](../docs/architecture.md) — System overview, subsystem map, and architecture index
+- [docs/routing.md](../docs/routing.md) — Turn routing, modes as policy, escalation, task state, frames, debugging
 - [docs/agent-loop.md](../docs/agent-loop.md) — Orchestrator, loop, subagents, events, grounding, export
 - [docs/security.md](../docs/security.md) — Data mode, permission profiles, consent broker, redaction, credentials
 - [docs/runtime.md](../docs/runtime.md) — Execution backends, daemon protocol, session state, config derivation, database, testing

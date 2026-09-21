@@ -172,6 +172,12 @@ Tables: `semantic_cache`, `trajectories`, `feedbacks`, `working_memory`,
 `chat_messages`, `schema_registry`. Additive column migrations run on boot
 from `MIGRATIONS`.
 
+`semantic_cache` is keyed on `(query, schema_hash)`: a cached solution belongs to
+the question and to the data and workflow it was written for. Before v1.0.14 the
+key was the question alone, so the same words asked of another dataset (or through
+another workflow) replaced the earlier entry. A database with the old key is
+rebuilt on boot with its rows copied across (`_rekey_semantic_cache`).
+
 ---
 
 ## Image Size

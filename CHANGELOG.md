@@ -19,8 +19,86 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   report it. A stable release wins as soon as it is newer than the pre-release
   you are on, and Wizard never downgrades. See "Stable and pre-release channels"
   in the README.
+- **Wizard answers a message with the smallest workflow that serves it.** Every
+  message used to run plan, loop, verify, answer, so `hi` after an analysis
+  planned, wrote code and ran it. Each message is now routed before any model is
+  called (`docs/routing.md`): a greeting or a thank-you is one conversational
+  reply, a question about the dataset's structure is answered from the data
+  frame in one call, a single figure or chart is one code call and an answer,
+  and a complex investigation keeps the full plan, loop and verification. The
+  router reads evidence from the message and the session, not a phrase list; when
+  it is unsure the conversational reply itself asks for the data and the same
+  turn continues as analysis.
+- **You can chat before you upload anything.** Messages without a dataset get a
+  normal reply, and a question that needs data says so and offers the upload,
+  instead of an error.
+- **Stopping and interrupting work.** Every turn ends in exactly one closing
+  frame. Stop sends a `cancelled` frame and leaves the composer usable. Typing
+  "stop" while a task runs cancels it; any other message sent mid-run is refused
+  as busy and returned to the composer instead of failing the running task.
+- **Each answer says what was done**: "Answered directly", "Investigated",
+  "Planned, then investigated", "Plan only", with the router's reasons on hover.
+- **One place decides output limits** (`llm/generation.py`), with provider
+  adapters for Ollama, OpenAI-compatible servers and Anthropic, and a text-free
+  `Turn trace` log line per turn (route, models, call count, budgets, latency).
+
+### Changed
+- **Depth (Auto, Fast, Deep) is a preference, not an intent.** It changes how
+  hard Wizard works on an analytic question and never turns a greeting or a
+  schema question into an analysis. Fast still means no planner and no
+  verification; Deep means a full, verified investigation for analytic work.
+  Fast no longer shrinks output budgets, so a program is not cut off mid-line.
+- Task state (a plan waiting for approval, the last chart's code) is now its own
+  record on the session. Typing "execute the plan" runs the plan that was
+  waiting, against the question it was made for, and switching datasets clears it.
+- Prompt sections that grow with a session (history, previous code, findings,
+  transcripts) are capped so a long session does not grow every prompt.
+- **The cloud provider clients are now core dependencies.** `langchain-openai`
+  (OpenAI, Gemini, LM Studio, custom gateways) was already in
+  `requirements.txt` but missing from the lockfile, so CI never had it;
+  `langchain-anthropic` moves in from `requirements-optional.txt`, and
+  `langchain-core` is declared because `src/core/llm` imports it directly.
+  `pypdf` and `python-docx` are declared too: PDF and Word context documents
+  are a feature the UI offers, and the error for a missing package pointed at
+  an "optional extra" that did not exist.
+- The lockfile is regenerated from `requirements.txt`. It had drifted (it pinned
+  `pandas 2.3.3` and `langchain 1.3.17` where the source file declares
+  `3.0.5` and `>=1.4.0`), so CI was testing a different stack than the one
+  declared.
+
+### Removed
+- The substring-based `SLMRouter` and the `is_simple` shortcut, which routed by
+  message length and phrase fragments (`hi` matched inside `which`).
 
 ### Fixed
+- **Code that never ran was stored as the answer to a question.** Declining a
+  library install leaves code that was written but not executed, with no error
+  and no block, and the answer cache took that as a success. Asking the same
+  question again replayed the unrun code and asked for the same install again.
+  Only code whose last execution succeeded is cached now. Found by running the
+  routing flow against a live model.
+- **Council reviewers and chart descriptions ignored the data policy.** A
+  reviewer sent execution output to its model without the session's data mode
+  or redaction rule, and a chart (the data drawn) went to a cloud vision model
+  under a schema-only policy. Both now follow the same rule as the manager: a
+  reviewer whose model the policy does not trust with values does not ask, and
+  such a chart is not described. A schema question under a schema-only policy
+  sends column names, types and counts, never example values.
+- **Two browser tabs on one session could run turns at the same time**, and a
+  dataset could be switched, uploaded or deleted under a running turn. One
+  turn at a time per session now holds across the WebSocket, REST and SSE, and
+  dataset changes answer `409` while a turn runs.
+- **The answer cache replaced entries instead of keeping them.** It was keyed on
+  the question alone, so the same words asked of another dataset overwrote the
+  earlier solution. It is now keyed on the question and the data it was written
+  for; existing caches are upgraded in place on first start.
+- A message that only names a column ("my region is Europe") no longer runs an
+  analysis; "outline the analysis but do not run it" plans and stops; creating a
+  column is treated as a transformation, not a question about structure.
+- The escalation marker only counts when it is the whole reply, so text echoed
+  from data cannot start an analysis.
+- Typing "go ahead" (or anything else) clears the earlier message's stale
+  Approve box. Slow clients no longer lose the frame that ends a turn.
 - **A browser tab left open across a backend restart** (an upgrade, `wizard
   stop` then `start`) showed four `404 Session not found` errors on load
   (`/api/data-mode`, `/api/usage`, `/api/permissions`, `/api/session`) and kept

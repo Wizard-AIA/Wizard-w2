@@ -38,6 +38,7 @@ The deep architectural reference is divided into topic-focused documents:
 
 | Topic | Document | Key Subsystems & Areas |
 |---|---|---|
+| **Turn Routing** | [`docs/routing.md`](routing.md) | Per-message workflow choice (`converse`/`inspect`/`direct`/`agentic`/`plan_only`), evidence signals, converse-or-escalate, modes as policy, `Session.task` state, terminal-frame contract, turn trace |
 | **Agent Loop & Workflow** | [`docs/agent-loop.md`](agent-loop.md) | Single request path, event protocol frames, orchestrator loop, plan & permission gates, deterministic compact decisions, subagent concurrency & proxy sessions, trust layer grounding & verification, export |
 | **Security & Permissions** | [`docs/security.md`](security.md) | Data mode enforcement (`local-only`/`cloud-only`/`hybrid`), per-prompt schema redaction, permission profiles & categories, `ConsentBroker` suspension, credentials & OS permissions |
 | **Runtime & Infrastructure** | [`docs/runtime.md`](runtime.md) | Execution backends (`host`/`docker`/`inprocess`), daemon protocol & preloading, session state, reference documents, context budgeting & capability filtering, configuration & host sizing, SQLite persistence, testing architecture |

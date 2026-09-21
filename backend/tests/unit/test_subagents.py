@@ -23,6 +23,10 @@ from src.core.llm.usage import TokenUsage, usage_ledger
 from src.core.session import Session
 
 
+# These tests are about the loop's parallel step, not about which workflow a
+# message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
+
 CODE_A = "```python\nprint(df['A'].sum())\n```"
 CODE_C = "```python\nprint(df['C'].sum())\n```"  # 0.1+0.2+0.3+0.4+0.5 == 1.5, unique to this branch
 CODE_MEAN = "```python\nprint(df['A'].mean())\n```"  # 3.0, unique to the other branch

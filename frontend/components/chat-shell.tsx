@@ -73,7 +73,10 @@ export function ChatShell() {
     sendMessage,
     respondToApproval,
     clearSkillCandidate,
+    busyAlert,
     cancel,
+    interrupt,
+    restoredDraft,
   } = chat
 
   const onArtifact = useCallback((artifact: Artifact) => {
@@ -215,12 +218,23 @@ export function ChatShell() {
           </div>
         </div>
 
+        {busyAlert && (
+          <div className="mx-auto mb-2 w-full max-w-3xl px-4">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-2 text-[13px] text-foreground" role="status">
+               <AlertTriangle className="h-4 w-4" />
+               A task is still running. Wait for it, or press Stop.
+            </div>
+          </div>
+        )}
         <Composer
           onSend={handleSend}
           onStop={cancel}
+          onInterrupt={interrupt}
+          restoredDraft={restoredDraft}
           onUpload={(file) => void uploadDataset(file)}
           isRunning={isRunning}
           isUploading={uploading}
+          disabled={chat.phase === "awaiting_approval" && isRunning}
           hasData={hasData}
           acceptedFormats={config?.supported_formats ?? ["csv"]}
           mode={mode}
