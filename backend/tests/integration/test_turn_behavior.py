@@ -444,6 +444,43 @@ async def test_the_same_question_keeps_examples_when_the_policy_allows_values(se
     assert SECRET in "\n".join(stub.prompts)
 
 
+class _VisionSpy:
+    def __init__(self) -> None:
+        self.described: list[dict] = []
+
+    async def describe_image(self, image, **kwargs):
+        self.described.append({"image": image, **kwargs})
+        return "A rising line."
+
+    async def acomplete(self, *_a, **_k):
+        return ""
+
+
+@pytest.mark.parametrize(("redact", "described"), [(True, 0), (False, 1)])
+async def test_a_chart_is_only_described_by_a_model_the_policy_trusts_with_values(
+    loaded_session: Session, monkeypatch, redact: bool, described: int
+) -> None:
+    from src.core.agent.orchestrator import RunState
+    from src.core.agent.routing import Complexity, Intent, Route, Workflow
+
+    spy = _VisionSpy()
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", spy)
+    monkeypatch.setattr(orchestrator, "_redact_for", lambda *_a, **_k: redact)
+    monkeypatch.setattr(settings, "VISION_ENABLED", True)
+    monkeypatch.setattr(settings, "COUNCIL_ENABLED", True)
+
+    state = RunState(instruction="why", mode="auto")
+    state.route = Route(Intent.INVESTIGATION, Workflow.AGENTIC, Complexity.COMPLEX)
+    state.image = "iVBORw0KGgo="
+    await orchestrator._review(state, loaded_session, None)
+
+    assert len(spy.described) == described
+    if described:
+        assert spy.described[0]["data_mode"] == loaded_session.data_mode
+        assert spy.described[0]["max_tokens"] == settings.output_budget("review")
+        assert state.trace.generation_budgets.get("review") == settings.output_budget("review")
+
+
 def test_inspect_redacted_keeps_the_shape_and_drops_every_value(secret_session: Session) -> None:
     text = secret_session.inspect("", redact=True)
     assert "customer" in text and "salary" in text and "3 rows" in text

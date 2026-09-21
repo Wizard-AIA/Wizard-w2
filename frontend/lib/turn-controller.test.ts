@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { applyFrame, type TurnContext } from "./turn-controller.ts"
+import { applyFrame, settlePlanGates, type TurnContext } from "./turn-controller.ts"
 import { blankAssistant, blankUser } from "./turn-state.ts"
 import type { ServerEvent } from "./types.ts"
 
@@ -174,4 +174,18 @@ test("branch-tagged frames never reach the main message", () => {
   const { ctx } = applyFrame(running(), frame({ type: "code", content: "print(1)", branch: "sub1" }))
   assert.equal(ctx.messages[1].code, undefined)
   assert.equal(ctx.messages[1].subagents["sub1"].code, "print(1)")
+})
+
+test("sending anything settles a plan that was waiting for approval", () => {
+  const waiting = { ...blankAssistant(), approval: { tool: "execute_plan", plan: "1. load" } }
+  const gate = { ...blankAssistant(), approval: { tool: "install", id: "abc" } }
+  const settled = settlePlanGates([waiting, gate] as never)
+  assert.equal(settled[0].approval, null)
+  // A permission prompt belongs to a running turn and stays.
+  assert.equal(settled[1].approval?.id, "abc")
+})
+
+test("settling plan gates returns the same list when there is nothing to settle", () => {
+  const messages = [blankUser("hi"), blankAssistant()]
+  assert.equal(settlePlanGates(messages), messages)
 })

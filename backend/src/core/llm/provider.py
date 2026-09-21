@@ -761,9 +761,12 @@ class LLMProvider:
         provider: str | None = None,
         data_mode: str | None = None,
         session_id: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Multimodal description of a rendered chart."""
-        spec = self.resolve(LLMRole.VISION, model=model, temperature=0.2, provider=provider, data_mode=data_mode)
+        spec = self.resolve(
+            LLMRole.VISION, model=model, temperature=0.2, provider=provider, max_tokens=max_tokens, data_mode=data_mode
+        )
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))

@@ -126,3 +126,19 @@ export function applyFrame(ctx: TurnContext, event: ServerEvent): FrameResult {
     effects,
   }
 }
+
+/**
+ * A plan waiting for approval belongs to the turn before whatever is sent next.
+ *
+ * The backend supersedes it: typing "go ahead" runs that plan, and any other
+ * message replaces it. Either way the earlier message's Approve box is stale, and
+ * left in place it would sit in the history as an action that no longer does
+ * anything. A permission prompt (it has an `id`) belongs to a running turn and is
+ * never touched here.
+ */
+export function settlePlanGates(messages: ChatMessage[]): ChatMessage[] {
+  if (!messages.some((message) => message.approval && !message.approval.id)) return messages
+  return messages.map((message) =>
+    message.approval && !message.approval.id ? { ...message, approval: null } : message,
+  )
+}

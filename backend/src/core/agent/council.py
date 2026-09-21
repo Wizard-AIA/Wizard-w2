@@ -14,6 +14,8 @@ regexes to strip back out.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.config import settings
@@ -21,6 +23,7 @@ from src.core.analysis.validation.semantic import check_chart_legibility
 from src.core.analysis.validation.statistical import check_significance_claims
 from src.core.infra.telemetry import trace_agent
 from src.core.llm import LLMRole, llm_provider, strip_reasoning
+from src.core.llm.generation import resolve_generation
 from src.utils.logging import logger
 
 
@@ -28,29 +31,73 @@ if TYPE_CHECKING:  # `src.core.session` pulls in the executor; keep that out of 
     from src.core.session import ModelPreferences
 
 
+@dataclass(frozen=True)
+class ReviewGuard:
+    """What a reviewer's model call must respect. Built by the orchestrator each turn.
+
+    A reviewer is a model call like any other: it reads execution output, so it
+    is bound by the session's data mode and data policy exactly as the manager
+    is. Without a guard (a test, a script) a reviewer asks with no session facts,
+    as it always did.
+    """
+
+    data_mode: str | None = None
+    session_id: str | None = None
+    #: The reviewer's model is one the data policy does not trust with values.
+    #: A reviewer that would have to send output then does not ask.
+    redact: bool = False
+    #: Reports the call to the turn's trace: (purpose, budget, prompt chars, model).
+    record: Callable[[str, int, int, str], None] | None = None
+
+
 class SpecialistAgent:
     """Base class for a reviewer."""
 
     name = "Specialist"
 
-    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
+    async def review(
+        self,
+        plan: str,
+        code: str,
+        result: str,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
-    async def _ask(self, prompt: str, role: LLMRole = LLMRole.WORKER, models: ModelPreferences | None = None) -> str:
+    async def _ask(
+        self,
+        prompt: str,
+        role: LLMRole = LLMRole.WORKER,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
+    ) -> str:
+        if guard is not None and guard.redact:
+            # The prompt carries execution output. Under a schema-only policy with
+            # a cloud model that is a leak, so the deterministic findings stand alone.
+            logger.debug("Specialist LLM review skipped by the data policy", agent=self.name)
+            return ""
         # Specialists used to always run on the configured default model, which
         # quietly ignored the user's choice for the rest of the session.
         role_name = role.value
+        model = models.model_for(role_name) if models else None
+        provider = models.provider_for(role_name) if models else None
+        # One sentence is what is asked for and one sentence is what
+        # is used; the caveat is appended to a warning list.
+        budget = resolve_generation("review", provider=provider, model=model).config.max_output_tokens
+        if guard is not None and guard.record is not None:
+            guard.record("review", budget, len(prompt), model or "")
         try:
             return (
                 await llm_provider.acomplete(
                     prompt,
                     role=role,
                     temperature=0.2,
-                    model=models.model_for(role_name) if models else None,
-                    provider=models.provider_for(role_name) if models else None,
-                    # One sentence is what is asked for and one sentence is what
-                    # is used; the caveat is appended to a warning list.
-                    max_tokens=settings.output_budget("review"),
+                    model=model,
+                    provider=provider,
+                    max_tokens=budget,
+                    data_mode=guard.data_mode if guard else None,
+                    session_id=guard.session_id if guard else None,
                 )
             ).strip()
         except Exception as exc:
@@ -67,7 +114,14 @@ class VisualizerAgent(SpecialistAgent):
 
     name = "Visualizer"
 
-    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
+    async def review(
+        self,
+        plan: str,
+        code: str,
+        result: str,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
+    ) -> dict[str, Any]:
         applicable = any(marker in code for marker in ("plt.", "sns.", "px.", "go."))
         feedback = [finding.message for finding in check_chart_legibility(code)]
         return {"agent": self.name, "applicable": applicable, "feedback": feedback}
@@ -85,7 +139,14 @@ class StatisticianAgent(SpecialistAgent):
 
     RELEVANT = ("test", "hypothesis", "significan", "correlat", "regress", "model", "predict", "distribution")
 
-    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
+    async def review(
+        self,
+        plan: str,
+        code: str,
+        result: str,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
+    ) -> dict[str, Any]:
         applicable = any(marker in f"{plan} {code}".lower() for marker in self.RELEVANT)
         feedback = [finding.message for finding in check_significance_claims(plan, code, result)]
 
@@ -97,6 +158,7 @@ class StatisticianAgent(SpecialistAgent):
                 f"<output>\n{result[:800]}\n</output>",
                 role=LLMRole.MANAGER,
                 models=models,
+                guard=guard,
             )
             tip = strip_reasoning(tip)
             if tip and "sound" not in tip.lower():
@@ -117,7 +179,14 @@ class ArchitectAgent(SpecialistAgent):
         ("inplace=True", "`inplace=True` is deprecated in several pandas APIs; prefer reassignment."),
     )
 
-    async def review(self, plan: str, code: str, result: str, models: ModelPreferences | None = None) -> dict[str, Any]:
+    async def review(
+        self,
+        plan: str,
+        code: str,
+        result: str,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
+    ) -> dict[str, Any]:
         feedback = [message for pattern, message in self.ANTIPATTERNS if pattern in code]
         return {"agent": self.name, "applicable": bool(feedback), "feedback": feedback}
 
@@ -130,13 +199,18 @@ class TheCouncil:
 
     @trace_agent("TheCouncil")
     async def adjudicate(
-        self, plan: str, code: str, result: str, models: ModelPreferences | None = None
+        self,
+        plan: str,
+        code: str,
+        result: str,
+        models: ModelPreferences | None = None,
+        guard: ReviewGuard | None = None,
     ) -> dict[str, Any]:
         if not settings.COUNCIL_ENABLED:
             return {"reviews": [], "status": "disabled"}
 
         outcomes = await asyncio.gather(
-            *(specialist.review(plan, code, result, models) for specialist in self.specialists),
+            *(specialist.review(plan, code, result, models, guard) for specialist in self.specialists),
             return_exceptions=True,
         )
 

@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { clearStoredSessionId, storeSessionId, websocketUrl } from "./api"
 import { recordUsageFrame } from "./usage-store"
 import type { AnalysisMode, Artifact, ChatMessage, Phase, ServerEvent } from "./types"
-import { applyFrame } from "./turn-controller"
+import { applyFrame, settlePlanGates } from "./turn-controller"
 import { blankAssistant, blankUser } from "./turn-state"
 
 const HEARTBEAT_MS = 25_000
@@ -322,7 +322,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       const assistant = { ...blankAssistant(), mode, instruction: trimmed }
       activeIdRef.current = assistant.id
 
-      commitMessages((previous) => [...previous, userMessage, assistant])
+      commitMessages((previous) => [...settlePlanGates(previous), userMessage, assistant])
       setRunning(true)
       setPhaseNow("routing")
 

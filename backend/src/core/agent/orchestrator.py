@@ -65,7 +65,7 @@ from src.core.agent.conversation import (
     dataset_brief,
     render_last_task,
 )
-from src.core.agent.council import TheCouncil
+from src.core.agent.council import ReviewGuard, TheCouncil
 from src.core.agent.events import BranchEmitter, Emitter, EventType, Phase, emit
 from src.core.agent.grounding import (
     GroundingReport,
@@ -2728,11 +2728,22 @@ class AnalysisOrchestrator:
         state.phase = Phase.REVIEWING
         await emit(emitter, EventType.STEP_START, id="review", label="Reviewing results", kind="review")
 
+        guard = ReviewGuard(
+            data_mode=session.data_mode,
+            session_id=session.id,
+            redact=self._redact_for(session, "manager"),
+            record=state.trace.record_call,
+        )
         tasks: list[asyncio.Task] = [
-            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output, session.models))
+            asyncio.ensure_future(self.council.adjudicate(state.plan, state.code, state.output, session.models, guard))
         ]
         if settings.VISION_ENABLED and state.image:
-            tasks.append(asyncio.ensure_future(self._describe_plot(state.image, session)))
+            if self._redact_for(session, "vision"):
+                # A chart is the data drawn: its bars and points are the values the
+                # policy keeps off a cloud model, so it is not sent.
+                logger.debug("Vision description skipped by the data policy")
+            else:
+                tasks.append(asyncio.ensure_future(self._describe_plot(state, session)))
 
         try:
             outcomes = await asyncio.wait_for(
@@ -2760,14 +2771,19 @@ class AnalysisOrchestrator:
 
         await emit(emitter, EventType.STEP_END, id="review", ok=True, duration_ms=state.elapsed_ms)
 
-    async def _describe_plot(self, image: str, session: Session) -> str:
+    async def _describe_plot(self, state: RunState, session: Session) -> str:
+        model = session.models.vision
+        provider = session.models.vision_provider
+        budget = resolve_generation("review", provider=provider, model=model).config.max_output_tokens
+        state.trace.record_call("review", budget, 0, model or "")  # an image has no prompt length
         try:
             return await llm_provider.describe_image(
-                image,
-                model=session.models.vision,
-                provider=session.models.vision_provider,
+                state.image,
+                model=model,
+                provider=provider,
                 data_mode=session.data_mode,
                 session_id=session.id,
+                max_tokens=budget,
             )
         except Exception as exc:
             logger.debug("Vision description unavailable", error=str(exc))
