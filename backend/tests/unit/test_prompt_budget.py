@@ -32,11 +32,3 @@ def test_decision_prompt_keeps_recent_investigation_history() -> None:
     )
     assert prompt_chars(prompt) <= 20_000
     assert "RECENT-EVIDENCE" in prompt
-
-
-def test_composed_prompt_deduplicates_schema_blocks() -> None:
-    from src.core.prompts import _deduplicate_schema_blocks
-
-    prompt = _deduplicate_schema_blocks("<schema>first</schema>\n<schema>second</schema>")
-    assert prompt.count("<schema>") == 2
-    assert "second" not in prompt

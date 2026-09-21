@@ -23,10 +23,15 @@ turn ends with exactly one terminal frame: `final`, `error`, plan-gate
 `approval_required` frames with an id are pauses inside the same turn.
 
 `cancel` and a disconnect cancel the current task, interrupt the executor in a
-thread, abandon consent, release child runtimes, reset transient task state,
-and await the task for at most five seconds. The terminal cancellation reason
+thread, abandon consent, release child runtimes, and await the task for at most
+five seconds. The orchestrator ends its own turn on cancellation, so nothing
+transient outlives it; the chart code from the turn before is kept. The terminal cancellation reason
 is `user`, `disconnect`, or `superseded`. A cancel with no running turn only
 returns an idle status.
+
+The transport never begins or ends a turn: `AnalysisOrchestrator.run` owns
+`Session.task`, so a transport that also ended it could wipe the plan a typed
+"go ahead" is about to run.
 
 A message arriving while another turn runs is checked after consent answers.
 An interrupt intent such as `stop` cancels the running turn. Other messages

@@ -18,6 +18,16 @@ from src.config import settings
 PURPOSES = frozenset({"plan", "decision", "code", "answer", "review", "converse"})
 _MIN_OUTPUT_TOKENS = 64
 
+# A direct or inspect answer states a result the code already computed. It does
+# not get the allowance of an agentic answer that has to explain an analysis.
+_DIRECT_ANSWER_CAP = 1536
+
+# Deep mode is allowed longer plans, programs and answers. Nothing is scaled
+# down: a program cut off mid-statement is a failed call, so fast mode saves
+# calls (no planner, no verification), not tokens per call.
+_DEEP_SCALE = 1.5
+_DEEP_SCALED = frozenset({"plan", "code", "answer"})
+
 
 @dataclass(frozen=True)
 class GenerationConfig:
@@ -88,19 +98,6 @@ class ResolvedGeneration:
         }
 
 
-def _setting_budget(purpose: str) -> int:
-    return settings.output_budget(purpose)
-
-
-def _purpose_default(purpose: str, workflow: str) -> int:
-    if purpose == "converse":
-        return settings.output_budget("converse")
-    if purpose == "answer" and workflow in {"direct", "inspect"}:
-        # Direct questions should not inherit the agentic answer allowance.
-        return min(settings.output_budget("answer"), 1536)
-    return _setting_budget(purpose)
-
-
 def _as_number(value: Any, name: str) -> Any:
     if value is None:
         return None
@@ -111,19 +108,6 @@ def _as_number(value: Any, name: str) -> Any:
     if isinstance(parsed, float) and not math.isfinite(parsed):
         raise ValueError(f"invalid non-finite generation override for {name}")
     return parsed
-
-
-def _model_capability(provider: str, model: str) -> int | None:
-    """Return a known model ceiling when one is explicitly encoded in a name.
-
-    Provider registries do not promise a maximum output length.  We therefore
-    only use conservative, explicit hints and leave unknown models to the
-    system-safe clamp.  This function is deliberately small and testable.
-    """
-    lowered = (model or "").lower()
-    if any(marker in lowered for marker in ("nano", "tiny", "mini")):
-        return 4096
-    return None
 
 
 def _unsupported_fields(provider: str) -> dict[str, str]:
@@ -150,10 +134,12 @@ def resolve_generation(
 ) -> ResolvedGeneration:
     """Resolve one request using purpose, policy, user and safety layers.
 
-    Precedence is purpose defaults, mode, workflow, user settings, request
-    override, provider/model capability, then system-safe limits.  The final
-    two clamps are intentionally not overrides: a provider ceiling and the
-    process-wide ``MAX_TOKENS`` limit protect both latency and spend.
+    Precedence, lowest to highest: the purpose's configured budget, mode,
+    workflow, the user's temperature, a per-request override, then the
+    process-wide ``MAX_TOKENS`` ceiling. The ceiling is not an override: it is
+    what someone lowers when their context is small, and nothing above it may
+    raise it back. Provider limits are not guessed from a model's name; a
+    provider that rejects a value reports it and the call fails visibly.
     """
     normalized_purpose = purpose.strip().lower()
     if normalized_purpose not in PURPOSES:
@@ -164,7 +150,7 @@ def resolve_generation(
     model_name = (model or "").strip()
 
     values: dict[str, Any] = {
-        "max_output_tokens": _purpose_default(normalized_purpose, normalized_workflow),
+        "max_output_tokens": settings.output_budget(normalized_purpose),
         "temperature": settings.TEMPERATURE if temperature is None else temperature,
         "top_p": None,
         "top_k": None,
@@ -174,19 +160,15 @@ def resolve_generation(
     }
     provenance = dict.fromkeys(values, "purpose default")
 
-    if normalized_mode == "fast":
-        values["max_output_tokens"] = max(_MIN_OUTPUT_TOKENS, int(values["max_output_tokens"] * 0.5))
-        provenance["max_output_tokens"] = "mode"
-    elif normalized_mode == "deep":
-        values["max_output_tokens"] = int(values["max_output_tokens"] * 1.5)
+    if normalized_mode == "deep" and normalized_purpose in _DEEP_SCALED:
+        values["max_output_tokens"] = int(values["max_output_tokens"] * _DEEP_SCALE)
         provenance["max_output_tokens"] = "mode"
 
     if normalized_workflow in {"direct", "inspect"} and normalized_purpose == "answer":
-        values["max_output_tokens"] = min(values["max_output_tokens"], 1536)
-        provenance["max_output_tokens"] = "workflow"
-    elif normalized_workflow == "converse" and normalized_purpose != "converse":
-        values["max_output_tokens"] = min(values["max_output_tokens"], settings.output_budget("converse"))
-        provenance["max_output_tokens"] = "workflow"
+        capped = min(values["max_output_tokens"], _DIRECT_ANSWER_CAP)
+        if capped != values["max_output_tokens"]:
+            values["max_output_tokens"] = capped
+            provenance["max_output_tokens"] = "workflow"
 
     if temperature is not None:
         values["temperature"] = temperature
@@ -203,11 +185,6 @@ def resolve_generation(
     if values["stop"] is not None:
         stop_values = (values["stop"],) if isinstance(values["stop"], str) else values["stop"]
         values["stop"] = tuple(str(item) for item in stop_values)
-
-    capability = _model_capability(provider_name, model_name)
-    if capability is not None and values["max_output_tokens"] > capability:
-        values["max_output_tokens"] = capability
-        provenance["max_output_tokens"] = "provider/model capability clamp"
 
     before_safe_clamp = int(values["max_output_tokens"])
     values["max_output_tokens"] = max(

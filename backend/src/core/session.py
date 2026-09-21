@@ -247,9 +247,9 @@ class Session:
     def reset_task(self) -> None:
         """Drops what a task leaves behind. Called when its premise changes.
 
-        A dataset was added, switched or removed, or a turn was cancelled: the
-        plan that was waiting and the chart code were about data or a request
-        that no longer stand. Conversation history is deliberately untouched.
+        A dataset was added, switched or removed: the plan that was waiting and
+        the chart code were about data that no longer stands. A cancelled turn
+        does not call this; the chart from the turn before it is still on screen. Conversation history is deliberately untouched.
         """
         self.task.pending_plan = None
         self.task.pending_instruction = ""

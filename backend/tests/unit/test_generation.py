@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.config import settings
-from src.core.llm.adapters import AnthropicAdapter, GeminiAdapter, OllamaAdapter, OpenAICompatibleAdapter
+from src.core.llm.adapters import AnthropicAdapter, OllamaAdapter, OpenAICompatibleAdapter, adapter_for
 from src.core.llm.generation import GenerationConfig, resolve_generation
 
 
@@ -46,7 +46,44 @@ def test_explain_and_dict_are_text_free_of_prompt_content() -> None:
     assert resolved.to_dict()["config"]["max_output_tokens"] == resolved.config.max_output_tokens
 
 
-def test_provider_adapters_use_current_wire_parameter_names() -> None:
+def test_fast_mode_never_shrinks_a_program_or_a_plan() -> None:
+    """Fast saves calls, not tokens per call: a program cut off mid-statement is a failed call."""
+    for purpose in ("code", "plan", "decision", "answer", "review"):
+        fast = resolve_generation(purpose, mode="fast")
+        auto = resolve_generation(purpose, mode="auto")
+        assert fast.config.max_output_tokens == auto.config.max_output_tokens, purpose
+
+
+def test_deep_mode_widens_only_the_calls_that_can_use_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "MAX_TOKENS", 32_000)
+    for purpose in ("plan", "code", "answer"):
+        deep = resolve_generation(purpose, mode="deep").config.max_output_tokens
+        auto = resolve_generation(purpose, mode="auto").config.max_output_tokens
+        assert deep == int(auto * 1.5), purpose
+    for purpose in ("decision", "review", "converse"):
+        assert (
+            resolve_generation(purpose, mode="deep").config.max_output_tokens
+            == resolve_generation(purpose, mode="auto").config.max_output_tokens
+        ), purpose
+
+
+def test_deep_never_exceeds_the_process_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "MAX_TOKENS", 4096)
+    monkeypatch.setattr(settings, "LLM_MAX_TOKENS_CODE", 4096)
+    resolved = resolve_generation("code", mode="deep")
+    assert resolved.config.max_output_tokens == 4096
+    assert resolved.provenance["max_output_tokens"] == "system-safe clamp"
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gpt-4o-mini", "phi-3-mini", "tiny-llama", "qwen3-nano"])
+def test_a_budget_is_not_guessed_from_a_model_name(model: str) -> None:
+    """ "mini" is inside "gemini". A name is not evidence of an output ceiling."""
+    with_model = resolve_generation("code", model=model, provider="openai")
+    without = resolve_generation("code")
+    assert with_model.config.max_output_tokens == without.config.max_output_tokens
+
+
+def test_provider_adapters_use_the_names_the_clients_accept() -> None:
     config = GenerationConfig(
         max_output_tokens=123,
         temperature=0.2,
@@ -62,18 +99,37 @@ def test_provider_adapters_use_current_wire_parameter_names() -> None:
     assert ollama.values["client_kwargs"] == {"timeout": 3}
     assert ollama.values["num_ctx"] == 4096
 
+    # Spellings carried over unchanged from before v1.0.14; see the adapter docstring.
     anthropic = AnthropicAdapter().translate(config)
-    assert anthropic.values["max_tokens"] == 123
-    assert "max_tokens_to_sample" not in anthropic.values
+    assert anthropic.values["max_tokens_to_sample"] == 123
+    assert anthropic.values["stop"] == ["END"]
+    assert anthropic.values["timeout"] == 3
+    assert anthropic.values["top_k"] == 12
 
-    standard = OpenAICompatibleAdapter("gpt-4o").translate(config)
-    reasoning = OpenAICompatibleAdapter("o3-mini").translate(config)
-    assert standard.values["max_tokens"] == 123
-    assert reasoning.values["max_completion_tokens"] == 123
-    assert "top_k" in standard.dropped
-    assert "num_ctx" in standard.dropped
+    compatible = OpenAICompatibleAdapter("gpt-4o").translate(config)
+    assert compatible.values["max_tokens"] == 123
+    assert "max_completion_tokens" not in compatible.values
+    assert set(compatible.dropped) == {"top_k", "num_ctx"}
 
-    gemini = GeminiAdapter().translate(config)
-    assert gemini.values["max_output_tokens"] == 123
-    assert gemini.values["stop_sequences"] == ["END"]
-    assert "num_ctx" in gemini.dropped
+
+@pytest.mark.parametrize("model", ["gpt-4o", "o3-mini", "gpt-5", "qwen3-thinking", ""])
+def test_openai_compatible_always_sends_max_tokens(model: str) -> None:
+    """The client maps it to max_completion_tokens where needed; a name heuristic would only disagree."""
+    values = OpenAICompatibleAdapter(model).translate(GenerationConfig(max_output_tokens=200)).values
+    assert values["max_tokens"] == 200
+    assert "max_completion_tokens" not in values
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_style", "expected"),
+    [
+        ("ollama", "", OllamaAdapter),
+        ("anthropic", "", AnthropicAdapter),
+        ("openai", "", OpenAICompatibleAdapter),
+        ("gemini", "", OpenAICompatibleAdapter),
+        ("lmstudio", "", OpenAICompatibleAdapter),
+        ("", "anthropic", AnthropicAdapter),
+    ],
+)
+def test_adapter_selection(provider: str, api_style: str, expected: type) -> None:
+    assert type(adapter_for(provider, api_style)) is expected

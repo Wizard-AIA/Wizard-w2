@@ -11,7 +11,6 @@ question, and per-section output is capped.
 from __future__ import annotations
 
 import io
-import re
 from typing import Any
 
 import pandas as pd
@@ -38,21 +37,6 @@ def prompt_chars(prompt: str) -> int:
 
 def _cap_text(text: str, limit: int) -> str:
     return _middle_out(text, limit) if len(text) > limit else text
-
-
-def _deduplicate_schema_blocks(text: str) -> str:
-    """Keep the first dataset schema when a composed prompt repeats it."""
-    pattern = re.compile(r"<schema>.*?</schema>", re.DOTALL)
-    seen = False
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal seen
-        if not seen:
-            seen = True
-            return match.group(0)
-        return "<schema>\n[dataset schema already shown above]\n</schema>"
-
-    return pattern.sub(replace, text)
 
 
 def _describe_columns(df: pd.DataFrame, columns: list[str], redact: bool = False) -> str:
@@ -507,7 +491,7 @@ def create_prompt(
 
     negative_block = f"\n<avoid_this>\n{negative_example}\n</avoid_this>\n" if negative_example else ""
 
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are a Principal Quantitative Engineer and Senior Python Data Scientist inside a secure, headless sandbox.
 Translate the analytical request and plan into robust, vectorized, and flawless executable Python.
 </role>
@@ -548,7 +532,7 @@ Write the Python code that completely satisfies the request. Return ONLY one ```
 - Empirical Metrics Contract: When computing statistics, regressions, correlations, distributions, or triage, ALWAYS compute and `print()` the key numerical metrics (e.g. count, mean, median, std, min, max, quartiles, skewness, p-values, R-squared, effect sizes) with clear headers (e.g. `print("=== Summary Statistics ===")`).
 - Ranking Contract: If the request asks for "top N", "highest N", or "lowest N", explicitly sort by the relevant metric (`df.sort_values(by=..., ascending=...)`) before selecting the top N rows.
 - Zero-Hallucination Column Rule: Never invent, guess, or substitute column names. If a requested column does not exist in `df` or `tables`, print that the column is missing and stop.
-</instructions>""")
+</instructions>"""
 
 
 def create_planning_prompt(
@@ -596,7 +580,7 @@ def create_planning_prompt(
     bounded_memory = _cap_text(memory_context, MAX_HISTORY_CHARS)
 
     if mode == "fast":
-        return _deduplicate_schema_blocks(f"""<role>
+        return f"""<role>
 You are a fast analytical planner. Produce a terse, concrete, numbered implementation plan for direct execution.
 </role>
 
@@ -608,9 +592,9 @@ You are a fast analytical planner. Produce a terse, concrete, numbered implement
 
 <instructions>
 Output ONLY a numbered list of 2-5 concrete steps a single Python script can execute. Do not write Python.
-</instructions>""")
+</instructions>"""
 
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are the Principal Data Scientist for an advanced analytics engine. You architect the analytical strategy,
 formulate hypotheses, and design rigorous multi-step investigation plans. A dedicated coding engine implements
 your plan -- you do not write Python code yourself.
@@ -633,7 +617,7 @@ your plan -- you do not write Python code yourself.
 4. Explicitly state any statistical assumptions (e.g. normality, homoscedasticity, independence, sample size adequacy).
 5. If and only if answering the request strictly requires external domain knowledge outside this dataset, emit a single line `SEARCH: "your query"` and stop.
 6. Do not write Python code.
-</instructions>""")
+</instructions>"""
 
 
 def create_replan_prompt(instruction: str, search_results: list[dict[str, Any]], original_thought: str) -> str:
@@ -726,7 +710,7 @@ def create_decision_prompt(
     elif remaining <= 2:
         urgency = f"\nOnly {remaining} iterations remain. Start converging.\n"
 
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are the Analytical Director orchestrating a data investigation. You do not write code yourself -- you evaluate
 the empirical evidence obtained so far, assess the remaining budget, and decide the exact next tactical action.
 </role>
@@ -762,12 +746,12 @@ Rules:
 - No Duplication: Do not repeat an action that has already succeeded.
 - Error Recovery: If a prior step produced an error or empty output, the goal must specifically target the fix or alternative approach.
 - Granularity: The goal must specify one concrete sub-task, not a restatement of the entire high-level request.{parallel_rule}
-</instructions>""")
+</instructions>"""
 
 
 def create_reflection_prompt(instruction: str, plan: str, transcript: str) -> str:
     """Manager prompt: rewrite the plan in light of what execution revealed."""
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are the Principal Data Scientist revising your analytical strategy based on actual empirical findings.
 </role>
 
@@ -789,7 +773,7 @@ You are the Principal Data Scientist revising your analytical strategy based on 
 3. Strict Grounding: Reference only real column names and observed data properties from the execution output.
 4. Stability: If the current plan remains sound despite minor deviations, state that in one line and retain the steps.
 5. Do not write Python code.
-</instructions>""")
+</instructions>"""
 
 
 def create_verification_prompt(instruction: str, code: str, output: str) -> str:
@@ -800,7 +784,7 @@ def create_verification_prompt(instruction: str, code: str, output: str) -> str:
     wrong denominator all produce confident, plausible, wrong numbers.
     """
     trimmed = output if len(output) <= 2000 else output[:2000] + "\n... (truncated)"
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are an Independent Quantitative Auditor verifying an analytical calculation. Assume the previous code may contain subtle bugs.
 </role>
 
@@ -829,7 +813,7 @@ Verification Output Protocol:
 2. Print `MISMATCH: <original_value> vs <recomputed_value>` if the results diverge.
 3. Print any sanity invariant violations detected.
 4. Return ONLY one ```python code block without commentary.
-</instructions>""")
+</instructions>"""
 
 
 def create_answer_prompt(
@@ -899,7 +883,7 @@ def create_answer_prompt(
             "result as a settled answer.\n"
         )
 
-    return _deduplicate_schema_blocks(f"""<role>
+    return f"""<role>
 You are an Executive Analytics Consultant and Principal Data Communicator explaining finished analytical results to stakeholders.
 Synthesize the quantitative findings into a crisp, authoritative, and fact-grounded response.
 </role>
@@ -931,7 +915,7 @@ Synthesize the quantitative findings into a crisp, authoritative, and fact-groun
 7. Verification Integrity: If verification reported a `MISMATCH:`, lead the response by disclosing the discrepancy and qualifying the confidence of the result.
 8. Error Diagnosis: If execution resulted in an error, explain the root cause in plain English and provide the recommended corrective action.
 9. Conciseness: Do not repeat or re-paste the Python code. Do not describe what you plan to do in the future.
-{critic_instruction}{confidence_instruction}</instructions>""")
+{critic_instruction}{confidence_instruction}</instructions>"""
 
 
 def _middle_out(text: str, limit: int) -> str:

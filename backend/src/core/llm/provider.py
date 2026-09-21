@@ -503,17 +503,6 @@ class LLMProvider:
                         num_ctx=spec.num_ctx,
                     )
                 )
-                logger.debug(
-                    "Resolved generation parameters",
-                    purpose="provider-call",
-                    provider=spec.provider,
-                    model=spec.model,
-                    requested_max_output_tokens=spec.max_tokens,
-                    effective_max_output_tokens=spec.max_tokens,
-                    provenance={},
-                    prompt_chars=0,
-                    dropped=generation.dropped,
-                )
                 return ChatOllama(
                     model=spec.model,
                     base_url=spec.base_url or settings.OLLAMA_BASE_URL,
@@ -578,9 +567,8 @@ class LLMProvider:
                 model=spec.model,
                 base_url=spec.base_url or "<default>",
             )
-            # The configured Gemini endpoint is its OpenAI-compatible route.
-            # The native Gemini adapter remains available for native SDK users,
-            # but must not hand native names to ChatOpenAI.
+            # Gemini is reached through its OpenAI-compatible route, so it takes
+            # the same names as every other compatible server.
             generation = adapter_for("", spec.api_style, spec.model).translate(
                 GenerationConfig(
                     max_output_tokens=spec.max_tokens,
@@ -620,20 +608,6 @@ class LLMProvider:
         except Exception as exc:  # pragma: no cover - accounting is best effort
             logger.warning("Could not record token usage", error=str(exc))
 
-    @staticmethod
-    def _debug_generation(spec: ModelSpec, prompt: str, requested: int | None, purpose: str) -> None:
-        """Log policy metadata only. Prompt contents and credentials never enter this record."""
-        logger.debug(
-            "LLM generation request",
-            purpose=purpose,
-            provider=spec.provider,
-            model=spec.model,
-            requested_max_output_tokens=requested if requested is not None else spec.max_tokens,
-            effective_max_output_tokens=spec.max_tokens,
-            provenance={"max_output_tokens": "request override" if requested is not None else "provider default"},
-            prompt_chars=len(prompt),
-        )
-
     def complete(
         self,
         prompt: str,
@@ -649,7 +623,6 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
-        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -677,7 +650,6 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
-        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -710,7 +682,6 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
-        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))

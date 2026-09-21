@@ -22,6 +22,7 @@ from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.semantic_cache import semantic_cache
 from src.core.session import Session
+from src.utils.logging import logger as orchestrator_logger
 
 
 CODE = "```python\nprint(df['A'].sum())\n```"
@@ -408,3 +409,70 @@ async def test_deep_mode_investigates_a_simple_question_thoroughly(loaded_sessio
     result, _ = await turn(loaded_session, "calculate the total of column A", mode="deep")
     assert result.route["workflow"] == "agentic" and result.route["verify"] is True
     assert len(stub.prompts) > 2
+
+
+# --------------------------------------------------------------------------- #
+# Observability: one text-free trace per turn, from the same code that calls the model
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def traces(monkeypatch) -> list[dict]:
+    seen: list[dict] = []
+    real_info = orchestrator_logger.info
+
+    def capture(message, *args, **kwargs):
+        if message == "Turn trace":
+            seen.append(kwargs)
+        return real_info(message, *args, **kwargs)
+
+    monkeypatch.setattr(orchestrator_logger, "info", capture)
+    return seen
+
+
+async def test_a_greeting_writes_a_trace_with_one_call_and_the_converse_budget(
+    loaded_session: Session, llm, traces
+) -> None:
+    llm(["Hi!"])
+    await turn(loaded_session, "hi")
+
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace["workflow"] == "converse" and trace["llm_call_count"] == 1
+    assert trace["generation_budgets"] == {"converse": settings.output_budget("converse")}
+    assert trace["planner_used"] is False and trace["termination_reason"] == "completed"
+
+
+async def test_the_trace_counts_every_model_call_the_turn_made(loaded_session: Session, llm, traces) -> None:
+    stub = llm([CODE, "The total of A is 15."])
+    await turn(loaded_session, "calculate the total of column A")
+
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace["workflow"] == "direct"
+    assert trace["llm_call_count"] == len(stub.prompts)
+    assert trace["generation_budgets"]["answer"] <= 1536, "a direct answer does not get the agentic allowance"
+    assert trace["context_chars"] == sum(len(prompt) for prompt in stub.prompts)
+
+
+async def test_a_trace_never_contains_the_message_or_the_prompt(loaded_session: Session, llm, traces) -> None:
+    llm(["Hi!"])
+    await turn(loaded_session, "hello there, my secret is swordfish")
+
+    assert "swordfish" not in repr(traces)
+
+
+async def test_a_cancelled_turn_still_writes_its_trace(loaded_session: Session, monkeypatch, traces) -> None:
+    class Hanging:
+        async def acomplete(self, *_a, **_k):
+            await asyncio.sleep(60)
+
+        async def stream_to(self, *_a, **_k):
+            await asyncio.sleep(60)
+
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", Hanging())
+    task = asyncio.create_task(turn(loaded_session, "hi"))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [trace["termination_reason"] for trace in traces] == ["cancelled"]

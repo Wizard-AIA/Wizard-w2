@@ -23,9 +23,6 @@ if TYPE_CHECKING:
     from src.core.session import Session
 
 
-#: A conversational reply is short. Anything longer than this is an analysis.
-CONVERSE_MAX_TOKENS = 512
-
 #: Shown when the model is unreachable. A greeting should not become an error.
 FALLBACK_REPLY = "I'm here. Ask me a question about your data, or upload a file to get started."
 

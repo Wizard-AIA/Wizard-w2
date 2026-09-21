@@ -49,6 +49,7 @@ import hashlib
 import posixpath
 import re
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -57,7 +58,6 @@ from src.core.agent import export
 from src.core.agent.actions import ActionKind, Decision, Investigation, Step, parse_decision
 from src.core.agent.consent import ConsentRequest, consent_broker
 from src.core.agent.conversation import (
-    CONVERSE_MAX_TOKENS,
     FALLBACK_REPLY,
     NEEDS_DATA_REPLY,
     EscalationGate,
@@ -84,6 +84,7 @@ from src.core.agent.routing import (
     escalate,
     route_turn,
 )
+from src.core.agent.trace import TurnTrace
 from src.core.analysis import competing, confidence, critic, stopping, understanding
 from src.core.analysis.objective import AnalyticalObjective
 from src.core.analysis.runs import ExecutedStep, capture, dataset_files_from_session, dataset_manifest_from_session
@@ -94,6 +95,7 @@ from src.core.data_mode import should_redact, tool_allowed, tool_refusal
 from src.core.execution import CodeExecutor, ExecutionResult
 from src.core.feedback_store import FeedbackStore
 from src.core.llm import LLMRole, TaskTier, llm_provider, model_registry
+from src.core.llm.generation import resolve_generation
 from src.core.llm.provider import DataModeViolation, LLMUnavailableError
 from src.core.llm.reasoning import ReasoningStream, split_reasoning, strip_reasoning
 from src.core.llm.usage import SessionUsage, usage_ledger
@@ -164,6 +166,8 @@ class RunState:
     #: What routing decided for this message. Set once per turn (twice when a
     #: conversational reply escalates), before any model is called.
     route: Route | None = None
+    #: What this turn decided and cost. Written to the log when the turn ends.
+    trace: TurnTrace = field(default_factory=lambda: TurnTrace(turn_id=uuid.uuid4().hex[:8]))
 
     thought: str = ""
     plan: str = ""
@@ -378,6 +382,31 @@ class AnalysisOrchestrator:
     @staticmethod
     def _manager_model(state: RunState, session: Session) -> str | None:
         return state.manager_model or session.models.manager
+
+    @staticmethod
+    def _budget(state: RunState, session: Session, purpose: str, prompt: str, role: LLMRole) -> int:
+        """The output allowance for one model call, and the record that it was made.
+
+        Every model call in a turn passes through here, so the turn's trace counts
+        calls and prompt size from one place rather than from each call site.
+        """
+        if role is LLMRole.MANAGER:
+            model = state.manager_model or session.models.manager
+            provider = session.models.manager_provider
+        else:
+            model = session.models.worker
+            provider = session.models.worker_provider
+        route = state.route
+        resolved = resolve_generation(
+            purpose,
+            mode="deep" if route is not None and route.deep else state.mode,
+            workflow=route.workflow.value if route is not None else "agentic",
+            provider=provider,
+            model=model,
+        )
+        state.trace.record_call(purpose, resolved.config.max_output_tokens, len(prompt), model or "")
+        logger.debug("Generation budget", detail=resolved.explain())
+        return resolved.config.max_output_tokens
 
     @staticmethod
     def _redact_for(session: Session, role: str) -> bool:
@@ -653,6 +682,8 @@ class AnalysisOrchestrator:
         return route
 
     async def _announce(self, state: RunState, route: Route, emitter: Emitter | None) -> None:
+        state.trace.escalated = state.trace.escalated or state.route is not None
+        state.trace.observe_route(route)
         state.route = route
         state.task_tier = route.task_tier
         await emit(emitter, EventType.ROUTE, **route.to_dict(), mode=state.mode)
@@ -690,6 +721,8 @@ class AnalysisOrchestrator:
         )
         state = RunState(instruction=instruction, mode=mode, can_prompt=can_prompt)
         state.usage_snapshot = usage_ledger.snapshot_many([session.id])
+        state.trace.mode = mode
+        started = time.monotonic()
         session.begin_turn()
         try:
             result = await self._run(
@@ -702,10 +735,11 @@ class AnalysisOrchestrator:
                 approved_search,
                 previous_code or session.task.last_code,
             )
-        except BaseException:
+        except BaseException as exc:
             # Cancelled, crashed or interrupted: nothing transient outlives the
             # turn, so no plan is left waiting and no code left to revise.
             session.end_turn()
+            self._log_trace(state, "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed", started)
             raise
 
         pending = result.pending_approval or {}
@@ -715,7 +749,16 @@ class AnalysisOrchestrator:
             awaiting_plan=waiting_plan,
             instruction=state.instruction,
         )
+        self._log_trace(state, result.status, started)
         return result
+
+    @staticmethod
+    def _log_trace(state: RunState, reason: str, started: float) -> None:
+        trace = state.trace
+        trace.termination_reason = reason if reason in ("completed", "cancelled", "awaiting_approval") else "failed"
+        trace.actions = [entry["kind"] for entry in state.action_log]
+        trace.latency_ms = int((time.monotonic() - started) * 1000)
+        logger.info("Turn trace", **trace.to_log())
 
     async def _run(
         self,
@@ -931,7 +974,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=CONVERSE_MAX_TOKENS,
+                max_tokens=self._budget(state, session, "converse", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -1203,7 +1246,7 @@ class AnalysisOrchestrator:
             model=self._manager_model(state, session),
             temperature=session.models.temperature,
             provider=session.models.manager_provider,
-            max_tokens=settings.output_budget("plan"),
+            max_tokens=self._budget(state, session, "plan", prompt, LLMRole.MANAGER),
             data_mode=session.data_mode,
             session_id=session.id,
         )
@@ -1428,7 +1471,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("decision"),
+                max_tokens=self._budget(state, session, "decision", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -1682,7 +1725,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("plan"),
+                max_tokens=self._budget(state, session, "plan", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )
@@ -2292,7 +2335,7 @@ class AnalysisOrchestrator:
             model=session.models.worker,
             temperature=session.models.temperature,
             provider=session.models.worker_provider,
-            max_tokens=settings.output_budget("code"),
+            max_tokens=self._budget(state, session, "code", prompt, LLMRole.WORKER),
             data_mode=session.data_mode,
             session_id=session.id,
         )
@@ -2439,13 +2482,14 @@ class AnalysisOrchestrator:
             status, detail = cached
         else:
             try:
+                verification_prompt = create_verification_prompt(state.instruction, state.code, state.output)
                 raw = await llm_provider.acomplete(
-                    create_verification_prompt(state.instruction, state.code, state.output),
+                    verification_prompt,
                     role=LLMRole.WORKER,
                     model=session.models.worker,
                     temperature=session.models.temperature,
                     provider=session.models.worker_provider,
-                    max_tokens=settings.output_budget("code"),
+                    max_tokens=self._budget(state, session, "code", verification_prompt, LLMRole.WORKER),
                     data_mode=session.data_mode,
                     session_id=session.id,
                 )
@@ -2799,7 +2843,7 @@ class AnalysisOrchestrator:
                 model=self._manager_model(state, session),
                 temperature=session.models.temperature,
                 provider=session.models.manager_provider,
-                max_tokens=settings.output_budget("answer"),
+                max_tokens=self._budget(state, session, "answer", prompt, LLMRole.MANAGER),
                 data_mode=session.data_mode,
                 session_id=session.id,
             )

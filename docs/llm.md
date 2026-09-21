@@ -17,30 +17,51 @@ takes `max_tokens`.
 
 `src.core.llm.generation.resolve_generation(purpose, *, mode="auto",
 workflow="agentic", provider=None, model=None, temperature=None,
-override=None)` is the single explanation point for output policy. It returns
-`ResolvedGeneration` with `.config`, `.provenance`, `.dropped`, `.explain()` and
-`.to_dict()`.
+override=None)` decides how many tokens a call may produce and records why. It
+returns `ResolvedGeneration` with `.config`, `.provenance`, `.dropped`,
+`.explain()` and `.to_dict()`. The orchestrator calls it for every model call in
+a turn (`AnalysisOrchestrator._budget`), which is also where the turn trace
+counts calls and prompt size.
 
-The precedence order is purpose defaults, mode, workflow, user configuration,
-request override, provider/model capability clamp, then the system-safe
-`MAX_TOKENS` clamp. `fast` reduces budgets and `deep` increases them. Direct
-and inspect answer calls use at most 1536 tokens. Conversation uses
-`LLM_MAX_TOKENS_CONVERSE`, which defaults to 512. The existing agentic answer
-budget remains the old floor so truncation does not become common.
+Precedence, lowest to highest:
 
-Use `resolved.explain()` to answer why a request used N tokens without logging
-prompt text or secrets. Adapters in `src.core.llm.adapters` translate the
-normalized fields and record unsupported fields. Ollama uses `num_predict`,
-`num_ctx`, `top_k`, `top_p`, `stop`, and client timeout. Anthropic Messages
-uses `max_tokens`, not the legacy `max_tokens_to_sample`. Standard
-OpenAI-compatible models use `max_tokens`; reasoning model names use
-`max_completion_tokens`. Gemini's native adapter uses `max_output_tokens` and
-`stop_sequences`.
+1. The purpose's configured budget (`LLM_MAX_TOKENS_PLAN|DECISION|CODE|ANSWER|REVIEW|CONVERSE`).
+2. Mode. `deep` widens `plan`, `code` and `answer` by 1.5x. `fast` changes no
+   budget: it saves calls (no planner, no verification), and a program cut off
+   mid-statement is a failed call, so it never shrinks one.
+3. Workflow. A `direct` or `inspect` answer is capped at 1536 tokens; it states
+   a result the code already computed.
+4. The user's temperature setting.
+5. A per-request override.
+6. `MAX_TOKENS`, the process ceiling. This is a clamp, not an override: nothing
+   above it may raise it back.
 
-The installed SDK verification checked `langchain-ollama 1.1.0` and
-`langchain-openai 1.6.0` constructor fields locally. The optional Anthropic
-package was not installed in the test environment, so its adapter is covered
-by payload contract tests and the current Messages API field name.
+A provider limit is not guessed from a model's name (`"mini"` is inside
+`"gemini"`). A provider that rejects a value reports it and the call fails
+visibly.
+
+`resolved.explain()` answers "why did this call get N tokens" without prompt
+text or secrets. Two calls sit outside a turn and use `settings.output_budget`
+directly, which resolves to the same number: dataset cleaning
+(`agent/flow.py`) and the council's one-line reviews (`agent/council.py`).
+
+#### Adapters
+
+`src.core.llm.adapters` translates the normalized config into constructor
+arguments and reports what the provider cannot represent (`dropped`).
+
+| Family | Output limit | Notes |
+|---|---|---|
+| Ollama | `num_predict` | Also `num_ctx`, `top_k`, `top_p`, `stop`; timeout goes in `client_kwargs`. |
+| OpenAI-compatible (OpenAI, Gemini's compatible route, LM Studio, others) | `max_tokens` | Always this name. `langchain-openai` maps it to `max_completion_tokens` for the models that need that; choosing by model name here would only duplicate and eventually contradict it. `top_k` and `num_ctx` are dropped. |
+| Anthropic | `max_tokens_to_sample` | The spelling this codebase used before v1.0.14, carried over unchanged. |
+
+Verified locally: `langchain-ollama 1.1.0` and `langchain-openai 1.6.0`
+constructor fields (probed, including the `max_tokens` mapping). **Not
+verified:** `langchain-anthropic` is an optional dependency and is not
+installed in the test environment, so the Anthropic names are covered by a
+payload test only. If that client renames a field, the call fails at
+construction; it does not silently drop the budget.
 
 ---
 

@@ -52,53 +52,32 @@ class OllamaAdapter(GenerationAdapter):
 
 
 class AnthropicAdapter(GenerationAdapter):
+    """Spellings this codebase already passed to ``ChatAnthropic`` before v1.0.14.
+
+    ``langchain-anthropic`` is an optional dependency and is not installed in
+    the test environment, so these names are carried over unchanged rather than
+    re-derived. If the client renames a field, the provider call fails loudly at
+    construction; it does not silently drop the budget.
+    """
+
     supported = frozenset({"temperature", "top_p", "top_k", "stop", "timeout_s"})
     names = {
-        "max_output_tokens": "max_tokens",
-        "stop": "stop_sequences",
+        "max_output_tokens": "max_tokens_to_sample",
         "timeout_s": "timeout",
     }
 
 
 class OpenAICompatibleAdapter(GenerationAdapter):
+    """OpenAI, Gemini's OpenAI-compatible route, LM Studio, and other compatible servers.
+
+    Always ``max_tokens``. ``langchain-openai`` maps it to ``max_completion_tokens``
+    for the models that require that spelling, so choosing by model name here
+    would only duplicate (and eventually contradict) what the client already does.
+    Compatible servers that do not know ``max_completion_tokens`` keep working.
+    """
+
     supported = frozenset({"temperature", "top_p", "stop", "timeout_s"})
-    names = {"timeout_s": "timeout", "stop": "stop"}
-
-    def translate(self, config: GenerationConfig) -> AdapterPayload:
-        result = super().translate(config)
-        values = dict(result.values)
-        # Reasoning-capable OpenAI models reject max_tokens in favor of the
-        # current max_completion_tokens field. Standard models retain the
-        # widely supported max_tokens spelling.
-        output_name = (
-            "max_completion_tokens"
-            if any(marker in self.model.lower() for marker in ("o1", "o3", "o4", "gpt-5", "reasoning", "thinking"))
-            else "max_tokens"
-        )
-        values.pop("max_output_tokens", None)
-        values[output_name] = config.max_output_tokens
-        return AdapterPayload(values, result.dropped)
-
-
-class GeminiAdapter(OpenAICompatibleAdapter):
-    """Google's native generation names, for callers using its native client."""
-
-    supported = frozenset({"temperature", "top_p", "top_k", "stop", "timeout_s"})
-    names = {"max_output_tokens": "max_output_tokens", "stop": "stop_sequences", "timeout_s": "timeout"}
-
-    def translate(self, config: GenerationConfig) -> AdapterPayload:
-        # The base implementation above is intentionally bypassed because the
-        # Gemini native SDK names output and stop fields differently.
-        values = {"max_output_tokens": config.max_output_tokens}
-        dropped: dict[str, str] = {}
-        for field, value in config.to_dict().items():
-            if value is None or field == "max_output_tokens":
-                continue
-            if field in self.supported:
-                values[self.names.get(field, field)] = value
-            else:
-                dropped[field] = "unsupported by provider"
-        return AdapterPayload(values, dropped)
+    names = {"max_output_tokens": "max_tokens", "timeout_s": "timeout"}
 
 
 def adapter_for(provider: str = "", api_style: str = "", model: str = "") -> GenerationAdapter:
@@ -107,6 +86,4 @@ def adapter_for(provider: str = "", api_style: str = "", model: str = "") -> Gen
         return OllamaAdapter(model)
     if name == "anthropic" or api_style == "anthropic":
         return AnthropicAdapter(model)
-    if name == "gemini":
-        return GeminiAdapter(model)
     return OpenAICompatibleAdapter(model)

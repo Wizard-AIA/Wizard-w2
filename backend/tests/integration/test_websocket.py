@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 from collections.abc import AsyncIterator, Iterator
 
 import pandas as pd
@@ -89,6 +90,7 @@ def test_ping_is_answered(client: TestClient) -> None:
         assert websocket.receive_json()["type"] == "pong"
 
 
+@pytest.mark.usefixtures("real_routing")
 def test_message_without_a_dataset_is_answered_in_conversation(client: TestClient) -> None:
     """v1.0.14: no dataset is something to explain, not an error frame."""
     with client.websocket_connect("/ws/chat") as websocket:
@@ -199,6 +201,45 @@ def test_planning_mode_emits_an_approval_request(client: TestClient, session_wit
 
     reasoning = "".join(f["content"] for f in frames if f["type"] == "reasoning_delta")
     assert "Thinking it through" in reasoning
+
+
+def test_the_transport_leaves_the_waiting_plan_and_its_request_alone(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """The orchestrator owns the turn. A transport that also ended it, without the
+    request, would wipe what a typed "go ahead" needs to run the right question."""
+    monkeypatch.setattr(
+        "src.core.agent.orchestrator.llm_provider",
+        StreamingStub(["<thought>Thinking.</thought>\n1. Load\n2. Summarise"]),
+    )
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "summarise the table", "mode": "planning"})
+        collect_until(websocket, {"approval_required", "error", "final"})
+        live = session_manager.get(session_with_data)
+        # The frame is emitted before the turn finishes; wait for it to settle.
+        for _ in range(100):
+            if live.task.status == "awaiting_plan":
+                break
+            time.sleep(0.02)
+
+    assert live.task.status == "awaiting_plan"
+    assert "Summarise" in (live.task.pending_plan or "")
+    assert live.task.pending_instruction == "summarise the table"
+
+
+def test_a_turn_announces_its_route_once_and_first(client: TestClient, session_with_data: str, monkeypatch) -> None:
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(["Hello."]))
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "message", "content": "hi", "mode": "auto"})
+        frames = collect_until(websocket, {"final", "error"})
+
+    routing = [f for f in frames if f["type"] == "status" and f.get("phase") == "routing"]
+    assert len(routing) == 1, "the transport and the orchestrator both announced routing"
+    assert frames[0]["type"] == "status" and frames[0]["phase"] == "routing"
 
 
 def test_approval_resumes_the_run(client: TestClient, session_with_data: str, monkeypatch) -> None:
