@@ -229,6 +229,45 @@ def test_the_transport_leaves_the_waiting_plan_and_its_request_alone(
     assert live.task.pending_instruction == "summarise the table"
 
 
+@pytest.mark.usefixtures("real_routing")
+def test_acceptance_flow_analysis_then_hi_then_a_schema_question_on_one_socket(
+    client: TestClient, session_with_data: str, monkeypatch
+) -> None:
+    """The v1.0.14 symptom, end to end over the real socket: `hi` after an analysis
+    must not plan, write code or run anything, and must not disturb what came before."""
+    stub = StreamingStub(
+        [
+            "```python\nprint(df['A'].sum())\n```",  # code for the analysis
+            "The total of A is 15.",  # its answer
+            "Hello again! What would you like to look at?",  # the reply to `hi`
+            "The table has 5 rows and 3 columns.",  # the schema answer
+        ]
+    )
+    monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", stub)
+    analysis_only = {"plan_delta", "step_start", "code", "stdout", "iteration_start", "action", "verification"}
+
+    with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
+        websocket.receive_json()
+
+        websocket.send_json({"type": "message", "content": "calculate the total of column A", "mode": "auto"})
+        first = collect_until(websocket, {"final", "error"})
+        assert first[-1]["type"] == "final" and first[-1]["route"]["workflow"] == "direct"
+        assert {f["type"] for f in first} & {"code", "stdout"}
+
+        websocket.send_json({"type": "message", "content": "hi", "mode": "auto"})
+        second = collect_until(websocket, {"final", "error"})
+        assert second[-1]["type"] == "final" and second[-1]["route"]["workflow"] == "converse"
+        assert not {f["type"] for f in second} & analysis_only, "hi must not run anything analysis-shaped"
+        assert "Hello again" in second[-1]["response"]
+
+        websocket.send_json({"type": "message", "content": "how many rows are there?", "mode": "auto"})
+        third = collect_until(websocket, {"final", "error"})
+        assert third[-1]["route"]["workflow"] == "inspect"
+        assert "code" not in {f["type"] for f in third}
+
+    assert not stub.responses, "every scripted call was used: one per model call, no extras"
+
+
 def test_a_turn_announces_its_route_once_and_first(client: TestClient, session_with_data: str, monkeypatch) -> None:
     monkeypatch.setattr("src.core.agent.orchestrator.llm_provider", StreamingStub(["Hello."]))
 
