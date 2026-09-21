@@ -966,6 +966,37 @@ class DatabaseManager:
             logger.error("Failed to fetch chat messages", error=str(e))
             return []
 
+    def get_last_assistant_turn(self, session_id: str, *, tasks_only: bool = False) -> dict[str, Any] | None:
+        """The most recent assistant message, with its persisted ``meta``.
+
+        ``tasks_only`` skips conversational replies (``meta.workflow == "converse"``)
+        so a greeting between an analysis and a question about it does not hide the
+        analysis. Rows written before v1.0.14 carry no ``workflow`` and count as
+        tasks, which is what they were.
+        """
+        try:
+            with self._read() as conn:
+                rows = conn.execute(
+                    "SELECT id, role, content, timestamp, meta FROM chat_messages"
+                    " WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 12",
+                    (session_id,),
+                ).fetchall()
+            for row in rows:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+                if tasks_only and meta.get("workflow") == "converse":
+                    continue
+                return {
+                    "id": row["id"],
+                    "role": row["role"],
+                    "content": row["content"],
+                    "timestamp": row["timestamp"],
+                    "meta": meta,
+                }
+            return None
+        except Exception as e:
+            logger.error("Failed to fetch the last assistant turn", error=str(e))
+            return None
+
     def get_chat_message(self, session_id: str, message_id: int) -> dict[str, Any] | None:
         """One message by id, scoped to ``session_id`` so a message id from a
         different session can never be looked up -- the export route's only
