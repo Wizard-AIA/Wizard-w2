@@ -1,18 +1,16 @@
-"""Deterministic task routing for manager turns.
+"""Model-tier selection for manager turns.
 
-The router deliberately does not call a model. It classifies the user's request
-from stable lexical signals so lightweight metadata questions can use a small
-installed model without making model selection itself another LLM round-trip.
-Unknown requests stay at the standard tier; ambiguous work must never silently
-lose the reasoning capacity reserved for investigation.
+`TaskTier` says how much model a turn justifies. The decision is made by turn
+routing (`core/agent/routing.py`), which reads whole tokens and session context;
+this module keeps the enum and the historical `classify_task_complexity` entry
+point as a thin wrapper over it. It used to hold its own substring tables, which
+matched `hi` inside `which` and called any message under 15 characters chitchat.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 from typing import Any
-
-from src.core.llm.slm_router import SLMRouter
 
 
 class TaskTier(StrEnum):
@@ -21,108 +19,24 @@ class TaskTier(StrEnum):
     REASONING_HEAVY = "reasoning_heavy"
 
 
-_LIGHTWEIGHT_PHRASES = (
-    "show first",
-    "show top",
-    "show head",
-    "show last",
-    "show tail",
-    "preview",
-    "list columns",
-    "show columns",
-    "column names",
-    "schema",
-    "data types",
-    "column descriptions",
-    "how many rows",
-    "number of rows",
-    "row count",
-    "how big",
-    "dataset dimensions",
-    "hello",
-    "hi",
-    "thanks",
-)
-
-_STANDARD_MARKERS = (
-    "calculate",
-    "count",
-    "mean",
-    "average",
-    "median",
-    "sum",
-    "describe",
-    "statistics",
-    "group by",
-    "groupby",
-    "join",
-    "merge",
-    "query",
-    "sql",
-    "plot",
-    "chart",
-    "clean",
-    "filter",
-    "transform",
-    "format",
-)
-
-_REASONING_MARKERS = (
-    "investigate",
-    "anomal",
-    "outlier",
-    "hypothesis",
-    "validate",
-    "why",
-    "explain",
-    "root cause",
-    "forecast",
-    "predict",
-    "regression",
-    "causal",
-    "compare",
-    "trade-off",
-    "tradeoff",
-    "multi-step",
-    "step by step",
-    "deep analysis",
-)
-
-
 def classify_task_complexity(instruction: str, context: dict[str, Any] | None = None) -> TaskTier:
     """Classify a request as lightweight, standard, or reasoning-heavy.
 
-    ``context`` is intentionally advisory. A long instruction, a previous
-    failed attempt, or a multi-table session increases the required tier, while
-    an explicit lightweight metadata request can still remain cheap.
+    ``context`` is advisory: a previous failed attempt raises the tier, and a
+    multi-step or document-backed request never drops below standard. An unknown
+    request stays at the standard tier, so ambiguous work never silently loses the
+    reasoning capacity reserved for investigation.
     """
-    metadata = context or {}
-    # Use SLMRouter to fast-track lightweight queries
-    slm = SLMRouter()
-    intent, tier = slm.route(instruction)
+    # Imported here: routing imports `TaskTier` from this module.
+    from src.core.agent.routing import TurnContext, route_turn
 
-    if intent in ("metadata", "chitchat") and not metadata.get("previous_error") and not metadata.get("multi_step"):
-        return TaskTier.LIGHTWEIGHT
-
-    text = " ".join((instruction or "").lower().split())
-    metadata = context or {}
-
-    if any(marker in text for marker in _REASONING_MARKERS):
+    meta = context or {}
+    tier = route_turn(instruction, TurnContext(has_dataset=True)).task_tier
+    if meta.get("previous_error"):
         return TaskTier.REASONING_HEAVY
-
-    if any(phrase in text for phrase in _LIGHTWEIGHT_PHRASES):
-        if not metadata.get("previous_error") and not metadata.get("multi_step") and len(text) < 180:
-            return TaskTier.LIGHTWEIGHT
-
-    if metadata.get("previous_error") or metadata.get("multi_step") or metadata.get("has_documents"):
-        return TaskTier.REASONING_HEAVY if metadata.get("previous_error") else TaskTier.STANDARD
-
-    if any(marker in text for marker in _STANDARD_MARKERS) or len(text) > 180:
+    if (meta.get("multi_step") or meta.get("has_documents")) and tier is TaskTier.LIGHTWEIGHT:
         return TaskTier.STANDARD
-
-    # Conversational turns and unknown analytical requests should retain the
-    # normal model until stronger evidence says they are safe to downscale.
-    return TaskTier.STANDARD
+    return tier
 
 
 __all__ = ["TaskTier", "classify_task_complexity"]

@@ -13,6 +13,11 @@ from src.api.api import app
 from src.core.session import session_manager
 
 
+# These tests are about the loop (iterations, verification, subagents, skills), not
+# about which workflow a message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     with TestClient(app) as test_client:

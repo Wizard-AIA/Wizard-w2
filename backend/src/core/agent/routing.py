@@ -201,9 +201,11 @@ class Route:
         Direct and inspect turns are one shot by construction, so they take the
         one-shot budget unless the user asked for depth explicitly.
         """
+        if self.workflow is Workflow.INSPECT:
+            return "fast"  # a mode is how hard to work on a task, and this is not one
         if self.deep or mode == "deep":
             return "deep"
-        if mode == "fast" or self.workflow in (Workflow.DIRECT, Workflow.INSPECT):
+        if mode == "fast" or self.workflow is Workflow.DIRECT:
             return "fast"
         return "auto"
 
@@ -429,8 +431,12 @@ _MEAN_VERB_PREV = frozenset(
 _TOKEN = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
 _CLAUSE_SPLIT = re.compile(r"[;\n]|,\s+(?:and\s+|then\s+)?|\s+and\s+then\s+|\s+then\s+|\s+and\s+(?=\w)", re.IGNORECASE)
 
-#: "data types" is structure; a bare "type" is not ("what type of customer churned").
-_TYPE_OF_COLUMNS = re.compile(r"\b(?:data|column|field|variable)\s*types?\b", re.IGNORECASE)
+#: "data types" and "how big is this" are structure; a bare "type" is not ("what type of customer churned").
+_TYPE_OF_COLUMNS = re.compile(
+    r"\b(?:data|column|field|variable)\s*types?\b|\bhow\s+(?:big|large|long|wide)\b|\bsize\s+of\b"
+    r"|\bnumber\s+of\s+(?:rows|columns|records|fields)\b",
+    re.IGNORECASE,
+)
 
 #: A filter or comparison. A structural question that carries one ("rows where
 #: revenue > 100") needs a computation, not a fact read off the frame. A number

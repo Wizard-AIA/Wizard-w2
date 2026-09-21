@@ -378,3 +378,8 @@ def test_a_message_that_only_says_stop_is_an_interrupt(message: str) -> None:
 )
 def test_data_that_contains_the_word_is_not_an_interrupt(message: str) -> None:
     assert not is_interrupt_intent(message)
+
+
+def test_a_schema_question_is_one_shot_in_every_mode() -> None:
+    for mode in ("auto", "fast", "deep", "planning"):
+        assert route_turn("how many rows are there?", WITH_DATA, mode).budget_mode(mode) == "fast", mode

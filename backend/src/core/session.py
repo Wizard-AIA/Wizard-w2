@@ -177,6 +177,9 @@ class TaskState:
     turn: int = 0
     #: A plan the user has been shown and has not decided on yet.
     pending_plan: str | None = None
+    #: The request that plan answers, so "execute the plan" runs *that* request
+    #: and not the words "execute the plan".
+    pending_instruction: str = ""
     #: Code of the last completed turn. Used only to revise a chart the user is
     #: still looking at, and dropped whenever the data underneath it changes.
     last_code: str | None = None
@@ -226,7 +229,7 @@ class Session:
         self.task.workflow = workflow
         return self.task.turn
 
-    def end_turn(self, *, code: str | None = None, awaiting_plan: str | None = None) -> None:
+    def end_turn(self, *, code: str | None = None, awaiting_plan: str | None = None, instruction: str = "") -> None:
         """Ends the running turn. Everything transient about it is dropped.
 
         ``code`` is kept only when the turn produced some; a conversational or
@@ -237,6 +240,7 @@ class Session:
         if code:
             self.task.last_code = code
         self.task.pending_plan = awaiting_plan
+        self.task.pending_instruction = instruction if awaiting_plan else ""
         self.task.status = "awaiting_plan" if awaiting_plan else "idle"
         self.task.workflow = ""
 
@@ -248,6 +252,7 @@ class Session:
         that no longer stand. Conversation history is deliberately untouched.
         """
         self.task.pending_plan = None
+        self.task.pending_instruction = ""
         self.task.last_code = None
         if self.task.status == "awaiting_plan":
             self.task.status = "idle"

@@ -139,6 +139,7 @@ import pytest  # noqa: E402
 
 from src.config import settings  # noqa: E402
 from src.core.agent.consent import consent_broker  # noqa: E402
+from src.core.agent.orchestrator import AnalysisOrchestrator as _Orchestrator  # noqa: E402
 from src.core.connectors.store import connection_store  # noqa: E402
 from src.core.credentials import credential_store  # noqa: E402
 from src.core.database import db_mgr  # noqa: E402
@@ -148,6 +149,9 @@ from src.core.session import Session, session_manager  # noqa: E402
 from src.core.skills import install as skill_install  # noqa: E402
 from src.core.skills.index import install_index  # noqa: E402
 from src.core.skills.registry import skill_registry  # noqa: E402
+
+
+_REAL_DECIDE_ROUTE = _Orchestrator._decide_route
 
 
 # --------------------------------------------------------------------------- #
@@ -308,3 +312,47 @@ def csv_file(tmp_path: Path, simple_df: pd.DataFrame) -> Path:
     path = tmp_path / "sample.csv"
     simple_df.to_csv(path, index=False)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Routing
+#
+# Turn routing (`core/agent/routing.py`) has its own suite. The loop tests below
+# it exercise iterations, verification, subagents and skills, which need the
+# planner and the full loop to run whatever the words of their instruction
+# happen to route to. `full_pipeline` fixes the route for them, so a test about
+# the loop cannot start failing because someone reworded its question.
+# `real_routing` restores the real router for a test that is about routing.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def full_pipeline(monkeypatch):
+    """Every non-approval message runs plan -> loop -> verify -> answer, as before v1.0.14."""
+    from src.core.agent.orchestrator import AnalysisOrchestrator
+    from src.core.agent.routing import Complexity, Intent, PlanPolicy, Route, Workflow
+
+    original = AnalysisOrchestrator._decide_route
+
+    def pipeline(self, session, instruction, mode, last_task, approved_plan, approved_search):
+        if approved_plan is not None or approved_search is not None:
+            return original(self, session, instruction, mode, last_task, approved_plan, approved_search)
+        route = Route(
+            Intent.INVESTIGATION,
+            Workflow.AGENTIC,
+            Complexity.COMPLEX,
+            plan=PlanPolicy.GATED if mode == "planning" else PlanPolicy.SELF,
+            verify=mode != "fast",
+            deep=mode == "deep",
+            reasons=("test: full pipeline",),
+        )
+        return route, instruction, None
+
+    monkeypatch.setattr(AnalysisOrchestrator, "_decide_route", pipeline)
+    return pipeline
+
+
+@pytest.fixture
+def real_routing(monkeypatch, full_pipeline):
+    """Undoes `full_pipeline` for a test that is about routing itself."""
+    from src.core.agent.orchestrator import AnalysisOrchestrator
+
+    monkeypatch.setattr(AnalysisOrchestrator, "_decide_route", _REAL_DECIDE_ROUTE)

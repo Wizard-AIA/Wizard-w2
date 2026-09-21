@@ -24,6 +24,11 @@ from src.core.skills.registry import skill_registry
 from src.core.tools.catalog import CatalogEngine
 
 
+# These tests are about the loop (iterations, verification, subagents, skills), not
+# about which workflow a message is given. See `full_pipeline` in conftest.py.
+pytestmark = pytest.mark.usefixtures("full_pipeline")
+
+
 def kinds(collector: EventCollector) -> list[str]:
     return [event.type.value for event in collector.events]
 

@@ -4,7 +4,6 @@ import pytest
 from src.core.agent.dag import DAGNode, ExecutionDAG
 from src.core.agent.grounding import check_table_grounding
 from src.core.infra.queue import get_queue
-from src.core.llm.slm_router import SLMRouter
 from src.core.security.sandbox.docker_security import SecurityPolicyError, validate_container_config
 
 
@@ -57,25 +56,6 @@ def test_table_level_grounding():
     empty_result = check_table_grounding("No tables here", [df])
     assert empty_result["tables_found"] == 0
     assert empty_result["grounded"] is True
-
-
-def test_slm_router_classification():
-    router = SLMRouter()
-    intent, tier = router.route("show first 5 rows and list columns")
-    assert intent == "metadata"
-    assert tier == "fast"
-
-    intent, tier = router.route("hello there")
-    assert intent == "chitchat"
-    assert tier == "fast"
-
-    intent, tier = router.route("calculate mean of age")
-    assert intent == "lightweight"
-    assert tier == "fast"
-
-    intent, tier = router.route("investigate root cause of anomaly using regression forecast")
-    assert intent == "deep"
-    assert tier == "reasoning"
 
 
 def test_docker_security_validation():

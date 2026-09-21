@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from src.api.api import app
 from src.config import settings
-from src.core.agent.events import EventCollector
+from src.core.agent.events import EventCollector, EventType
 from src.core.agent.orchestrator import orchestrator
 from src.core.execution import CodeExecutor
 from src.core.ingest.loader import DatasetLoader
@@ -250,8 +250,25 @@ def test_model_selection_rejects_out_of_range_temperature(client: TestClient) ->
 # --------------------------------------------------------------------------- #
 # Orchestrator degradation
 # --------------------------------------------------------------------------- #
-async def test_run_without_a_dataset_fails_cleanly(session: Session) -> None:
-    result = await orchestrator.run(session=session, instruction="analyse", mode="fast", emitter=EventCollector())
+async def test_run_without_a_dataset_is_a_reply_not_a_crash(session: Session) -> None:
+    """No dataset is a conversation about what is missing (v1.0.14), not an error.
+
+    The model is unreachable here, so this also covers the fallback: the user is
+    still told what to do.
+    """
+    collector = EventCollector()
+    result = await orchestrator.run(session=session, instruction="analyse", mode="fast", emitter=collector)
+    assert result.status == "completed"
+    assert result.route["workflow"] == "converse" and result.route["needs_data"] is True
+    assert "dataset" in result.answer.lower()
+    assert not collector.of_type(EventType.ERROR)
+
+
+async def test_resuming_an_approved_plan_without_a_dataset_still_fails_cleanly(session: Session) -> None:
+    """An approval carries no message to converse about: the data it ran on is gone."""
+    result = await orchestrator.run(
+        session=session, instruction="analyse", mode="auto", emitter=EventCollector(), approved_plan="1. do it"
+    )
     assert result.status == "failed"
 
 
