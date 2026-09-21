@@ -54,10 +54,11 @@ class OllamaAdapter(GenerationAdapter):
 class AnthropicAdapter(GenerationAdapter):
     """Spellings this codebase already passed to ``ChatAnthropic`` before v1.0.14.
 
-    ``langchain-anthropic`` is an optional dependency and is not installed in
-    the test environment, so these names are carried over unchanged rather than
-    re-derived. If the client renames a field, the provider call fails loudly at
-    construction; it does not silently drop the budget.
+    Verified against ``langchain-anthropic 1.7``: ``max_tokens_to_sample`` is the
+    alias of ``ChatAnthropic.max_tokens``. The package is optional, so the test
+    that builds the real client skips where it is absent. If the client renames
+    a field, the provider call fails loudly at construction; it does not
+    silently drop the budget.
     """
 
     supported = frozenset({"temperature", "top_p", "top_k", "stop", "timeout_s"})

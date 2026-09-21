@@ -526,10 +526,10 @@ class LLMProvider:
             if spec.api_style == "anthropic":
                 try:
                     from langchain_anthropic import ChatAnthropic
-                except ImportError as exc:  # pragma: no cover - depends on optional extra
+                except ImportError as exc:  # pragma: no cover - only if the install skipped requirements.txt
                     raise LLMUnavailableError(
                         "Anthropic support needs the `langchain-anthropic` package. "
-                        "Install it with `uv pip install -r requirements-optional.txt`."
+                        "Install it with `uv pip install -r requirements.txt`."
                     ) from exc
 
                 logger.info("Initializing ChatAnthropic client", model=spec.model)
@@ -552,10 +552,10 @@ class LLMProvider:
 
             try:
                 from langchain_openai import ChatOpenAI
-            except ImportError as exc:  # pragma: no cover - depends on optional extra
+            except ImportError as exc:  # pragma: no cover - only if the install skipped requirements.txt
                 raise LLMUnavailableError(
                     "OpenAI, Gemini, and gateway support needs the `langchain-openai` package. "
-                    "Install it with `uv pip install -r requirements-optional.txt`."
+                    "Install it with `uv pip install -r requirements.txt`."
                 ) from exc
 
             # LM Studio, vLLM, llama.cpp's server and hosted gateways all speak

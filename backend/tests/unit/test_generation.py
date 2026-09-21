@@ -112,6 +112,26 @@ def test_provider_adapters_use_the_names_the_clients_accept() -> None:
     assert set(compatible.dropped) == {"top_k", "num_ctx"}
 
 
+FULL_CONFIG = GenerationConfig(max_output_tokens=123, temperature=0.2, top_p=0.9, stop=("END",), timeout_s=3)
+
+
+def test_anthropic_payload_builds_the_real_client() -> None:
+    """The adapter's spelling is the one `ChatAnthropic` accepts (verified against langchain-anthropic 1.7)."""
+    chat_anthropic = pytest.importorskip("langchain_anthropic").ChatAnthropic
+    values = AnthropicAdapter().translate(FULL_CONFIG).values
+    client = chat_anthropic(model="claude-haiku-4-5-20251001", api_key="fake-test-key", **values)
+    assert client.max_tokens == 123
+    assert client.temperature == 0.2
+
+
+def test_openai_compatible_payload_builds_the_real_client() -> None:
+    chat_openai = pytest.importorskip("langchain_openai").ChatOpenAI
+    values = OpenAICompatibleAdapter("gemini-2.5-flash").translate(FULL_CONFIG).values
+    client = chat_openai(model="gemini-2.5-flash", api_key="fake-test-key", base_url="http://127.0.0.1:1", **values)
+    assert client.max_tokens == 123
+    assert client.temperature == 0.2
+
+
 @pytest.mark.parametrize("model", ["gpt-4o", "o3-mini", "gpt-5", "qwen3-thinking", ""])
 def test_openai_compatible_always_sends_max_tokens(model: str) -> None:
     """The client maps it to max_completion_tokens where needed; a name heuristic would only disagree."""

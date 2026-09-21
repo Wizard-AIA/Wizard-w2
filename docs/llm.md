@@ -62,14 +62,14 @@ arguments and reports what the provider cannot represent (`dropped`).
 |---|---|---|
 | Ollama | `num_predict` | Also `num_ctx`, `top_k`, `top_p`, `stop`; timeout goes in `client_kwargs`. |
 | OpenAI-compatible (OpenAI, Gemini's compatible route, LM Studio, others) | `max_tokens` | Always this name. `langchain-openai` maps it to `max_completion_tokens` for the models that need that; choosing by model name here would only duplicate and eventually contradict it. `top_k` and `num_ctx` are dropped. |
-| Anthropic | `max_tokens_to_sample` | The spelling this codebase used before v1.0.14, carried over unchanged. |
+| Anthropic | `max_tokens_to_sample` | The alias of `ChatAnthropic.max_tokens`; the spelling this codebase used before v1.0.14. |
 
-Verified locally: `langchain-ollama 1.1.0` and `langchain-openai 1.6.0`
-constructor fields (probed, including the `max_tokens` mapping). **Not
-verified:** `langchain-anthropic` is an optional dependency and is not
-installed in the test environment, so the Anthropic names are covered by a
-payload test only. If that client renames a field, the call fails at
-construction; it does not silently drop the budget.
+Verified against the real clients: `langchain-ollama 1.1.0`, `langchain-openai`
+and `langchain-anthropic 1.7` (constructor fields probed, and the adapter
+payload builds each client in `test_generation.py`). Those two tests skip where
+the optional packages are not installed, so CI covers the payload shape only.
+If a client renames a field, the call fails at construction; it does not
+silently drop the budget.
 
 ---
 

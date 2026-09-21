@@ -9,7 +9,7 @@ Loads only when work touches `backend/`. Global rules: [root CLAUDE.md](../CLAUD
 # Install
 uv pip install --system -r requirements.txt              # API server only (root file)
 uv pip install --system -r requirements-local.txt         # analysis toolkit (Docker-less)
-uv pip install --system -r requirements-optional.txt      # Redis / OpenAI gateway
+uv pip install --system -r requirements-optional.txt      # Redis, connector drivers
 
 # Run
 uvicorn src.api.api:app --reload --port 8000              # from backend/

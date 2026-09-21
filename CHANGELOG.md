@@ -53,6 +53,18 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   waiting, against the question it was made for, and switching datasets clears it.
 - Prompt sections that grow with a session (history, previous code, findings,
   transcripts) are capped so a long session does not grow every prompt.
+- **The cloud provider clients are now core dependencies.** `langchain-openai`
+  (OpenAI, Gemini, LM Studio, custom gateways) was already in
+  `requirements.txt` but missing from the lockfile, so CI never had it;
+  `langchain-anthropic` moves in from `requirements-optional.txt`, and
+  `langchain-core` is declared because `src/core/llm` imports it directly.
+  `pypdf` and `python-docx` are declared too: PDF and Word context documents
+  are a feature the UI offers, and the error for a missing package pointed at
+  an "optional extra" that did not exist.
+- The lockfile is regenerated from `requirements.txt`. It had drifted (it pinned
+  `pandas 2.3.3` and `langchain 1.3.17` where the source file declares
+  `3.0.5` and `>=1.4.0`), so CI was testing a different stack than the one
+  declared.
 
 ### Removed
 - The substring-based `SLMRouter` and the `is_simple` shortcut, which routed by

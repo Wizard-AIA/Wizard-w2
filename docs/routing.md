@@ -173,3 +173,21 @@ print(route.workflow, route.reasons)
   turn (escalation, or ask again in Deep); a wrong heavy route only costs time.
   The behaviour suite pins the cases that matter (`test_routing.py`,
   `test_turn_behavior.py`).
+
+## Checking it against a real model
+
+Every test above uses scripted models. `scripts/live_acceptance.py` drives the
+real app over its real `/ws/chat` socket with a real provider, in `cloud-only`
+mode on a synthetic table, in the order that used to fail (an analysis, then
+`hi`). It checks what was routed and which frames ran, never the wording of an
+answer.
+
+```bash
+# The key goes in through stdin only: not argv, not a file, not the repo.
+pbpaste | .venv/bin/python scripts/live_acceptance.py --model gemini-2.5-flash
+```
+
+Gemini's free tier allows about five requests a minute per model, and a complex
+analysis turn makes several, so the script waits between turns (`--pace`) and
+retries a rate-limited turn once. Run without a model it still verifies the
+routing (a fake key fails only the turns that need an answer).
