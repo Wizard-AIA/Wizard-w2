@@ -466,6 +466,27 @@ _ADDRESSES_YOU = re.compile(
 )
 
 
+#: A whole message that only asks the running turn to stop. Consulted *only* while
+#: a turn is running (see `is_interrupt_intent`), so it can never mistake data
+#: for a command: with nothing running, "stop" is just a message like any other.
+_INTERRUPT = re.compile(
+    r"^\s*(?:please\s+)?(?:(?:stop|cancel|abort|halt|quit|end)(?:\s+(?:it|that|this|now|everything|please|"
+    r"the\s+(?:analysis|run|task)|what\s+you(?:'re|\s+are)\s+doing))*|never\s?mind|forget\s+(?:it|that)|enough)"
+    r"(?:\s+please)?\s*[.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_interrupt_intent(message: str) -> bool:
+    """Whether a message sent *while a turn is running* asks it to stop.
+
+    The transport asks this only when a turn is already in flight; anything else
+    sent then is refused as busy. A message that merely contains the word stop
+    ("stop losses by region") is not an interrupt: the whole message must be one.
+    """
+    return bool(_INTERRUPT.match(message or ""))
+
+
 def _matches(token: str, stems: tuple[str, ...]) -> bool:
     singular = token[:-1] if token.endswith("s") and len(token) > 3 else token
     for stem in stems:
@@ -821,5 +842,6 @@ __all__ = [
     "complexity_score",
     "escalate",
     "extract_signals",
+    "is_interrupt_intent",
     "route_turn",
 ]

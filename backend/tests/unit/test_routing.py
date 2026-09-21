@@ -18,6 +18,7 @@ from src.core.agent.routing import (
     apply_mode,
     escalate,
     extract_signals,
+    is_interrupt_intent,
     route_turn,
 )
 from src.core.llm.router import TaskTier
@@ -338,3 +339,42 @@ def test_route_serialises_without_the_message_text() -> None:
     secret = "revenue for customer ACME-SECRET-123"
     payload = str(route_turn(secret, WITH_DATA).to_dict()) + str(extract_signals(secret, WITH_DATA).to_dict())
     assert "ACME-SECRET-123" not in payload
+
+
+# --------------------------------------------------------------------------- #
+# Interrupt intent (only consulted while a turn is running)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "message",
+    [
+        "stop",
+        "Stop!",
+        "cancel",
+        "please stop",
+        "stop it",
+        "stop that now",
+        "abort",
+        "never mind",
+        "nevermind",
+        "forget it",
+        "enough",
+    ],
+)
+def test_a_message_that_only_says_stop_is_an_interrupt(message: str) -> None:
+    assert is_interrupt_intent(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "stop losses by region",
+        "why did the campaign stop",
+        "cancel rate by month",
+        "how many cancelled orders",
+        "stopwatch",
+        "hi",
+        "",
+    ],
+)
+def test_data_that_contains_the_word_is_not_an_interrupt(message: str) -> None:
+    assert not is_interrupt_intent(message)
