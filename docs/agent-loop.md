@@ -14,6 +14,29 @@ Historically the WebSocket handler re-implemented the node loop by hand, and
 the two copies drifted until the semantic cache and the fast-path router
 applied to REST only.
 
+## Turn transport lifecycle
+
+Every received message emits `status {phase: "routing"}` before model work.
+The backend then emits a `route` frame describing the selected workflow. A
+turn ends with exactly one terminal frame: `final`, `error`, plan-gate
+`approval_required` without an id, or `cancelled`. Permission
+`approval_required` frames with an id are pauses inside the same turn.
+
+`cancel` and a disconnect cancel the current task, interrupt the executor in a
+thread, abandon consent, release child runtimes, reset transient task state,
+and await the task for at most five seconds. The terminal cancellation reason
+is `user`, `disconnect`, or `superseded`. A cancel with no running turn only
+returns an idle status.
+
+A message arriving while another turn runs is checked after consent answers.
+An interrupt intent such as `stop` cancels the running turn. Other messages
+receive `error {code: "busy"}` and do not affect it. REST and SSE share the
+same per-session lock; SSE appends the user message once and cancels and
+interrupts its background task when the client disconnects.
+
+The transport tracks terminal frames and emits `error {code: "internal"}` if
+an orchestrator returns without one. Duplicate terminal events are suppressed.
+
 ---
 
 ## Event Protocol — `events.py`

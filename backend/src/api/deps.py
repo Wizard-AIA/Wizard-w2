@@ -106,6 +106,15 @@ def require_dataset(x_session_id: str | None = Header(default=None, alias=SESSIO
     return session
 
 
+def resolve_chat_session(x_session_id: str | None = Header(default=None, alias=SESSION_HEADER)) -> Session:
+    """Resolve a chat session without requiring an uploaded dataset.
+
+    Conversation turns are valid before data exists. Endpoints that genuinely
+    operate on rows continue to depend on :func:`require_dataset`.
+    """
+    return get_session(x_session_id)
+
+
 # Below: factory functions for FastAPI's `Depends()`, one per process-wide
 # singleton a route needs. Each still resolves to the same module-level
 # instance the singleton always was -- these do not change runtime behaviour.

@@ -13,6 +13,35 @@ temperature, max_tokens, num_ctx)`, so per-session model selection is cheap.
 Every entry point has a streaming twin (`astream`, `stream_to`), and every one
 takes `max_tokens`.
 
+### Generation configuration
+
+`src.core.llm.generation.resolve_generation(purpose, *, mode="auto",
+workflow="agentic", provider=None, model=None, temperature=None,
+override=None)` is the single explanation point for output policy. It returns
+`ResolvedGeneration` with `.config`, `.provenance`, `.dropped`, `.explain()` and
+`.to_dict()`.
+
+The precedence order is purpose defaults, mode, workflow, user configuration,
+request override, provider/model capability clamp, then the system-safe
+`MAX_TOKENS` clamp. `fast` reduces budgets and `deep` increases them. Direct
+and inspect answer calls use at most 1536 tokens. Conversation uses
+`LLM_MAX_TOKENS_CONVERSE`, which defaults to 512. The existing agentic answer
+budget remains the old floor so truncation does not become common.
+
+Use `resolved.explain()` to answer why a request used N tokens without logging
+prompt text or secrets. Adapters in `src.core.llm.adapters` translate the
+normalized fields and record unsupported fields. Ollama uses `num_predict`,
+`num_ctx`, `top_k`, `top_p`, `stop`, and client timeout. Anthropic Messages
+uses `max_tokens`, not the legacy `max_tokens_to_sample`. Standard
+OpenAI-compatible models use `max_tokens`; reasoning model names use
+`max_completion_tokens`. Gemini's native adapter uses `max_output_tokens` and
+`stop_sequences`.
+
+The installed SDK verification checked `langchain-ollama 1.1.0` and
+`langchain-openai 1.6.0` constructor fields locally. The optional Anthropic
+package was not installed in the test environment, so its adapter is covered
+by payload contract tests and the current Messages API field name.
+
 ---
 
 ## Output Budgets

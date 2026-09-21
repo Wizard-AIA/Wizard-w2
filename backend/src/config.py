@@ -435,6 +435,7 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS_CODE: int = 4096
     LLM_MAX_TOKENS_ANSWER: int = 4096
     LLM_MAX_TOKENS_REVIEW: int = 512
+    LLM_MAX_TOKENS_CONVERSE: int = 512
 
     MAX_CORRECTION_RETRIES: int = 3
 
@@ -990,6 +991,7 @@ class Settings(BaseSettings):
             "code": self.LLM_MAX_TOKENS_CODE,
             "answer": self.LLM_MAX_TOKENS_ANSWER,
             "review": self.LLM_MAX_TOKENS_REVIEW,
+            "converse": self.LLM_MAX_TOKENS_CONVERSE,
         }
         return max(64, min(self.MAX_TOKENS, budgets.get(purpose, self.MAX_TOKENS)))
 

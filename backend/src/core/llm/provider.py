@@ -32,6 +32,8 @@ from typing import Any
 
 from src.config import settings
 from src.core.data_mode import check_provider
+from src.core.llm.adapters import adapter_for
+from src.core.llm.generation import GenerationConfig
 from src.core.llm.resources import LOCAL_PROVIDERS, ResidentPlan, plan_for_models
 from src.core.llm.router import TaskTier
 from src.core.llm.usage import extract_usage, usage_ledger
@@ -494,12 +496,28 @@ class LLMProvider:
                 from langchain_ollama import ChatOllama
 
                 logger.info("Initializing ChatOllama client", model=spec.model, temperature=spec.temperature)
+                generation = adapter_for(spec.provider, spec.api_style, spec.model).translate(
+                    GenerationConfig(
+                        max_output_tokens=spec.max_tokens,
+                        temperature=spec.temperature,
+                        num_ctx=spec.num_ctx,
+                    )
+                )
+                logger.debug(
+                    "Resolved generation parameters",
+                    purpose="provider-call",
+                    provider=spec.provider,
+                    model=spec.model,
+                    requested_max_output_tokens=spec.max_tokens,
+                    effective_max_output_tokens=spec.max_tokens,
+                    provenance={},
+                    prompt_chars=0,
+                    dropped=generation.dropped,
+                )
                 return ChatOllama(
                     model=spec.model,
                     base_url=spec.base_url or settings.OLLAMA_BASE_URL,
-                    temperature=spec.temperature,
-                    num_predict=spec.max_tokens,
-                    num_ctx=spec.num_ctx,
+                    **generation.values,
                     num_thread=settings.LLM_NUM_THREAD,
                     repeat_penalty=1.1,
                     # The manager and worker alternate every iteration, so an
@@ -528,15 +546,18 @@ class LLMProvider:
                 logger.info("Initializing ChatAnthropic client", model=spec.model)
                 # Assembled as a dict because the client's own annotations want a
                 # SecretStr, which it coerces from a plain string at runtime.
+                generation = adapter_for(spec.provider, spec.api_style, spec.model).translate(
+                    GenerationConfig(
+                        max_output_tokens=spec.max_tokens,
+                        temperature=spec.temperature,
+                        timeout_s=settings.LLM_REQUEST_TIMEOUT,
+                    )
+                )
                 anthropic_kwargs: dict[str, Any] = {
                     "model_name": spec.model,
                     "base_url": spec.base_url or None,
                     "api_key": spec.api_key or None,
-                    "temperature": spec.temperature,
-                    # Anthropic requires an output bound; the per-purpose budget is it.
-                    "max_tokens_to_sample": spec.max_tokens,
-                    "timeout": settings.LLM_REQUEST_TIMEOUT,
-                    "stop": None,
+                    **generation.values,
                 }
                 return ChatAnthropic(**anthropic_kwargs)
 
@@ -557,13 +578,21 @@ class LLMProvider:
                 model=spec.model,
                 base_url=spec.base_url or "<default>",
             )
+            # The configured Gemini endpoint is its OpenAI-compatible route.
+            # The native Gemini adapter remains available for native SDK users,
+            # but must not hand native names to ChatOpenAI.
+            generation = adapter_for("", spec.api_style, spec.model).translate(
+                GenerationConfig(
+                    max_output_tokens=spec.max_tokens,
+                    temperature=spec.temperature,
+                    timeout_s=settings.LLM_REQUEST_TIMEOUT,
+                )
+            )
             openai_kwargs: dict[str, Any] = {
                 "model": spec.model,
                 "base_url": spec.base_url or None,
                 "api_key": spec.api_key or "not-required",
-                "temperature": spec.temperature,
-                "max_tokens": spec.max_tokens,
-                "timeout": settings.LLM_REQUEST_TIMEOUT,
+                **generation.values,
             }
             return ChatOpenAI(**openai_kwargs)
         except LLMUnavailableError:
@@ -591,6 +620,20 @@ class LLMProvider:
         except Exception as exc:  # pragma: no cover - accounting is best effort
             logger.warning("Could not record token usage", error=str(exc))
 
+    @staticmethod
+    def _debug_generation(spec: ModelSpec, prompt: str, requested: int | None, purpose: str) -> None:
+        """Log policy metadata only. Prompt contents and credentials never enter this record."""
+        logger.debug(
+            "LLM generation request",
+            purpose=purpose,
+            provider=spec.provider,
+            model=spec.model,
+            requested_max_output_tokens=requested if requested is not None else spec.max_tokens,
+            effective_max_output_tokens=spec.max_tokens,
+            provenance={"max_output_tokens": "request override" if requested is not None else "provider default"},
+            prompt_chars=len(prompt),
+        )
+
     def complete(
         self,
         prompt: str,
@@ -606,6 +649,7 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
+        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -633,6 +677,7 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
+        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))
@@ -665,6 +710,7 @@ class LLMProvider:
         spec = self.resolve(
             role, model=model, temperature=temperature, provider=provider, max_tokens=max_tokens, data_mode=data_mode
         )
+        self._debug_generation(spec, prompt, max_tokens, "answer")
         client = self.get_client(spec)
         if client is None:
             raise LLMUnavailableError(self._unavailable_message(spec))

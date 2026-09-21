@@ -21,7 +21,7 @@ from src.api.deps import (
     get_consent_broker,
     get_orchestrator,
     require_api_key,
-    require_dataset,
+    resolve_chat_session,
     ws_client_ip,
     ws_client_key,
     ws_gate,
@@ -32,6 +32,7 @@ from src.config import settings
 from src.core.agent.consent import ConsentBroker
 from src.core.agent.events import Event, EventCollector, EventType
 from src.core.agent.orchestrator import AnalysisOrchestrator
+from src.core.agent.routing import is_interrupt_intent
 from src.core.infra.idempotency import IdempotencyConflict, get_idempotency_store, request_fingerprint
 from src.core.session import Session, session_manager
 from src.utils.errors import safe_error_message
@@ -42,13 +43,78 @@ router = APIRouter(tags=["chat"])
 
 _session_locks: dict[str, asyncio.Lock] = {}
 
+_TERMINAL_TYPES = frozenset({EventType.FINAL, EventType.ERROR, EventType.CANCELLED})
+
+
+def _is_terminal(event: Event) -> bool:
+    if event.type in _TERMINAL_TYPES:
+        return True
+    return event.type is EventType.APPROVAL_REQUIRED and not event.data.get("id")
+
+
+class TerminalEmitter:
+    """Track one turn's terminal event and suppress duplicate terminals."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.terminal_sent = False
+
+    async def __call__(self, event: Event) -> None:
+        if _is_terminal(event):
+            if self.terminal_sent:
+                return
+            self.terminal_sent = True
+            if event.type is EventType.ERROR:
+                event.data.setdefault("code", "internal")
+        result = self.inner(event)
+        if asyncio.iscoroutine(result):
+            await result
+
+
+def _release_subagent_runtimes(session: Session) -> None:
+    for child_id in list(getattr(session, "_subagent_ids", ())):
+        try:
+            session.dispose_subagent(child_id)
+        except Exception as exc:  # cleanup must not hide the cancellation
+            logger.debug("Could not release a subagent runtime", child_id=child_id, error=str(exc))
+
+
+async def _cancel_task(
+    session: Session,
+    task: asyncio.Task | None,
+    emitter: TerminalEmitter,
+    reason: str,
+    consent_broker: ConsentBroker | None = None,
+) -> bool:
+    """Cancel, interrupt and clean up a turn, waiting at most five seconds."""
+    if task is None or task.done():
+        return False
+    if consent_broker is not None:
+        consent_broker.abandon(session.id)
+    task.cancel()
+    try:
+        await asyncio.to_thread(session.executor.interrupt)
+    except Exception as exc:
+        logger.debug("Executor interrupt failed during cancellation", session=session.id, error=str(exc))
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+    except (asyncio.CancelledError, TimeoutError):
+        pass
+    finally:
+        session.reset_task()
+        session.end_turn()
+        _release_subagent_runtimes(session)
+    if not emitter.terminal_sent:
+        await emitter(Event(type=EventType.CANCELLED, data={"reason": reason}))
+    return True
+
 
 @router.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(
     request: ChatRequest,
     response: Response,
     x_idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
-    session: Session = Depends(require_dataset),
+    session: Session = Depends(resolve_chat_session),
     orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
 ) -> ChatResponse:
     """Runs a full turn and returns the finished answer.
@@ -122,6 +188,7 @@ async def chat(
             verification=payload["verification"],
             grounding=payload["grounding"],
             skills_used=payload["skills_used"],
+            route=payload.get("route", {}),
         )
 
         if x_idempotency_key:
@@ -137,42 +204,71 @@ async def chat(
 @router.post("/api/chat/stream")
 async def chat_stream(
     body: ChatRequest,
-    session: Session = Depends(require_dataset),
+    session: Session = Depends(resolve_chat_session),
     orchestrator: AnalysisOrchestrator = Depends(get_orchestrator),
 ):
     """Server-Sent Events alternative to WebSocket for proxy-hostile environments."""
 
+    session_lock = _session_locks.setdefault(session.id, asyncio.Lock())
+    if session_lock.locked():
+        raise HTTPException(status_code=409, detail="Analysis already in progress for this session")
+    await session_lock.acquire()
+    session.append_message("user", body.message)
+    session.begin_turn(body.mode)
+
     async def event_generator():
         collector = EventCollector()
+        tracked = TerminalEmitter(collector)
+        await tracked(Event(type=EventType.STATUS, data={"content": "Understanding your request", "phase": "routing"}))
         # Run orchestrator in background task
         task = asyncio.create_task(
             orchestrator.run(
                 session=session,
                 instruction=body.message,
                 mode=body.mode,
-                emitter=collector,
+                emitter=tracked,
                 approved_plan=body.approved_plan,
             )
         )
-        # Stream events as they arrive
-        seen = 0
-        while not task.done():
-            await asyncio.sleep(0.05)
+        try:
+            # Stream events as they arrive.
+            seen = 0
+            while not task.done():
+                await asyncio.sleep(0.05)
+                events = collector.events[seen:]
+                seen += len(events)
+                for evt in events:
+                    yield f"data: {json.dumps(evt.to_dict())}\n\n"
             events = collector.events[seen:]
-            seen += len(events)
             for evt in events:
                 yield f"data: {json.dumps(evt.to_dict())}\n\n"
-        # Final events
-        events = collector.events[seen:]
-        for evt in events:
-            yield f"data: {json.dumps(evt.to_dict())}\n\n"
-        # Send result
-        try:
             result = task.result()
+            session.end_turn(
+                code=getattr(result, "code", None) or None,
+                awaiting_plan=(getattr(result, "pending_approval", None) or {}).get("plan")
+                if getattr(result, "status", "") == "awaiting_approval"
+                else None,
+            )
+            if not tracked.terminal_sent:
+                await tracked(
+                    Event(
+                        type=EventType.ERROR,
+                        data={"content": "Turn ended without a terminal frame", "code": "internal"},
+                    )
+                )
             yield f"data: {json.dumps({'type': 'result', 'content': result.to_dict() if hasattr(result, 'to_dict') else str(result)})}\n\n"
+        except asyncio.CancelledError:
+            await _cancel_task(session, task, tracked, "disconnect")
+            raise
         except Exception as exc:
             err_msg = safe_error_message(exc, "Streaming request failed", session=session.id)
-            yield f"data: {json.dumps({'type': 'error', 'content': err_msg})}\n\n"
+            session.end_turn()
+            if not tracked.terminal_sent:
+                await tracked(Event(type=EventType.ERROR, data={"content": err_msg, "code": "internal"}))
+            yield f"data: {json.dumps({'type': 'error', 'content': err_msg, 'code': 'internal'})}\n\n"
+        finally:
+            session_lock.release()
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -306,7 +402,8 @@ async def websocket_chat(
     emitter = WebSocketEmitter(websocket)
     await emitter.start()
     current_run: asyncio.Task | None = None
-    last_code: str | None = None
+    current_emitter: TerminalEmitter | None = None
+    cancel_reason: str | None = None
 
     await websocket.send_json({"type": EventType.SESSION.value, "session_id": session.id})
 
@@ -349,13 +446,13 @@ async def websocket_chat(
                 continue
 
             if kind == "cancel":
-                # Any turn paused on a consent question is released first, so
-                # cancelling does not leave a future nobody will ever resolve.
-                consent_broker.abandon(session.id)
-                if current_run and not current_run.done():
-                    current_run.cancel()
-                await asyncio.to_thread(session.executor.interrupt)
-                await websocket.send_json({"type": EventType.STATUS.value, "content": "Cancelled", "phase": "idle"})
+                cancelled = await _cancel_task(
+                    session, current_run, current_emitter or TerminalEmitter(emitter), "user", consent_broker
+                )
+                if cancelled:
+                    current_run = None
+                if not cancelled:
+                    await websocket.send_json({"type": EventType.STATUS.value, "content": "Cancelled", "phase": "idle"})
                 continue
 
             # A consent answer belongs to the turn already running. It is handled
@@ -366,24 +463,25 @@ async def websocket_chat(
                 continue
 
             if current_run and not current_run.done():
-                await websocket.send_json(
-                    {"type": EventType.ERROR.value, "content": "A run is already in progress on this session."}
-                )
+                if is_interrupt_intent(instruction := (payload.get("content") or "")):
+                    await _cancel_task(
+                        session, current_run, current_emitter or TerminalEmitter(emitter), "user", consent_broker
+                    )
+                    current_run = None
+                else:
+                    await websocket.send_json(
+                        {
+                            "type": EventType.ERROR.value,
+                            "content": "A run is already in progress on this session.",
+                            "code": "busy",
+                        }
+                    )
                 continue
 
             # An empty frame is a no-op in every case, so it is discarded before
             # any state check: a blank message should not raise "no dataset".
             instruction = (payload.get("content") or "").strip()
             if not instruction:
-                continue
-
-            if not session.has_data:
-                await websocket.send_json(
-                    {
-                        "type": EventType.ERROR.value,
-                        "content": "No dataset is loaded. Upload a file before asking a question.",
-                    }
-                )
                 continue
 
             mode = payload.get("mode", "auto")
@@ -409,12 +507,21 @@ async def websocket_chat(
             else:
                 session.append_message("user", instruction)
 
+            session.begin_turn(mode)
+            turn_emitter = TerminalEmitter(emitter)
+            current_emitter = turn_emitter
+            cancel_reason = None
+            await turn_emitter(
+                Event(type=EventType.STATUS, data={"content": "Understanding your request", "phase": "routing"})
+            )
+
             async def run_turn(
                 run_session: Session,
                 run_instruction: str,
                 run_mode: str,
                 run_approved_plan: str | None,
                 run_approved_search: str | None,
+                run_emitter: TerminalEmitter,
             ):
                 """Runs one turn and reports its own outcome.
 
@@ -432,41 +539,66 @@ async def websocket_chat(
                 ``await`` on the task, because the receive loop must stay free
                 to deliver the frames a paused turn is waiting for.
                 """
-                nonlocal last_code
+                nonlocal cancel_reason
+                result = None
                 try:
                     result = await orchestrator.run(
                         session=run_session,
                         instruction=run_instruction,
                         mode=run_mode,
-                        emitter=emitter,
+                        emitter=run_emitter,
                         approved_plan=run_approved_plan,
                         approved_search=run_approved_search,
-                        previous_code=last_code,
+                        previous_code=run_session.task.last_code,
                         # This socket can carry a consent question to a human and
                         # bring the answer back, so gated actions may pause here
                         # instead of resolving to a denial.
                         can_prompt=True,
                     )
-                    if result.code:
-                        last_code = result.code
-                except asyncio.CancelledError:
-                    await emitter(
-                        Event(
-                            type=EventType.STATUS,
-                            data={"content": "Run cancelled", "phase": "idle"},
+                    if not run_emitter.terminal_sent:
+                        await run_emitter(
+                            Event(
+                                type=EventType.ERROR,
+                                data={"content": "Turn ended without a terminal frame", "code": "internal"},
+                            )
                         )
-                    )
+                except asyncio.CancelledError:
+                    session.reset_task()
+                    session.end_turn()
+                    _release_subagent_runtimes(session)
+                    if not run_emitter.terminal_sent:
+                        await run_emitter(
+                            Event(
+                                type=EventType.CANCELLED,
+                                data={"reason": cancel_reason or "user"},
+                            )
+                        )
                     raise
                 except Exception as exc:
                     message = safe_error_message(exc, "Chat run failed", session=run_session.id)
-                    await emitter(Event(type=EventType.ERROR, data={"content": message}))
+                    session.end_turn()
+                    await run_emitter(Event(type=EventType.ERROR, data={"content": message, "code": "internal"}))
                 finally:
                     consent_broker.abandon(run_session.id)
+                    if result is not None:
+                        session.end_turn(
+                            code=result.code or None,
+                            awaiting_plan=(result.pending_approval or {}).get("plan")
+                            if result.status == "awaiting_approval"
+                            else None,
+                        )
 
-            current_run = asyncio.ensure_future(run_turn(session, instruction, mode, approved_plan, approved_search))
+            current_run = asyncio.ensure_future(
+                run_turn(session, instruction, mode, approved_plan, approved_search, turn_emitter)
+            )
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session=session.id)
+        cancel_reason = "disconnect"
+        await _cancel_task(
+            session, current_run, current_emitter or TerminalEmitter(emitter), "disconnect", consent_broker
+        )
+        current_run = None
     except Exception as exc:
         message = safe_error_message(exc, "WebSocket handler crashed")
         try:
@@ -478,7 +610,11 @@ async def websocket_chat(
         # otherwise sit until the timeout expired before noticing it was dead.
         consent_broker.abandon(session.id)
         if current_run and not current_run.done():
-            current_run.cancel()
+            cancel_reason = "disconnect"
+            await _cancel_task(
+                session, current_run, current_emitter or TerminalEmitter(emitter), "disconnect", consent_broker
+            )
+            current_run = None
         await emitter.stop()
         ws_gate.release(client_host)
         ws_ip_gate.release(client_addr)
