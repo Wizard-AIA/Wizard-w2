@@ -14,29 +14,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { clearStoredSessionId, storeSessionId, websocketUrl } from "./api"
 import { recordUsageFrame } from "./usage-store"
-import type {
-  ActionKind,
-  AnalysisMode,
-  AnalysisSnapshot,
-  ApprovalRequest,
-  Artifact,
-  ChatMessage,
-  Confidence,
-  ConfidenceComponent,
-  CriticFinding,
-  Grounding,
-  Hypothesis,
-  Phase,
-  RouteComparison,
-  RunStep,
-  ServerEvent,
-  SkillCandidate,
-  SkillUse,
-  SubagentBranch,
-  TrailEntry,
-  ValidationFinding,
-  Verification,
-} from "./types"
+import type { Artifact, ChatMessage, ServerEvent, Phase, AnalysisMode } from "./types"
+import { reduceTurnState } from "./turn-state"
 
 const HEARTBEAT_MS = 25_000
 const MAX_RECONNECT_DELAY_MS = 15_000
@@ -90,20 +69,7 @@ function blankAssistant(): ChatMessage {
   }
 }
 
-function blankAnalysis(): AnalysisSnapshot {
-  return {
-    objective: null,
-    planRevisions: [],
-    hypotheses: [],
-    evidence: { nodes: [], edges: [] },
-    evidenceRefs: [],
-    validations: [],
-    criticFindings: [],
-    routeComparisons: [],
-    openQuestions: [],
-    confidence: null,
-  }
-}
+
 
 /**
  * Parses `final.analysis` -- the whole-turn snapshot mirroring
@@ -112,96 +78,6 @@ function blankAnalysis(): AnalysisSnapshot {
  * built up live, since the backend's own lists are already cumulative for
  * the whole turn and merging would double every entry.
  */
-function parseAnalysisSnapshot(raw: unknown): AnalysisSnapshot {
-  const data = (raw ?? {}) as Record<string, unknown>
-  const objective = data.objective as Record<string, unknown> | null | undefined
-  const plan = (data.plan ?? {}) as Record<string, unknown>
-  const evidence = (data.evidence ?? {}) as Record<string, unknown>
-  const confidence = data.confidence as Record<string, unknown> | null | undefined
-
-  return {
-    objective: objective
-      ? {
-          question: String(objective.question ?? ""),
-          analyticalType: (objective.analytical_type as string | null) ?? null,
-          unitOfAnalysis: (objective.unit_of_analysis as string | null) ?? null,
-          population: (objective.population as string | null) ?? null,
-          timeDimension: (objective.time_dimension as string | null) ?? null,
-          likelyVariables: (objective.likely_variables as Record<string, string[]>) ?? {},
-          constraints: (objective.constraints as string[]) ?? [],
-          expectedOutput: (objective.expected_output as string | null) ?? null,
-          ambiguity: (objective.ambiguity as string[]) ?? [],
-        }
-      : null,
-    planRevisions: ((plan.revisions as Record<string, unknown>[]) ?? []).map((revision) => ({
-      index: Number(revision.index ?? 0),
-      text: String(revision.text ?? ""),
-      why: String(revision.why ?? ""),
-      at: Number(revision.at ?? 0),
-    })),
-    hypotheses: ((data.hypotheses as Record<string, unknown>[]) ?? []).map((hypothesis) => ({
-      id: String(hypothesis.id ?? ""),
-      kind: (hypothesis.kind as Hypothesis["kind"]) ?? "exploratory",
-      statement: String(hypothesis.statement ?? ""),
-      status: (hypothesis.status as Hypothesis["status"]) ?? "untested",
-      evidenceFor: (hypothesis.evidence_for as string[]) ?? [],
-      evidenceAgainst: (hypothesis.evidence_against as string[]) ?? [],
-    })),
-    evidence: {
-      nodes: ((evidence.nodes as Record<string, unknown>[]) ?? []).map((node) => ({
-        id: String(node.id ?? ""),
-        kind: String(node.kind ?? ""),
-        label: String(node.label ?? ""),
-        at: Number(node.at ?? 0),
-      })),
-      edges: ((evidence.edges as Record<string, unknown>[]) ?? []).map((edge) => ({
-        source: String(edge.source ?? ""),
-        target: String(edge.target ?? ""),
-        relation: String(edge.relation ?? ""),
-      })),
-    },
-    evidenceRefs: (data.evidence_refs as string[]) ?? [],
-    validations: ((data.validations as Record<string, unknown>[]) ?? []).map((finding) => ({
-      validator: String(finding.validator ?? ""),
-      severity: (finding.severity as ValidationFinding["severity"]) ?? "info",
-      message: String(finding.message ?? ""),
-      detail: (finding.detail as string) || undefined,
-    })),
-    criticFindings: ((data.critic_findings as Record<string, unknown>[]) ?? []).map((finding) => ({
-      category: String(finding.category ?? ""),
-      severity: (finding.severity as CriticFinding["severity"]) ?? "info",
-      message: String(finding.message ?? ""),
-      detail: (finding.detail as string) || undefined,
-      suggestedReaction: (finding.suggested_reaction as string) || undefined,
-    })),
-    routeComparisons: ((data.route_comparisons as Record<string, unknown>[]) ?? []).map((comparison) => ({
-      verdict: (comparison.verdict as RouteComparison["verdict"]) ?? "inconclusive",
-      routes: (comparison.routes as string[]) ?? [],
-      agreementDetail: String(comparison.agreement_detail ?? ""),
-      moreAppropriate: (comparison.more_appropriate as string | null) ?? null,
-      why: String(comparison.why ?? ""),
-      residualUncertainty: String(comparison.residual_uncertainty ?? ""),
-    })),
-    openQuestions: (data.open_questions as string[]) ?? [],
-    confidence: confidence
-      ? {
-          verdict: (confidence.verdict as Confidence["verdict"]) ?? "insufficient_evidence",
-          components: ((confidence.components as Record<string, unknown>[]) ?? []).map((component) => ({
-            name: String(component.name ?? ""),
-            level: (component.level as ConfidenceComponent["level"]) ?? "unknown",
-            reason: String(component.reason ?? ""),
-          })),
-          reasons: (confidence.reasons as string[]) ?? [],
-          stop: confidence.stop
-            ? {
-                reason: String((confidence.stop as Record<string, unknown>).reason ?? ""),
-                detail: String((confidence.stop as Record<string, unknown>).detail ?? ""),
-              }
-            : undefined,
-        }
-      : null,
-  }
-}
 
 function blankUser(content: string): ChatMessage {
   return {
@@ -235,86 +111,7 @@ function blankUser(content: string): ChatMessage {
  * same matching rule the top-level trail uses is safe here, just scoped per
  * branch instead of per message.
  */
-function applyBranchEvent(message: ChatMessage, event: ServerEvent, branch: string): ChatMessage {
-  const existing = message.subagents[branch]
-  const group = String(event.group ?? existing?.group ?? "")
-  const current: SubagentBranch = existing ?? { id: branch, goal: "", group, trail: [], done: false }
-  let next: SubagentBranch = current
 
-  switch (event.type) {
-    case "subagent_start":
-      next = { ...current, goal: String(event.goal ?? ""), group }
-      break
-
-    case "subagent_end":
-      next = {
-        ...current,
-        done: true,
-        ok: Boolean(event.ok),
-        costUsd: (event.cost_usd as number | null | undefined) ?? null,
-        totalTokens: Number(event.total_tokens ?? 0),
-        calls: Number(event.calls ?? 0),
-      }
-      break
-
-    case "iteration_start":
-      next = { ...current, iteration: Number(event.n ?? 0), iterationBudget: Number(event.budget ?? 0) }
-      break
-
-    case "action": {
-      const entry: TrailEntry = {
-        id: newId(),
-        iteration: current.iteration ?? current.trail.length + 1,
-        kind: (event.kind as ActionKind) ?? "code",
-        goal: String(event.goal ?? ""),
-        rationale: (event.rationale as string) || undefined,
-        inferred: Boolean(event.inferred),
-      }
-      next = { ...current, trail: [...current.trail, entry] }
-      break
-    }
-
-    case "observation": {
-      const trail = [...current.trail]
-      for (let index = trail.length - 1; index >= 0; index -= 1) {
-        if (trail[index].observation === undefined) {
-          trail[index] = {
-            ...trail[index],
-            observation: String(event.summary ?? ""),
-            ok: Boolean(event.ok),
-            truncated: Boolean(event.truncated),
-            chars: Number(event.chars ?? 0),
-          }
-          break
-        }
-      }
-      next = { ...current, trail }
-      break
-    }
-
-    case "status":
-      next = { ...current, statusLabel: String(event.content ?? ""), phase: (event.phase as Phase) ?? current.phase }
-      break
-
-    case "code":
-      next = { ...current, code: String(event.content ?? "") }
-      break
-
-    case "stdout":
-      next = { ...current, stdout: (current.stdout ?? "") + String(event.content ?? "") }
-      break
-
-    default:
-      // step_start/step_end/assumption/etc. are not surfaced per branch --
-      // findings and assumptions still reach the top-level lists once the
-      // branch folds back into the parent's own investigation, and a
-      // branch's fine-grained code-writing/execution steps are not needed
-      // for the panel this renders.
-      break
-  }
-
-  return { ...message, subagents: { ...message.subagents, [branch]: next } }
-}
 
 /**
  * Folds the terminal frame's plain name list into the richer per-skill frames.
@@ -324,13 +121,6 @@ function applyBranchEvent(message: ChatMessage, event: ServerEvent, branch: stri
  * second, so names already present keep their frame and the rest are added
  * with what is known about them.
  */
-function mergeSkills(existing: SkillUse[], names: string[]): SkillUse[] {
-  const seen = new Set(existing.map((skill) => skill.name))
-  const extra = names
-    .filter((name) => name && !seen.has(name))
-    .map((name): SkillUse => ({ name, layer: "user" }))
-  return extra.length ? [...existing, ...extra] : existing
-}
 
 export type ConnectionState = "connecting" | "open" | "closed" | "error"
 
@@ -344,6 +134,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
   const [connection, setConnection] = useState<ConnectionState>("connecting")
   const [isRunning, setIsRunning] = useState(false)
   const [phase, setPhase] = useState<Phase>("idle")
+  const [busyAlert, setBusyAlert] = useState(false)
 
   const socketRef = useRef<WebSocket | null>(null)
   const connectRef = useRef<(() => void) | null>(null)
@@ -373,414 +164,37 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
-      // A branch-tagged frame never reaches the switch below: it would
-      // otherwise patch the top-level fields the same event type patches for
-      // the main thread (overwriting `code`/`stdout`/`phase` with a
-      // subagent's own, or racing another concurrent branch's `action`/
-      // `observation` pairing). See `applyBranchEvent`.
-      const branch = typeof event.branch === "string" ? event.branch : ""
-      if (branch) {
-        patchActive((message) => applyBranchEvent(message, event, branch))
-        return
-      }
-
-      switch (event.type) {
-        case "session": {
-          const id = String(event.session_id ?? "")
-          if (id) {
-            storeSessionId(id)
-            sessionRef.current?.(id)
-          }
-          break
-        }
-
-        case "status": {
-          const nextPhase = (event.phase as Phase) ?? "idle"
-          setPhase(nextPhase)
-          patchActive((message) => ({
-            ...message,
-            phase: nextPhase,
-            statusLabel: String(event.content ?? ""),
-          }) as ChatMessage)
-          break
-        }
-
-        case "step_start": {
-          const step: RunStep = {
-            id: String(event.id),
-            label: String(event.label ?? ""),
-            kind: (event.kind as RunStep["kind"]) ?? "plan",
-            status: "running",
-          }
-          patchActive((message) => ({ ...message, steps: [...message.steps, step] }))
-          break
-        }
-
-        case "step_end": {
-          patchActive((message) => ({
-            ...message,
-            steps: message.steps.map((step) =>
-              step.id === String(event.id)
-                ? {
-                    ...step,
-                    status: event.ok ? "done" : "failed",
-                    durationMs: Number(event.duration_ms ?? 0),
-                  }
-                : step,
-            ),
-          }))
-          break
-        }
-
-        case "reasoning_delta":
-          patchActive((message) => ({
-            ...message,
-            reasoning: (message.reasoning ?? "") + String(event.content ?? ""),
-          }))
-          break
-
-        case "plan_delta":
-          patchActive((message) => ({
-            ...message,
-            plan: (message.plan ?? "") + String(event.content ?? ""),
-          }))
-          break
-
-        case "content_delta":
-          patchActive((message) => ({
-            ...message,
-            content: message.content + String(event.content ?? ""),
-          }))
-          break
-
-        case "code":
-          patchActive((message) => ({ ...message, code: String(event.content ?? "") }))
-          break
-
-        case "stdout":
-          patchActive((message) => ({
-            ...message,
-            stdout: (message.stdout ?? "") + String(event.content ?? ""),
-          }))
-          break
-
-        case "artifact": {
-          const artifact: Artifact = {
-            kind: event.kind as Artifact["kind"],
-            name: event.name as string | undefined,
-            data: event.data as string | undefined,
-            text: event.text as string | undefined,
-          }
-          patchActive((message) => ({ ...message, artifacts: [...message.artifacts, artifact] }))
-          artifactRef.current?.(artifact)
-          break
-        }
-
-        case "warning":
-          patchActive((message) => ({
-            ...message,
-            warnings: [...message.warnings, String(event.content ?? "")],
-          }))
-          break
-
-        // Session totals, not a delta. Pushed into the shared store so the cost
-        // readout in the rail moves when a turn ends rather than on next load.
-        // Only sent when a cloud model ran, so a local-only session never sees it.
-        case "usage":
-          recordUsageFrame(event as Record<string, unknown>)
-          break
-
-        case "iteration_start":
-          patchActive((message) => ({
-            ...message,
-            iteration: Number(event.n ?? 0),
-            iterationBudget: Number(event.budget ?? 0),
-            mode: (event.mode as AnalysisMode) ?? message.mode,
-          }))
-          break
-
-        case "action": {
-          // Opens a trail entry. Its observation arrives in a separate frame,
-          // so the entry is rendered as in-flight until then.
-          const entry: TrailEntry = {
-            id: newId(),
-            iteration: 0,
-            kind: (event.kind as ActionKind) ?? "code",
-            goal: String(event.goal ?? ""),
-            rationale: (event.rationale as string) || undefined,
-            inferred: Boolean(event.inferred),
-            // Not set here: on a `parallel` entry the group id is only known
-            // once `_act_parallel` actually runs, which is after this frame
-            // fires. It arrives on the matching `observation` frame instead.
-          }
-          patchActive((message) => ({
-            ...message,
-            trail: [...message.trail, { ...entry, iteration: message.iteration ?? message.trail.length + 1 }],
-          }))
-          break
-        }
-
-        case "observation": {
-          // Closes the most recent open entry. Matching on "last without an
-          // observation" rather than an id keeps the protocol one-way: the
-          // backend never has to correlate the two frames.
-          patchActive((message) => {
-            const trail = [...message.trail]
-            for (let index = trail.length - 1; index >= 0; index -= 1) {
-              if (trail[index].observation === undefined) {
-                trail[index] = {
-                  ...trail[index],
-                  observation: String(event.summary ?? ""),
-                  ok: Boolean(event.ok),
-                  truncated: Boolean(event.truncated),
-                  chars: Number(event.chars ?? 0),
-                  // A `parallel` entry's group is only known once the action
-                  // has actually run (the `action` frame fires before
-                  // `_act_parallel` computes one), so it arrives here instead.
-                  group: (event.group as string) || trail[index].group,
-                }
-                break
-              }
+      patchActive((message) => {
+        const state = { message, isRunning, globalPhase: phase }
+        const next = reduceTurnState(state, event)
+        if (next.globalPhase !== phase) setPhase(next.globalPhase)
+        if (next.isRunning !== isRunning) setIsRunning(next.isRunning)
+        if (!next.isRunning) activeIdRef.current = null
+        if (event.type === "usage") recordUsageFrame(event as Record<string, unknown>)
+        if (event.type === "artifact") artifactRef.current?.((event as unknown as Artifact))
+        
+        if (event.type === "error") {
+            const code = (event.code as string) ?? undefined
+            if (code === "busy") {
+              setBusyAlert(true)
+              setTimeout(() => setBusyAlert(false), 4000)
             }
-            return { ...message, trail }
-          })
-          break
+            if (code === "session_not_found") {
+               clearStoredSessionId()
+            }
+        }
+        if (event.type === "session") {
+            const id = String(event.session_id ?? "")
+            if (id) {
+              storeSessionId(id)
+              sessionRef.current?.(id)
+            }
         }
 
-        case "finding":
-          patchActive((message) => ({
-            ...message,
-            findings: [...message.findings, String(event.text ?? "")],
-          }))
-          break
-
-        case "assumption": {
-          const text = String(event.text ?? "")
-          patchActive((message) =>
-            // The backend re-emits the full ledger at the end, so dedupe here
-            // rather than showing every caveat twice.
-            message.assumptions.includes(text)
-              ? message
-              : { ...message, assumptions: [...message.assumptions, text] },
-          )
-          break
-        }
-
-        case "plan_revised": {
-          const plan = String(event.plan ?? "")
-          const why = String(event.why ?? "")
-          patchActive((message) => ({
-            ...message,
-            plan,
-            findings: why && !message.findings.includes(why) ? [...message.findings, why] : message.findings,
-          }))
-          break
-        }
-
-        case "skill": {
-          // Deduped by name: a skill can be matched at planning and again by a
-          // `consult`, and "informed by X, X" says nothing extra.
-          const use: SkillUse = {
-            name: String(event.name ?? ""),
-            description: event.description as string | undefined,
-            layer: (event.layer as SkillUse["layer"]) ?? "user",
-            score: typeof event.score === "number" ? event.score : undefined,
-            phase: event.phase as string | undefined,
-          }
-          patchActive((message) =>
-            message.skillsUsed.some((existing) => existing.name === use.name)
-              ? message
-              : { ...message, skillsUsed: [...message.skillsUsed, use] },
-          )
-          break
-        }
-
-        case "skill_candidate":
-          patchActive((message) => ({
-            ...message,
-            skillCandidate: {
-              id: Number(event.id ?? 0),
-              kind: (event.kind as SkillCandidate["kind"]) ?? "recurring",
-              label: String(event.label ?? ""),
-              instruction: String(event.instruction ?? ""),
-              occurrences: Number(event.occurrences ?? 0),
-              threshold: Number(event.threshold ?? 0),
-              suggested_name: String(event.suggested_name ?? ""),
-              plan: event.plan as string | undefined,
-              code: event.code as string | undefined,
-            },
-          }))
-          break
-
-        case "verification": {
-          const verification: Verification = {
-            status: (event.status as Verification["status"]) ?? "inconclusive",
-            detail: String(event.detail ?? ""),
-          }
-          patchActive((message) => ({ ...message, verification }))
-          break
-        }
-
-        // The next three build up `message.analysis` live, while the turn is
-        // still streaming; `final` below replaces the whole snapshot with the
-        // authoritative one rather than merging, since the backend's own
-        // lists are already cumulative for the turn.
-        case "critic_finding": {
-          const finding: CriticFinding = {
-            category: String(event.category ?? ""),
-            severity: (event.severity as CriticFinding["severity"]) ?? "info",
-            message: String(event.message ?? ""),
-            suggestedReaction: (event.suggested_reaction as string) || undefined,
-          }
-          patchActive((message) => ({
-            ...message,
-            analysis: {
-              ...(message.analysis ?? blankAnalysis()),
-              criticFindings: [...(message.analysis?.criticFindings ?? []), finding],
-            },
-          }))
-          break
-        }
-
-        case "route_comparison": {
-          const comparison: RouteComparison = {
-            group: (event.group as string) || undefined,
-            verdict: (event.verdict as RouteComparison["verdict"]) ?? "inconclusive",
-            routes: (event.routes as string[]) ?? [],
-            agreementDetail: String(event.agreement_detail ?? ""),
-            moreAppropriate: (event.more_appropriate as string | null) ?? null,
-            why: String(event.why ?? ""),
-            residualUncertainty: String(event.residual_uncertainty ?? ""),
-          }
-          patchActive((message) => ({
-            ...message,
-            analysis: {
-              ...(message.analysis ?? blankAnalysis()),
-              routeComparisons: [...(message.analysis?.routeComparisons ?? []), comparison],
-            },
-          }))
-          break
-        }
-
-        case "confidence": {
-          const confidence: Confidence = {
-            verdict: (event.verdict as Confidence["verdict"]) ?? "insufficient_evidence",
-            components: ((event.components as Record<string, unknown>[]) ?? []).map((component) => ({
-              name: String(component.name ?? ""),
-              level: (component.level as ConfidenceComponent["level"]) ?? "unknown",
-              reason: String(component.reason ?? ""),
-            })),
-            reasons: (event.reasons as string[]) ?? [],
-            stop: event.stop_reason
-              ? { reason: String(event.stop_reason ?? ""), detail: String(event.stop_detail ?? "") }
-              : undefined,
-          }
-          patchActive((message) => ({
-            ...message,
-            analysis: { ...(message.analysis ?? blankAnalysis()), confidence },
-          }))
-          break
-        }
-
-        case "approval_required": {
-          const approval: ApprovalRequest = {
-            tool: (event.tool as string) ?? "execute_plan",
-            prompt: String(event.prompt ?? "Confirm to continue."),
-            plan: event.plan as string | undefined,
-            query: event.query as string | undefined,
-            id: event.id as string | undefined,
-            category: event.category as string | undefined,
-            subject: event.subject as string | undefined,
-            detail: event.detail as string | undefined,
-          }
-          patchActive((message) => ({
-            ...message,
-            approval,
-            plan: (event.plan as string) ?? message.plan,
-            streaming: false,
-            phase: "awaiting_approval",
-          }))
-          setPhase("awaiting_approval")
-          // An `id` means the turn is *paused*, not finished: it is still on the
-          // server holding its investigation state, waiting for this answer. The
-          // plan gate has no id because it really did end its turn, and a new one
-          // has to be started to resume it.
-          if (!approval.id) {
-            setIsRunning(false)
-            activeIdRef.current = null
-          }
-          break
-        }
-
-        case "error": {
-          const text = String(event.content ?? "Something went wrong.")
-          if (text.includes("Session not found") || text.includes("expired")) {
-            clearStoredSessionId()
-          }
-          if (activeIdRef.current) {
-            patchActive((message) => ({
-              ...message,
-              error: text,
-              streaming: false,
-              phase: "failed",
-            }))
-          } else {
-            setMessages((previous) => [
-              ...previous,
-              { ...blankAssistant(), streaming: false, error: text, phase: "failed" },
-            ])
-          }
-          setIsRunning(false)
-          setPhase("idle")
-          activeIdRef.current = null
-          break
-        }
-
-        case "final": {
-          const finalText = String(event.response ?? "")
-          patchActive((message) => ({
-            ...message,
-            // The streamed content is authoritative; fall back only if the
-            // answer never streamed (e.g. the model returned in one chunk).
-            content: message.content || finalText,
-            code: (event.code as string) || message.code,
-            downloads: (event.downloads as string[]) ?? [],
-            // The run emits warnings as they happen and again in the terminal
-            // frame; without deduping, every one is shown twice.
-            warnings: Array.from(
-              new Set([...message.warnings, ...(((event.warnings as string[]) ?? []) || [])]),
-            ),
-            findings: Array.from(
-              new Set([...message.findings, ...(((event.findings as string[]) ?? []) || [])]),
-            ),
-            assumptions: Array.from(
-              new Set([...message.assumptions, ...(((event.assumptions as string[]) ?? []) || [])]),
-            ),
-            grounding: (event.grounding as Grounding) ?? message.grounding,
-            // Reconciled against the per-skill frames rather than replacing
-            // them: the frames carry the layer and the score, and this list is
-            // only names. Anything named here that never arrived as a frame is
-            // added with what is known.
-            skillsUsed: mergeSkills(message.skillsUsed, (event.skills_used as string[]) ?? []),
-            iteration: Number(event.iterations ?? message.iteration ?? 0),
-            tier: (event.tier as string) ?? message.tier,
-            elapsedMs: Number(event.elapsed_ms ?? 0),
-            messageId: (event.message_id as number | null | undefined) ?? message.messageId ?? null,
-            analysis: event.analysis ? parseAnalysisSnapshot(event.analysis) : message.analysis,
-            streaming: false,
-            phase: "done",
-          }))
-          setIsRunning(false)
-          setPhase("idle")
-          activeIdRef.current = null
-          break
-        }
-
-        default:
-          break
-      }
+        return next.message
+      })
     },
-    [patchActive],
+    [patchActive, isRunning, phase]
   )
 
   const connect = useCallback(() => {
@@ -1033,8 +447,9 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     phase,
     sendMessage,
     respondToApproval,
-    clearSkillCandidate,
     cancel,
+    busyAlert,
+    clearSkillCandidate,
     clear,
     reconnect: connect,
   }

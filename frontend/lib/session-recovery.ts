@@ -24,8 +24,8 @@ export interface SessionStore {
  * prefix matches backend/src/api/deps.py (`require_session`); a backend test
  * pins it so the two cannot drift apart unnoticed.
  */
-export function isSessionGone(status: number, message: string): boolean {
-  return status === 404 && message.startsWith("Session not found")
+export function isSessionGone(status: number, error: { message: string, code?: string }): boolean {
+  return status === 404 && (error.code === "session_not_found" || error.message.startsWith("Session not found"))
 }
 
 /** Only reads are replayed: re-sending a write into a brand-new, empty session would hide that the user's data is gone. */

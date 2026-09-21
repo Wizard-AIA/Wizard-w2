@@ -60,6 +60,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message)
     this.name = "ApiError"
@@ -67,23 +68,27 @@ export class ApiError extends Error {
 }
 
 /** Normalises FastAPI's several error shapes into a readable sentence. */
-async function extractError(response: Response): Promise<string> {
+async function extractError(response: Response): Promise<{ message: string; code?: string }> {
   try {
     const body = await response.json()
     const detail = body?.detail
-    if (typeof detail === "string") return detail
-    if (Array.isArray(detail)) {
-      return detail
-        .map((item) =>
-          typeof item === "string" ? item : (item?.msg ?? JSON.stringify(item)),
-        )
-        .join("; ")
+    if (typeof detail === "string") return { message: detail }
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+      return { message: detail.message ?? JSON.stringify(detail), code: detail.code }
     }
-    if (detail) return JSON.stringify(detail)
+    if (Array.isArray(detail)) {
+      return {
+        message: detail
+          .map((item) =>
+            typeof item === "string" ? item : (item?.msg ?? JSON.stringify(item)),
+          )
+          .join("; "),
+      }
+    }
+    return { message: body?.message ?? JSON.stringify(body) }
   } catch {
-    // fall through to the status text
+    return { message: response.statusText || "Unknown error" }
   }
-  return response.statusText || `Request failed (${response.status})`
 }
 
 /**
@@ -92,10 +97,17 @@ async function extractError(response: Response): Promise<string> {
  * the id. See session-recovery.ts for why this is single-flight.
  */
 const recoverSession = createSessionRecovery(
-  { get: getStoredSessionId, set: storeSessionId, clear: clearStoredSessionId },
+  {
+    get: getStoredSessionId,
+    set: storeSessionId,
+    clear: clearStoredSessionId,
+  },
   async () => {
     const response = await fetch(`${API_BASE_URL}/api/session`, { method: "POST" })
-    if (!response.ok) throw new ApiError(await extractError(response), response.status)
+    if (!response.ok) {
+      const error = await extractError(response)
+      throw new ApiError(error.message, response.status, error.code)
+    }
     return ((await response.json()) as SessionInfo).session_id
   },
 )
@@ -115,8 +127,8 @@ async function request<T>(path: string, init: RequestInit = {}, replayed = false
   if (returned) storeSessionId(returned)
 
   if (!response.ok) {
-    const message = await extractError(response)
-    if (sessionId && isSessionGone(response.status, message)) {
+    const error = await extractError(response)
+    if (sessionId && isSessionGone(response.status, error)) {
       // The backend restarted and forgot this tab's session. Reads are replayed
       // once on a fresh session, so a tab left open across an upgrade heals
       // itself. Writes are not: they would land in an empty session and hide
@@ -135,7 +147,7 @@ async function request<T>(path: string, init: RequestInit = {}, replayed = false
       // stored a newer one, and wiping that would orphan the live session.
       if (getStoredSessionId() === sessionId) clearStoredSessionId()
     }
-    throw new ApiError(message, response.status)
+    throw new ApiError(error.message, response.status, error.code)
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T

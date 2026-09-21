@@ -44,7 +44,7 @@ const MODES: { key: AnalysisMode; label: string; title: string }[] = [
   {
     key: "deep",
     label: "Deep",
-    title: "Investigate thoroughly — more steps, and the result is recomputed to check it",
+    title: "A rigorous multi-agent investigation. Deploys independent reviewers to challenge findings, demands cross-verified evidence, and iterates until high confidence is reached.",
   },
 ]
 
@@ -145,6 +145,7 @@ export function Composer({
             }}
             rows={1}
             disabled={disabled}
+            title={disabled ? "Waiting for your approval above" : undefined}
             placeholder={
               hasData ? "Ask anything about your data…" : "Attach a dataset, then ask away…"
             }
@@ -167,6 +168,7 @@ export function Composer({
               onClick={submit}
               disabled={!canSend}
               aria-label="Send message"
+              title={disabled ? "Waiting for your approval above" : "Send message"}
               className={cn(
                 "mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
                 "transition-all duration-[var(--duration-base)] ease-[var(--ease-out-expo)]",

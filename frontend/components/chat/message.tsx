@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   TriangleAlert,
+  Paperclip,
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
@@ -29,6 +30,7 @@ interface MessageProps {
   onApprove: (message: ChatMessage, approved: boolean) => void
   onOpenArtifact: (artifact: Artifact) => void
   onSkillCandidateSettled: (messageId: string) => void
+  onUpload?: (file: File) => void
 }
 
 // Openings of the two warnings that AnswerTrust renders as callouts. Kept in
@@ -144,6 +146,7 @@ export function Message({
   onApprove,
   onOpenArtifact,
   onSkillCandidateSettled,
+  onUpload,
 }: MessageProps) {
   // Declared above the early return: the rule is that hooks run unconditionally,
   // and a user message returns before anything else happens.
@@ -170,6 +173,8 @@ export function Message({
     (warning) => !warning.startsWith(GROUNDING_WARNING_PREFIX) && !warning.startsWith(VERIFICATION_WARNING_PREFIX),
   )
 
+  const isConverse = message.route?.workflow === "converse"
+
   return (
     <div className="group px-4 py-3">
       <div className="flex gap-3">
@@ -190,18 +195,20 @@ export function Message({
 
           {/* The trail is what the agent *chose* to do; the timeline is the
               mechanics of each attempt. Trail first — it is the narrative. */}
-          <div className="mb-3 space-y-2">
-            <InvestigationTrail
-              trail={message.trail}
-              iteration={message.iteration}
-              budget={message.iterationBudget}
-              streaming={message.streaming}
-              subagents={message.subagents}
-            />
-            <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
-          </div>
+          {!isConverse && (
+            <div className="mb-3 space-y-2">
+              <InvestigationTrail
+                trail={message.trail}
+                iteration={message.iteration}
+                budget={message.iterationBudget}
+                streaming={message.streaming}
+                subagents={message.subagents}
+              />
+              <StepTimeline steps={message.steps} code={message.code} stdout={message.stdout} />
+            </div>
+          )}
 
-          {message.plan && !message.content && (
+          {!isConverse && message.plan && !message.content && (
             <div className="mb-3 rounded-xl border border-border bg-card p-3.5 shadow-xs">
               <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-brand">
                 Proposed plan
@@ -217,10 +224,14 @@ export function Message({
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand/60 [animation-delay:150ms]" />
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand/60 [animation-delay:300ms]" />
               </span>
-              {message.statusLabel && (
+              {message.phase !== "routing" && message.statusLabel && (
                 <span className="text-[12.5px] text-muted-foreground">{message.statusLabel}</span>
               )}
             </div>
+          )}
+
+          {message.phase === "cancelled" && (
+            <div className="mb-2 text-[12.5px] italic text-muted-foreground">Stopped</div>
           )}
 
           {message.content && (
@@ -229,6 +240,24 @@ export function Message({
               {/* Marks where the stream has reached. The text itself arrives token
                   by token from the socket — this is not a reveal animation. */}
               {showCursor && <span className="caret" aria-hidden="true" />}
+            </div>
+          )}
+
+          {message.route?.needs_data && onUpload && (
+            <div className="mt-3">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px] font-medium shadow-xs transition-colors hover:border-brand/40">
+                <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                Upload a file
+                <input
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) onUpload(file)
+                    e.target.value = ""
+                  }}
+                />
+              </label>
             </div>
           )}
 

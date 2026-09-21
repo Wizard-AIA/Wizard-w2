@@ -26,6 +26,14 @@ the chat WebSocket on every route change.
 
 ## WebSocket & Streaming Lifecycle — `lib/use-chat-stream.ts`
 
+The event-to-state reduction for the chat message lives in `lib/turn-state.ts`. It acts as a pure state machine replicating the backend's state definitions.
+- **Optimistic Send Phase**: `"routing"`.
+- **Terminal States**: A run ends only on `final`, `error`, `cancelled`, or an `approval_required` frame without an `id` (plan gate). Late-arriving frames (like an `observation` sent out of order after `final`) are discarded.
+- **Conversation route (`route.workflow === "converse"`)**: Handled silently without rendering the investigation trail, timeline, or empty plan panel.
+- **Cancellation**: Intercepts `Stop` events mapping the `cancelled` frame directly to the `cancelled` UI phase, with immediate unblocking of the composer.
+- **Chat Before Data**: The composer allows sending text without a dataset loaded. If a response requires data (`route.needs_data`), the UI renders an inline file upload affordance.
+
+
 `use-chat-stream.ts` owns one persistent WebSocket with heartbeat and
 exponential-backoff reconnect, appending each `*_delta` frame to the live message.
 

@@ -73,6 +73,7 @@ export function ChatShell() {
     sendMessage,
     respondToApproval,
     clearSkillCandidate,
+    busyAlert,
     cancel,
   } = chat
 
@@ -215,12 +216,21 @@ export function ChatShell() {
           </div>
         </div>
 
+        {busyAlert && (
+          <div className="mx-auto mb-2 w-full max-w-3xl px-4">
+            <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-500">
+               <AlertTriangle className="h-4 w-4" />
+               This workspace is already running a task. Wait for it or stop it first.
+            </div>
+          </div>
+        )}
         <Composer
           onSend={handleSend}
           onStop={cancel}
           onUpload={(file) => void uploadDataset(file)}
           isRunning={isRunning}
           isUploading={uploading}
+          disabled={chat.phase === "awaiting_approval" && isRunning}
           hasData={hasData}
           acceptedFormats={config?.supported_formats ?? ["csv"]}
           mode={mode}

@@ -16,6 +16,8 @@
 export type EventType =
   | "session"
   | "status"
+  | "route"
+  | "cancelled"
   | "step_start"
   | "step_end"
   | "reasoning_delta"
@@ -75,6 +77,9 @@ export type Phase =
   | "answering"
   | "done"
   | "failed"
+  | "routing"
+  | "responding"
+  | "cancelled"
 
 /** What the agent can spend an iteration on. */
 export type ActionKind = "inspect" | "code" | "consult" | "search" | "reflect" | "parallel" | "answer"
@@ -307,6 +312,20 @@ export interface ApprovalRequest {
   detail?: string
 }
 
+export interface TurnRoute {
+  workflow: "converse" | "inspect" | "direct" | "agentic" | "plan_only" | "execute_plan"
+  intent: "conversation" | "follow_up" | "data_question" | "computation" | "visualization" | "investigation" | "multi_step" | "plan_request" | "execute_plan"
+  plan: "none" | "self" | "gated" | "only"
+  source: "rules" | "mode" | "escalation" | "approval"
+  complexity: string
+  verify: boolean
+  escalate: boolean
+  deep: boolean
+  needs_data: boolean
+  reasons: string[]
+  mode: string
+}
+
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
@@ -329,6 +348,7 @@ export interface ChatMessage {
   downloads: string[]
   approval?: ApprovalRequest | null
   error?: string
+  errorCode?: string
   phase?: Phase
   /** Human-readable label for the current phase, e.g. "Running code". */
   statusLabel?: string
@@ -358,6 +378,7 @@ export interface ChatMessage {
   /** Which budget tier the run was sized to — compact, balanced or full. */
   tier?: string
   mode?: AnalysisMode
+  route?: TurnRoute | null
   /** Skills that informed this turn, in the order they were used. */
   skillsUsed: SkillUse[]
   /** An offer to save this analysis as a named skill. Never more than one is
@@ -368,6 +389,7 @@ export interface ChatMessage {
    *  analysis as a skill" cannot attach itself to the wrong turn. */
   instruction?: string
 }
+
 
 /** One skill the agent consulted, as the `skill` frame reports it. */
 export interface SkillUse {
