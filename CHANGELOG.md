@@ -6,6 +6,8 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 
 ## [Unreleased]
 
+## [v1.0.14] - 2026-09-21
+
 ### Added
 - **Stable and pre-release channels.** A release tagged `vX.Y.Z-beta.N` (or
   `alpha`, `rc`) is published as a GitHub pre-release. Nothing changes for
@@ -61,6 +63,13 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   `pypdf` and `python-docx` are declared too: PDF and Word context documents
   are a feature the UI offers, and the error for a missing package pointed at
   an "optional extra" that did not exist.
+- **`wizard init` and `wizard update` no longer install
+  `requirements-optional.txt`.** They added it whenever a cloud or hybrid
+  provider was configured, only to get the provider clients, which pulled in
+  Redis and every database and object-store driver nobody had asked for. The
+  clients are core now, so the install is the same for every provider and data
+  mode. The file still ships in the package; install it by hand for Redis or a
+  connector driver.
 - The lockfile is regenerated from `requirements.txt`. It had drifted (it pinned
   `pandas 2.3.3` and `langchain 1.3.17` where the source file declares
   `3.0.5` and `>=1.4.0`), so CI was testing a different stack than the one

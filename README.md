@@ -27,7 +27,7 @@ Wizard runs on **macOS** (Apple Silicon and Intel), **Linux** (x86-64 and ARM64)
 Then confirm it works and set it up:
 
 ```bash
-wizard --version      # wizard CLI v1.0.13, backend API compat v4.0.0
+wizard --version      # wizard CLI v1.0.14, backend API compat v4.0.0
 wizard --help
 wizard init           # choose a provider and models, install what is missing
 wizard start          # launches Wizard and opens http://localhost:3000
@@ -46,8 +46,8 @@ brew install Wizard-AIA/wizard/wizard
 
 ```bash
 curl -fsSL https://wizardw2.vercel.app/install.sh | sh
-# options: --version 1.0.13  --install-dir DIR  --no-modify-path  --force  --verbose
-curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.13 --no-modify-path
+# options: --version 1.0.14  --install-dir DIR  --no-modify-path  --force  --verbose
+curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.14 --no-modify-path
 ```
 
 **Windows, PowerShell 5.1 or 7+** (installs into `%LOCALAPPDATA%\Wizard` and adds it to your user PATH):
@@ -55,7 +55,7 @@ curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.13 --
 ```powershell
 irm https://wizardw2.vercel.app/install.ps1 | iex
 # with options:
-& ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -Version 1.0.13 -NoModifyPath
+& ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -Version 1.0.14 -NoModifyPath
 ```
 
 **Windows, Scoop:**
