@@ -46,14 +46,51 @@ export function getStoredSessionId(): string | null {
   return window.localStorage.getItem(SESSION_STORAGE_KEY)
 }
 
+type SessionIdListener = (id: string | null) => void
+const sessionIdListeners = new Set<SessionIdListener>()
+
+/**
+ * Calls `listener` whenever the stored session id changes, whoever changed it.
+ * The chat socket is bound to one session when it connects, and every REST call
+ * uses whatever is stored, so the socket has to hear about a change or the two
+ * end up in different sessions. Returns the unsubscribe.
+ *
+ * Another tab writes the same key, and this tab's REST calls pick that id up on their next
+ * request, so a write from another tab is a change here too (the `storage` event, which the
+ * browser only sends to the tabs that did not make the write).
+ */
+export function onSessionIdChange(listener: SessionIdListener): () => void {
+  sessionIdListeners.add(listener)
+  const fromOtherTab = (event: StorageEvent) => {
+    // `key` is null when the whole storage was cleared.
+    if (event.key !== null && event.key !== SESSION_STORAGE_KEY) return
+    if (event.oldValue === event.newValue && event.key !== null) return
+    listener(getStoredSessionId())
+  }
+  if (typeof window !== "undefined") window.addEventListener("storage", fromOtherTab)
+  return () => {
+    sessionIdListeners.delete(listener)
+    if (typeof window !== "undefined") window.removeEventListener("storage", fromOtherTab)
+  }
+}
+
+function notifySessionIdChange(previous: string | null, next: string | null): void {
+  if (previous === next) return
+  for (const listener of sessionIdListeners) listener(next)
+}
+
 export function storeSessionId(id: string): void {
   if (typeof window === "undefined") return
+  const previous = window.localStorage.getItem(SESSION_STORAGE_KEY)
   window.localStorage.setItem(SESSION_STORAGE_KEY, id)
+  notifySessionIdChange(previous, id)
 }
 
 export function clearStoredSessionId(): void {
   if (typeof window === "undefined") return
+  const previous = window.localStorage.getItem(SESSION_STORAGE_KEY)
   window.localStorage.removeItem(SESSION_STORAGE_KEY)
+  notifySessionIdChange(previous, null)
 }
 
 export class ApiError extends Error {

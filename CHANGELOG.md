@@ -6,6 +6,18 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 
 ## [Unreleased]
 
+### Fixed
+- **Uploading a file and asking about it could answer "I need a dataset for that."**
+  After a backend restart (an upgrade, `wizard stop` then `start`) a tab left open
+  ended up with two sessions: the page's REST calls, including the upload, used one,
+  and the chat socket was attached to another that had never seen the file. Recovery
+  overwrote the session the socket had adopted, and the socket never checked the
+  stored id again. The stored id is now the authority: recovery keeps an id the socket
+  adopted while it was minting, a session frame no longer overwrites a newer stored id,
+  and the socket moves to the stored id whenever it changes (waiting for a running turn
+  to finish rather than interrupting it), including when another tab stores a new id.
+  Reloading the tab was the workaround.
+
 ## [v1.0.14] - 2026-09-21
 
 ### Added
