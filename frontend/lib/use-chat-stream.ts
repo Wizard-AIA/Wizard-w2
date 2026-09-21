@@ -12,7 +12,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { clearStoredSessionId, storeSessionId, websocketUrl } from "./api"
+import { clearStoredSessionId, getStoredSessionId, onSessionIdChange, storeSessionId, websocketUrl } from "./api"
+import { createSocketSession, type SocketAction } from "./session-recovery"
 import { recordUsageFrame } from "./usage-store"
 import type { AnalysisMode, Artifact, ChatMessage, Phase, ServerEvent } from "./types"
 import { applyFrame, settlePlanGates } from "./turn-controller"
@@ -80,6 +81,11 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const attemptsRef = useRef(0)
   const shouldReconnectRef = useRef(true)
+  // Which session the live socket is attached to. REST calls use whatever id is stored, so
+  // the socket has to follow it (see session-recovery.ts), or an upload and the question
+  // about it land in different sessions.
+  const socketSessionRef = useRef(createSocketSession())
+  const reattachRef = useRef<(() => void) | null>(null)
 
   // Callbacks are held in refs so the socket effect does not resubscribe when a
   // parent re-renders with new closures.
@@ -101,10 +107,31 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     setMessages(next)
   }, [])
 
-  const setRunning = useCallback((value: boolean) => {
-    runningRef.current = value
-    setIsRunning(value)
+  const applySocketAction = useCallback((action: SocketAction) => {
+    if (action === "reattach") reattachRef.current?.()
   }, [])
+
+  // A running turn or a queued interrupt: either one is a reason not to move the socket.
+  const turnBusy = useCallback(() => runningRef.current || pendingInterruptRef.current !== null, [])
+
+  // A move to the stored session that had to wait for a turn can happen once nothing is in
+  // flight. Deferred a tick, not run inside the frame that ended the turn: the server is
+  // still finishing it.
+  const settleSocket = useCallback(() => {
+    setTimeout(() => applySocketAction(socketSessionRef.current.turnEnded(getStoredSessionId(), turnBusy())), 0)
+  }, [applySocketAction, turnBusy])
+
+  // Every way a turn stops goes through here (its last frame, Stop, clearing the chat, a send
+  // that never left), so a move that was waiting for it is never stranded.
+  const setRunning = useCallback(
+    (value: boolean) => {
+      const was = runningRef.current
+      runningRef.current = value
+      setIsRunning(value)
+      if (was && !value) settleSocket()
+    },
+    [settleSocket],
+  )
 
   const setPhaseNow = useCallback((value: Phase) => {
     phaseRef.current = value
@@ -141,19 +168,28 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
         event,
       )
 
+      const hadPending = pendingInterruptRef.current !== null
       if (ctx.messages !== messagesRef.current) commitMessages(() => ctx.messages)
       if (ctx.running !== runningRef.current) setRunning(ctx.running)
       if (ctx.phase !== phaseRef.current) setPhaseNow(ctx.phase)
       activeIdRef.current = ctx.activeId
       pendingInterruptRef.current = ctx.pending
 
+      // An interrupt handed back settles without a turn ending; a move may have been waiting on it.
+      if (hadPending && !ctx.pending) settleSocket()
+
       // Each effect runs here, once, outside any React updater.
       for (const effect of effects) {
         switch (effect.kind) {
-          case "session":
-            storeSessionId(effect.id)
-            sessionRef.current?.(effect.id)
+          case "session": {
+            // The stored id is where uploads went, so a socket does not overwrite a newer one: it
+            // moves to it. Only a session nothing newer contradicts is adopted.
+            const action = socketSessionRef.current.announced(effect.id, getStoredSessionId(), turnBusy())
+            if (action === "adopt") storeSessionId(effect.id)
+            applySocketAction(action)
+            if (getStoredSessionId() === effect.id) sessionRef.current?.(effect.id)
             break
+          }
           case "usage":
             recordUsageFrame(effect.event as Record<string, unknown>)
             break
@@ -169,7 +205,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
         }
       }
     },
-    [commitMessages, notifyBusy, setPhaseNow, setRunning],
+    [applySocketAction, commitMessages, notifyBusy, setPhaseNow, setRunning, settleSocket, turnBusy],
   )
 
   const connect = useCallback(() => {
@@ -184,6 +220,8 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     // render. "connecting" is the initial value, and every later transition is
     // driven by the socket's own lifecycle handlers below.
     let socket: WebSocket
+    // The id this socket sends, which is what the protocol compares the server's answer against.
+    const urlSessionId = getStoredSessionId()
     try {
       socket = new WebSocket(websocketUrl())
     } catch {
@@ -193,6 +231,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       return
     }
     socketRef.current = socket
+    socketSessionRef.current.opening(urlSessionId)
 
     // Every handler below checks it is still the socket the hook holds. Without
     // that, a socket discarded by a remount or a reconnect keeps acting as the
@@ -235,6 +274,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       if (heartbeatRef.current) clearInterval(heartbeatRef.current)
       heartbeatRef.current = null
       socketRef.current = null
+      socketSessionRef.current.closed()
       setConnection("closed")
 
       if (event.code === 1008) {
@@ -290,6 +330,28 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       retireSocket(outgoing)
     }
   }, [connect])
+
+  // Moves the socket to the stored session, and keeps it there when anything changes the stored id.
+  useEffect(() => {
+    reattachRef.current = () => {
+      // Nothing to move after the hook has unmounted: a pending move must not open a socket then.
+      if (!shouldReconnectRef.current) return
+      if (reconnectRef.current) clearTimeout(reconnectRef.current)
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current)
+      heartbeatRef.current = null
+      const outgoing = socketRef.current
+      // Retired the way an unmount retires it: handlers detached first, so its close does not
+      // schedule a reconnect of its own.
+      socketRef.current = null
+      retireSocket(outgoing)
+      attemptsRef.current = 0
+      setConnection("connecting")
+      connectRef.current?.()
+    }
+    return onSessionIdChange((stored) => {
+      applySocketAction(socketSessionRef.current.storeChanged(stored, turnBusy()))
+    })
+  }, [applySocketAction, turnBusy])
 
   const send = useCallback(
     (payload: Record<string, unknown>) => {

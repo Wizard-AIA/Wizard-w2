@@ -64,6 +64,35 @@ The composer holds **two independent dials**:
 A popover is used instead of a third segmented control group to prevent visual
 crowding. The full per-category permission matrix lives on `/settings`.
 
+### Session Ownership: Socket and REST Must Agree
+
+The chat socket is bound to one backend session when it connects. Every REST call
+(uploads, dataset changes, permissions) uses whatever id is stored in
+`localStorage` at that moment. If the two ever differ, a user uploads a file and
+then asks about it in a session that has never seen it, and the router correctly
+answers "I need a dataset for that."
+
+After a backend restart a tab left open has a dead id. Its four load-time reads
+fail with `404 Session not found`, recovery starts minting a session, and in the same
+instant the socket connects with no id and adopts a different session the server
+makes for it. Both cannot be right, so the rules are:
+
+| Event | Rule |
+|---|---|
+| Recovery's mint returns and the store now holds an id | Keep the stored one (a live socket is attached to it); drop the minted one. |
+| The socket is told its session, nothing newer stored (or the id the connection held was replaced, at connect or later by an eviction) | Adopt the server's id. Never chase a dead id: that would loop. |
+| The socket is told its session, and a different id was stored after it opened | The stored id holds the user's data; the socket moves to it. |
+| The stored id changes for any reason, including another tab writing it (`storage` event) | An idle socket reattaches to it. A running turn or a queued interrupt is never interrupted; the move waits until neither is in flight. |
+| A turn stops any way at all: its last frame, Stop, clearing the chat, a send that never left | `setRunning(false)` schedules the waiting move, so it is never stranded. |
+
+The decisions are the pure `createSocketSession` in `lib/session-recovery.ts`, tested
+by replaying both orderings a restart can produce. `use-chat-stream.ts` only
+executes them, and `onSessionIdChange` in `lib/api.ts` tells it when the stored id
+changes, and also when another tab writes the key. Not covered by a unit test
+(`api.ts` cannot load under Node's test runner): the `storage` listener itself, and
+the hook's wiring of `setRunning` to the move; both are verified by reading and by
+the lint, type and build gates only.
+
 ### Interruption & Draft Recovery
 
 - **Enter while running**: Pressing Enter while a turn runs submits the text via `interrupt`. The backend can reject it if busy, passing the input back via `restoredDraft`.
