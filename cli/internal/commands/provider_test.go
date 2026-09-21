@@ -120,37 +120,6 @@ func TestApplyProviderConfigBaseURLRejectsCustomGateway(t *testing.T) {
 	}
 }
 
-func TestNeedsOptionalRequirements(t *testing.T) {
-	cases := []struct {
-		name     string
-		content  string
-		expected bool
-	}{
-		{"no file at all", "", false},
-		{"default ollama provider", "API_PROVIDER=ollama\n", false},
-		{"empty provider, local-only mode", "DATA_MODE=local-only\n", false},
-		{"anthropic provider", "API_PROVIDER=anthropic\n", true},
-		{"openai provider", "API_PROVIDER=openai\n", true},
-		{"gemini provider", "API_PROVIDER=gemini\n", true},
-		{"custom_gateway provider", "API_PROVIDER=custom_gateway\n", true},
-		{"lmstudio provider", "API_PROVIDER=lmstudio\n", true},
-		{"hybrid data mode, default provider", "DATA_MODE=hybrid\n", true},
-		{"cloud-only data mode, default provider", "DATA_MODE=cloud-only\n", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			backendDir := filepath.Join(t.TempDir(), "backend")
-			env := newTestEnv(t, backendDir)
-			if c.content != "" {
-				writeBackendEnv(t, backendDir, c.content)
-			}
-			if got := needsOptionalRequirements(env); got != c.expected {
-				t.Fatalf("needsOptionalRequirements() = %v, want %v", got, c.expected)
-			}
-		})
-	}
-}
-
 func TestWarnMissingCloudConfigNamesTheMissingKey(t *testing.T) {
 	backendDir := filepath.Join(t.TempDir(), "backend")
 	writeBackendEnv(t, backendDir, "API_PROVIDER=anthropic\n")

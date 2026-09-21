@@ -183,13 +183,14 @@ A few things this does for you beyond writing the flag values into
   Ollama manager/worker sizing entirely — there is no local model to size —
   and leaves `MODEL_NAME`/`WORKER_MODEL_NAME` empty (auto-select on that
   provider) unless you pin one yourself.
-- Any provider other than plain `ollama` — including `lmstudio` — needs
-  `langchain-openai` (Anthropic needs `langchain-anthropic` too). Both are in
-  the base `requirements.txt` since v1.0.14, so a cloud/hybrid setup has a
-  working client, not an `ImportError` on the first turn.
-  `wizard init`/`wizard update` still read `API_PROVIDER`/`DATA_MODE` back out
-  of `backend/.env` and add `requirements-optional.txt` (Redis and the
-  connector drivers) when one of them is cloud or hybrid.
+- Every provider's client is in the base `requirements.txt` since v1.0.14
+  (`langchain-ollama`, `langchain-openai`, and `langchain-anthropic` for
+  Anthropic), so a cloud/hybrid setup has a working client, not an
+  `ImportError` on the first turn, and a role can be pointed at a cloud model
+  from the UI without another `wizard init`. The install is the same whatever
+  provider or data mode is configured. `wizard init`/`wizard update` never
+  install `requirements-optional.txt` (Redis and the database and object-store
+  drivers); it ships in the package for when you want one of those.
 - A cloud provider missing its key (e.g. `--provider anthropic` with no
   `--anthropic-key`) does not fail the run — it prints where to add the key
   (`wizard init --anthropic-key ...` again, a hand-edit of `backend/.env`,
@@ -308,9 +309,9 @@ use their explicit Git update path:
   fields a flag actually named, against a fresh or pre-existing
   `backend/.env` alike — a deliberate contrast with `ensureEnvFile`'s
   passive, fresh-file-only RAM-based model pick just above it.
-  `needsOptionalRequirements` (`deps.go`) reads `API_PROVIDER`/`DATA_MODE`
-  back out of `backend/.env` rather than being told, so `wizard update`
-  reinstalls correctly with no state of its own to keep in sync with `init`.
+  `backendInstallArgs` (`deps.go`) reads nothing from `backend/.env`: the
+  install is the same for every provider, so `wizard update` reinstalls
+  correctly with no state of its own to keep in sync with `init`.
 - **Process supervision** (`internal/daemon`): `wizard start` re-execs
   itself into a detached, hidden `__supervise` subcommand so the
   supervision loop survives the `start` command returning. The supervisor

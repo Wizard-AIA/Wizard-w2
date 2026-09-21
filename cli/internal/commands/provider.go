@@ -128,27 +128,3 @@ func warnMissingCloudConfig(env *Env, provider string) {
 		notice("GATEWAY_API_KEY", "--gateway-key")
 	}
 }
-
-// needsOptionalRequirements decides whether requirements-optional.txt's
-// langchain-openai/langchain-anthropic clients are needed, by reading
-// whatever backend/.env currently says rather than being told -- so `wizard
-// update` reinstalling after a `git pull` stays correct without remembering
-// what `wizard init` was originally run with.
-//
-// Any provider other than plain `ollama` needs langchain-openai:
-// LLMProvider's OpenAI-compatible branch (backend/src/core/llm/provider.py)
-// is what serves lmstudio/openai/custom_gateway, and only langchain-ollama
-// ships in requirements.txt. `anthropic` needs langchain-anthropic on top,
-// which that same file raises a clear ImportError instructing the user to
-// install without. hybrid/cloud-only data modes install it unconditionally
-// too, since a role can be assigned to a cloud provider from the UI after
-// init runs, with no further `wizard init`/`wizard update` in between to
-// catch the switch.
-func needsOptionalRequirements(env *Env) bool {
-	provider, _, _ := readEnvValue(env.BackendEnvPath(), "API_PROVIDER")
-	if provider != "" && provider != "ollama" {
-		return true
-	}
-	dataMode, _, _ := readEnvValue(env.BackendEnvPath(), "DATA_MODE")
-	return dataMode == "hybrid" || dataMode == "cloud-only"
-}
