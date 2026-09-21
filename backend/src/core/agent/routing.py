@@ -115,6 +115,8 @@ class Signals:
     addresses_you: bool = False  # asks about what Wizard did, said or is
     plan_requested: bool = False
     confirms_plan: bool = False
+    #: Phrased as a request to do something ("show me..."), not a statement or a question.
+    imperative: bool = False
 
     @property
     def computes(self) -> bool:
@@ -265,7 +267,28 @@ _OPERATIONS: dict[str, tuple[str, ...]] = {
         "distribut",
         "frequenc",
     ),
-    "select": ("filter", "sort", "rank", "top", "bottom", "group", "aggregat", "pivot", "select", "unique", "distinct"),
+    "select": (
+        "filter",
+        "sort",
+        "rank",
+        "top",
+        "bottom",
+        "group",
+        "aggregat",
+        "pivot",
+        "select",
+        "unique",
+        "distinct",
+        "highest",
+        "lowest",
+        "largest",
+        "smallest",
+        "biggest",
+        "best",
+        "worst",
+        "most",
+        "least",
+    ),
     "combine": ("join", "merge", "concat", "append", "lookup"),
     "transform": (
         "clean",
@@ -463,6 +486,81 @@ _NO_EXECUTION = re.compile(
     r"\b(?:don'?t|do\s+not|without|no\s+need\s+to|not\s+yet)\s+(?:yet\s+)?(?:run|running|execut\w*|start\w*|implement\w*)\b",
     re.IGNORECASE,
 )
+#: The same instruction stated without the word "plan" ("outline the analysis but
+#: do not run it"). `start` is left out here: "don't start with the null rows" is
+#: about the data, not about running anything.
+_NO_RUN = re.compile(
+    r"\b(?:don'?t|do\s+not|without|no\s+need\s+to|not\s+yet)\s+(?:yet\s+)?(?:run|running|execut\w*|implement\w*)\b",
+    re.IGNORECASE,
+)
+#: Asking how Wizard would go about something, which is a plan by another name.
+_HOW_WOULD_YOU = re.compile(
+    r"\b(?:outline|sketch|lay\s+out)\s+(?:the\s+|your\s+)?(?:analysis|approach|steps|strategy|method)\b"
+    r"|\b(?:describe|explain|tell\s+me)\s+(?:what|how)\s+you(?:'d|\s+would|\s+will)\b"
+    r"|\bwhat\s+would\s+you\s+do\b|\bhow\s+would\s+you\s+(?:approach|analy[sz]e|investigate|tackle)\b",
+    re.IGNORECASE,
+)
+
+#: "what does X mean", "what do you mean": the verb, not the statistic.
+_MEAN_VERB = re.compile(r"\b(?:does|do|did|would|will)\b[^?.!]*\bmeans?\b|\bmeans?\s+(?:what|by)\b", re.IGNORECASE)
+
+#: Creating or changing a column is a transformation, whatever else the word
+#: "column" says about structure.
+_ALTERS_COLUMNS = re.compile(
+    r"\b(?:creat\w*|add|insert\w*|deriv\w*|generat\w*|assign\w*|split\w*|remov\w*|delet\w*)\b"
+    r"[^?.!]*\b(?:column|field|variable|feature)s?\b",
+    re.IGNORECASE,
+)
+
+#: What people type first when they are asking for something rather than saying it.
+_POLITE = frozenset(
+    {
+        "please",
+        "pls",
+        "kindly",
+        "can",
+        "could",
+        "would",
+        "will",
+        "you",
+        "i",
+        "want",
+        "need",
+        "like",
+        "to",
+        "lets",
+        "let",
+        "us",
+        "me",
+        "just",
+    }
+)
+_REQUEST_VERBS = frozenset(
+    {
+        "show",
+        "list",
+        "give",
+        "get",
+        "display",
+        "print",
+        "find",
+        "tell",
+        "pull",
+        "fetch",
+        "view",
+        "see",
+        "look",
+        "check",
+        "make",
+        "build",
+        "draw",
+        "count",
+        "calculate",
+        "compute",
+        "return",
+        "provide",
+    }
+)
 
 #: Asking about what Wizard did, said or is, rather than asking it to do something.
 _ADDRESSES_YOU = re.compile(
@@ -509,7 +607,8 @@ def _named(message: str, name: str) -> bool:
     cleaned = str(name).strip().lower()
     if not cleaned:
         return False
-    return re.search(rf"(?<![a-z0-9_]){re.escape(cleaned)}(?![a-z0-9_])", message) is not None
+    # A plural is the same column ("list the regions" names `region`).
+    return re.search(rf"(?<![a-z0-9_]){re.escape(cleaned)}(?:e?s)?(?![a-z0-9_])", message) is not None
 
 
 def _operation_families(tokens: list[str]) -> frozenset[str]:
@@ -534,7 +633,11 @@ def extract_signals(message: str, context: TurnContext | None = None) -> Signals
     token_set = set(tokens)
 
     data_refs = sum(1 for name in (*ctx.columns, *ctx.table_names) if _named(lowered, name))
-    operations = _operation_families(tokens)
+    # "what does churn mean?" asks for a meaning; the statistic is not in it.
+    operation_tokens = [t for t in tokens if t not in ("mean", "means")] if _MEAN_VERB.search(lowered) else tokens
+    operations = _operation_families(operation_tokens)
+    if _ALTERS_COLUMNS.search(lowered):
+        operations = operations | {"transform"}
     heavy = frozenset(t for t in tokens if _matches(t, _HEAVY))
     visual = any(_matches(t, _VISUAL) for t in tokens)
     structure = any(t in _STRUCTURE or (t.endswith("s") and t[:-1] in _STRUCTURE) for t in tokens) or bool(
@@ -547,7 +650,17 @@ def extract_signals(message: str, context: TurnContext | None = None) -> Signals
         tokens and tokens[0] in {"what", "which", "who", "when", "how", "why", "is", "are", "do", "does", "can"}
     )
 
-    plan_requested = bool(_PLAN_ASK.search(lowered) or ("plan" in token_set and _NO_EXECUTION.search(lowered)))
+    plan_requested = bool(
+        _PLAN_ASK.search(lowered)
+        or _HOW_WOULD_YOU.search(lowered)
+        or _NO_RUN.search(lowered)
+        or ("plan" in token_set and _NO_EXECUTION.search(lowered))
+    )
+    lead = [token for token in tokens if token not in _POLITE]
+    # "which region is strongest?" picks one thing out of the data; "what about
+    # churn?" and "what does churn mean?" do not say what is wanted.
+    picks_from_data = bool(tokens and tokens[0] in {"which", "who", "whose", "when", "where", "how"} and is_question)
+    imperative = bool(lead and lead[0] in _REQUEST_VERBS) or picks_from_data
 
     n_clauses = max(1, len([part for part in _CLAUSE_SPLIT.split(lowered) if part and part.strip()]))
 
@@ -586,6 +699,7 @@ def extract_signals(message: str, context: TurnContext | None = None) -> Signals
         addresses_you=addresses_you,
         plan_requested=plan_requested,
         confirms_plan=confirms_plan,
+        imperative=imperative,
     )
 
 
@@ -690,6 +804,20 @@ def _route_intent(sig: Signals, ctx: TurnContext) -> Route:
             intent=Intent.CONVERSATION,
             decided=False,
             why="a social word with a stray task word; the reply decides",
+        )
+
+    # A column is named, and nothing is asked of it: "my department is sales",
+    # "what about churn?". Running an analysis on that is the loud mistake; a
+    # wrong light route costs one cheap reply that can hand the turn over.
+    only_names_data = sig.data_refs and not (
+        sig.operations or sig.heavy or sig.structure or sig.visual or sig.deliverable or sig.open_analysis
+    )
+    if only_names_data and not sig.imperative:
+        return _converse(
+            sig,
+            intent=Intent.CONVERSATION,
+            decided=False,
+            why="names a column but asks for nothing specific; the reply decides",
         )
 
     complexity = _complexity(sig)

@@ -383,3 +383,69 @@ def test_data_that_contains_the_word_is_not_an_interrupt(message: str) -> None:
 def test_a_schema_question_is_one_shot_in_every_mode() -> None:
     for mode in ("auto", "fast", "deep", "planning"):
         assert route_turn("how many rows are there?", WITH_DATA, mode).budget_mode(mode) == "fast", mode
+
+
+# --------------------------------------------------------------------------- #
+# Found by the adversarial review: statements that name a column, and instructions
+# that say "do not run it" without saying "plan"
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "message",
+    [
+        "I keep hearing the word churn",
+        "my region is Europe",
+        "salary sounds good",
+        "I am worried about churn",
+        "what does churn mean?",
+        "the revenue is what it is",
+    ],
+)
+def test_naming_a_column_is_not_asking_for_an_analysis(message: str) -> None:
+    """The reply decides: it can hand the turn to the loop, but chat never runs one unasked."""
+    route = route_turn(message, AFTER_ANALYSIS)
+    assert route.workflow is Workflow.CONVERSE and route.escalate, route.reasons
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "show me salary by region",
+        "list the regions",
+        "which region is strongest?",
+        "which region has the highest revenue",
+        "what is the highest salary",
+        "who has the lowest salary",
+    ],
+)
+def test_asking_for_something_about_a_column_still_computes(message: str) -> None:
+    assert wf(message, AFTER_ANALYSIS) is Workflow.DIRECT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "outline the analysis but do not run it",
+        "describe what you would do to find why churn is high",
+        "how would you approach the churn analysis",
+        "what would you do about revenue by region",
+        "analyse churn by region without running anything yet",
+        "sketch your approach to the revenue drop, don't execute it",
+    ],
+)
+def test_an_instruction_not_to_run_is_a_plan_request_in_every_mode(message: str) -> None:
+    for mode in ("auto", "fast", "deep"):
+        route = route_turn(message, AFTER_ANALYSIS, mode)
+        assert route.workflow is Workflow.PLAN_ONLY, (message, mode, route.reasons)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["don't start with the null rows, average the salary", "run a regression of churn on salary"],
+)
+def test_words_about_the_data_are_not_a_do_not_run_instruction(message: str) -> None:
+    assert wf(message, AFTER_ANALYSIS) is not Workflow.PLAN_ONLY
+
+
+@pytest.mark.parametrize("message", ["create a column for plan type", "add a column that doubles revenue"])
+def test_making_a_column_is_a_transformation_not_a_question_about_structure(message: str) -> None:
+    assert wf(message) is Workflow.DIRECT

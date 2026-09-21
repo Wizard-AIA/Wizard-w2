@@ -112,39 +112,59 @@ You are Wizard, a data analysis assistant, replying in conversation.
 class EscalationGate:
     """Filters a streamed reply so the escalation sentinel never reaches the user.
 
-    While the reply could still turn out to be the sentinel, its text is held
-    back; the moment it cannot be, everything held is released. A reply that
-    is not the sentinel therefore loses no text, only a few characters of latency
-    at the start. With ``enabled`` false the gate is transparent.
+    The sentinel is a request to hand the turn to the analysis loop, and it only
+    means that when it is the *entire* reply. While the reply could still turn
+    out to be exactly that, its text is held back; the moment it cannot be,
+    everything held is released. A reply that is not the sentinel therefore
+    loses no text, only a few characters of latency at the start.
+
+    The sentinel followed by any other text is ordinary text with the marker
+    dropped: a model that echoes text from the data or a prior answer must not
+    be able to start an analysis with it. With ``enabled`` false the gate is
+    transparent.
     """
 
     def __init__(self, enabled: bool):
         self.enabled = enabled
         self.escalated = False
         self._held = ""
+        self._marker_seen = False
         self._decided = not enabled
 
     def feed(self, text: str) -> str:
-        if self.escalated:
-            return ""
         if self._decided:
             return text
         self._held += text
+        if self._marker_seen:
+            # Nothing but whitespace has followed the marker so far.
+            if not self._held.strip():
+                return ""
+            released, self._held, self._decided = self._held.lstrip(), "", True
+            self._marker_seen = False
+            return released
         candidate = self._held.lstrip()
         if not candidate:
             return ""
         if candidate.startswith(ESCALATE_SENTINEL):
-            self.escalated = True
-            self._held = ""
-            return ""
+            self._marker_seen = True
+            self._held = candidate[len(ESCALATE_SENTINEL) :]
+            return self.feed("")
         if ESCALATE_SENTINEL.startswith(candidate):
             return ""  # could still become the sentinel
         released, self._held, self._decided = self._held, "", True
         return released
 
     def flush(self) -> str:
-        """Whatever is still held when the stream ends. A reply that stopped short of the sentinel is text."""
-        if self._decided or self.escalated:
+        """Whatever is still held when the stream ends.
+
+        A marker with nothing after it is the escalation. A reply that stopped
+        short of the marker is text.
+        """
+        if self._decided:
+            return ""
+        if self._marker_seen:
+            self.escalated = True
+            self._held, self._decided = "", True
             return ""
         released, self._held, self._decided = self._held, "", True
         return released

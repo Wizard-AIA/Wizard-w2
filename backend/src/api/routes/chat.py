@@ -280,6 +280,8 @@ class WebSocketEmitter:
 
     _HIGH_WATERMARK = 256
     _DROPPABLE = frozenset({"status", "progress"})  # non-critical frame types
+    #: The frames a client cannot do without: without one, a turn never ends in the UI.
+    _TERMINAL = frozenset({"final", "error", "cancelled", "approval_required"})
 
     def __init__(self, websocket: WebSocket):
         self.websocket = websocket
@@ -324,12 +326,14 @@ class WebSocketEmitter:
             event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
             if event_type in self._DROPPABLE:
                 return  # silently drop
-            # For critical frames, make room by discarding oldest droppable
-            # or block briefly
+            # A critical frame waits. A terminal one waits much longer: dropping
+            # it leaves the client "running" a turn that ended, so it is only
+            # given up on when the socket has stopped draining altogether.
+            patience = 30.0 if event_type in self._TERMINAL else 1.0
             try:
-                await asyncio.wait_for(self._queue.put(event), timeout=1.0)
+                await asyncio.wait_for(self._queue.put(event), timeout=patience)
             except TimeoutError:
-                pass  # drop if still full after 1s
+                logger.warning("Dropped a frame, the client stopped reading", frame=event_type)
 
 
 @router.websocket("/ws/chat")
@@ -558,8 +562,10 @@ async def websocket_chat(
                             )
                         )
                 except asyncio.CancelledError:
-                    session.end_turn()
-                    _release_subagent_runtimes(session)
+                    # `session` is re-resolved by the receive loop (eviction, a
+                    # reaped session); the turn ran on `run_session`.
+                    run_session.end_turn()
+                    _release_subagent_runtimes(run_session)
                     if not run_emitter.terminal_sent:
                         await run_emitter(
                             Event(

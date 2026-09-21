@@ -1544,7 +1544,11 @@ class AnalysisOrchestrator:
         state.phase = Phase.INSPECTING
         await emit(emitter, EventType.STATUS, content="Examining the data", phase=Phase.INSPECTING.value)
 
-        summary = await asyncio.to_thread(session.inspect, decision.goal, budget.max_columns)
+        # Sized for the model that will read it: under a schema-only policy with a
+        # cloud manager the description keeps the shape and drops every value.
+        summary = await asyncio.to_thread(
+            session.inspect, decision.goal, budget.max_columns, self._redact_for(session, "manager")
+        )
 
         profile = self._ensure_understanding(state, session)
         notes = understanding.render(profile) if profile else ""

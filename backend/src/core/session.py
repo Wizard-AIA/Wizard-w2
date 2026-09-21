@@ -554,8 +554,14 @@ class Session:
     # ------------------------------------------------------------------ #
     # Deterministic inspection
     # ------------------------------------------------------------------ #
-    def inspect(self, goal: str = "", max_columns: int = 60) -> str:
+    def inspect(self, goal: str = "", max_columns: int = 60, redact: bool = False) -> str:
         """Describes the data without generating or running any code.
+
+        ``redact`` is for a description that is about to be sent to a model the
+        data policy does not trust with values. It keeps the shape (names, types,
+        null and distinct counts) and drops every actual value: the example
+        column, the distributions (which state a minimum and a median) and the
+        first rows.
 
         Schema, null structure and value distributions are facts about a frame.
         Making the agent write and execute Python to discover them costs a code
@@ -581,8 +587,12 @@ class Session:
         if truncated:
             lines.append(f"Describing {len(columns)} of {len(frame.columns)} columns, chosen for relevance.")
 
-        lines.append("\n| column | dtype | nulls | distinct | example |")
-        lines.append("| --- | --- | --- | --- | --- |")
+        if redact:
+            lines.append("\n| column | dtype | nulls | distinct |")
+            lines.append("| --- | --- | --- | --- |")
+        else:
+            lines.append("\n| column | dtype | nulls | distinct | example |")
+            lines.append("| --- | --- | --- | --- | --- |")
         for column in columns:
             series = frame[column]
             null_pct = (series.isna().mean() * 100) if len(frame) else 0.0
@@ -590,12 +600,18 @@ class Session:
                 distinct = int(series.nunique(dropna=True))
             except (TypeError, ValueError):
                 distinct = -1
+            distinct_text = "n/a" if distinct < 0 else f"{distinct:,}"
+            if redact:
+                lines.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {distinct_text} |")
+                continue
             try:
                 example = str(series.dropna().iloc[0])[:40]
             except (IndexError, KeyError):
                 example = ""
-            distinct_text = "n/a" if distinct < 0 else f"{distinct:,}"
             lines.append(f"| {column} | {series.dtype} | {null_pct:.1f}% | {distinct_text} | {example} |")
+
+        if redact:
+            return "\n".join(lines)
 
         # The goal steers what detail is worth spending characters on.
         named = [c for c in columns if mentions_column(goal or "", c)]

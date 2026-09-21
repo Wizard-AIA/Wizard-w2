@@ -412,6 +412,47 @@ async def test_deep_mode_investigates_a_simple_question_thoroughly(loaded_sessio
 
 
 # --------------------------------------------------------------------------- #
+# A schema question must not put values in front of a model the data policy does not trust
+# --------------------------------------------------------------------------- #
+SECRET = "ZEBRA-QUOKKA-7"
+
+
+@pytest.fixture
+def secret_session(session: Session) -> Session:
+    frame = pd.DataFrame({"customer": [SECRET, "PLATYPUS-9", "OKAPI-3"], "salary": [123456, 234567, 345678]})
+    session.add_dataset("customers.csv", frame)
+    return session
+
+
+async def test_a_schema_question_sends_no_values_when_the_policy_says_schema_only(
+    secret_session: Session, llm, monkeypatch
+) -> None:
+    monkeypatch.setattr(orchestrator, "_redact_for", lambda *_a, **_k: True)
+    stub = llm(["Two columns."])
+    result, _ = await turn(secret_session, "what columns are in this?")
+
+    assert result.route["workflow"] == "inspect"
+    sent = "\n".join(stub.prompts)
+    assert "customer" in sent and "salary" in sent, "the shape is what the question asked for"
+    for value in (SECRET, "PLATYPUS-9", "123456", "345678"):
+        assert value not in sent, f"{value} reached the model under a schema-only policy"
+
+
+async def test_the_same_question_keeps_examples_when_the_policy_allows_values(secret_session: Session, llm) -> None:
+    stub = llm(["Two columns."])
+    await turn(secret_session, "what columns are in this?")
+    assert SECRET in "\n".join(stub.prompts)
+
+
+def test_inspect_redacted_keeps_the_shape_and_drops_every_value(secret_session: Session) -> None:
+    text = secret_session.inspect("", redact=True)
+    assert "customer" in text and "salary" in text and "3 rows" in text
+    assert "object" in text or "str" in text
+    for value in (SECRET, "123456", "First rows", "Distributions"):
+        assert value not in text
+
+
+# --------------------------------------------------------------------------- #
 # Observability: one text-free trace per turn, from the same code that calls the model
 # --------------------------------------------------------------------------- #
 @pytest.fixture
