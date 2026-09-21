@@ -6,6 +6,8 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 
 ## [Unreleased]
 
+## [v1.0.15] - 2026-09-21
+
 ### Fixed
 - **Uploading a file and asking about it could answer "I need a dataset for that."**
   After a backend restart (an upgrade, `wizard stop` then `start`) a tab left open
