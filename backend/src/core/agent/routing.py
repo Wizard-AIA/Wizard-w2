@@ -574,11 +574,25 @@ _ADDRESSES_YOU = re.compile(
 #: a turn is running (see `is_interrupt_intent`), so it can never mistake data
 #: for a command: with nothing running, "stop" is just a message like any other.
 _INTERRUPT = re.compile(
-    r"^\s*(?:please\s+)?(?:(?:stop|cancel|abort|halt|quit|end)(?:\s+(?:it|that|this|now|everything|please|"
-    r"the\s+(?:analysis|run|task)|what\s+you(?:'re|\s+are)\s+doing))*|never\s?mind|forget\s+(?:it|that)|enough)"
-    r"(?:\s+please)?\s*[.!]*\s*$",
+    r"^(?:please )?(?:(?:stop|cancel|abort|halt|quit|end)(?: (?:it|that|this|now|everything|please|"
+    r"the (?:analysis|run|task)|what you(?:'re| are) doing))*|never ?mind|forget (?:it|that)|enough)"
+    r"(?: please)?[.! ]*$",
     re.IGNORECASE,
 )
+
+#: Routing reads at most this much of a message. A chat message is a sentence or a
+#: paragraph; beyond this it is pasted data, which carries no more intent.
+_MAX_ROUTED_CHARS = 4000
+
+
+def _normalised(message: str | None, limit: int = _MAX_ROUTED_CHARS) -> str:
+    """Whitespace collapsed to single spaces, and bounded.
+
+    Every pattern here is written for single spaces. A run of thousands of them
+    is what makes an otherwise ordinary regular expression backtrack badly, so
+    the input a pattern sees is one it cannot be attacked with.
+    """
+    return " ".join((message or "").split())[:limit]
 
 
 def is_interrupt_intent(message: str) -> bool:
@@ -588,7 +602,8 @@ def is_interrupt_intent(message: str) -> bool:
     sent then is refused as busy. A message that merely contains the word stop
     ("stop losses by region") is not an interrupt: the whole message must be one.
     """
-    return bool(_INTERRUPT.match(message or ""))
+    # An interrupt is a word or two. Anything long is a message.
+    return bool(_INTERRUPT.match(_normalised(message, 200)))
 
 
 def _matches(token: str, stems: tuple[str, ...]) -> bool:
@@ -627,7 +642,7 @@ def _operation_families(tokens: list[str]) -> frozenset[str]:
 def extract_signals(message: str, context: TurnContext | None = None) -> Signals:
     """Reads evidence from one message. Pure; no model call."""
     ctx = context or TurnContext()
-    text = (message or "").strip()
+    text = _normalised(message)
     lowered = text.lower()
     tokens = _TOKEN.findall(lowered)
     token_set = set(tokens)

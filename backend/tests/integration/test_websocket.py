@@ -540,9 +540,12 @@ def test_the_datasets_cannot_change_under_a_running_turn(
     with client.websocket_connect(f"/ws/chat?session={session_with_data}") as websocket:
         _park_a_turn_on_consent(websocket)
 
-        assert client.post("/api/datasets/data.csv/activate", headers=headers).status_code == 409
-        assert client.delete("/api/datasets/data.csv", headers=headers).status_code == 409
-        assert client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code == 409
+        refused = [
+            client.post("/api/datasets/data.csv/activate", headers=headers).status_code,
+            client.delete("/api/datasets/data.csv", headers=headers).status_code,
+            client.post("/api/datasets?clean=false", headers=headers, files={"file": csv}).status_code,
+        ]
+        assert refused == [409, 409, 409]
 
         websocket.send_json({"type": "cancel"})
         collect_until(websocket, {"cancelled"})

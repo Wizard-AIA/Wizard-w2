@@ -380,6 +380,33 @@ def test_data_that_contains_the_word_is_not_an_interrupt(message: str) -> None:
     assert not is_interrupt_intent(message)
 
 
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "enough" + " " * 200_000 + "x",
+        "stop" + " it" * 50_000 + "!" + " " * 50_000 + "x",
+        "why " + "and " * 60_000,
+        "then" + " " * 200_000 + "and then" + " " * 200_000 + "x",
+        "a," + " " * 200_000 + "b",
+        "why " * 60_000 + "you?",
+        "create " + "a " * 60_000 + "column",
+    ],
+)
+def test_hostile_input_is_routed_in_bounded_time(hostile: str) -> None:
+    """A chat message is user-controlled. Long runs of spaces or repeated words must not stall the router."""
+    import time
+
+    started = time.perf_counter()
+    is_interrupt_intent(hostile)
+    route_turn(hostile, AFTER_ANALYSIS)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_whitespace_does_not_change_a_route() -> None:
+    assert wf("average   salary\n\nby   region") == wf("average salary by region")
+    assert is_interrupt_intent("  stop   it  ") and is_interrupt_intent("Never  mind!")
+
+
 def test_a_schema_question_is_one_shot_in_every_mode() -> None:
     for mode in ("auto", "fast", "deep", "planning"):
         assert route_turn("how many rows are there?", WITH_DATA, mode).budget_mode(mode) == "fast", mode
