@@ -26,7 +26,7 @@ turn ends with exactly one terminal frame: `final`, `error`, plan-gate
 thread, abandon consent, release child runtimes, and await the task for at most
 five seconds. The orchestrator ends its own turn on cancellation, so nothing
 transient outlives it; the chart code from the turn before is kept. The terminal cancellation reason
-is `user`, `disconnect`, or `superseded`. A cancel with no running turn only
+is `user` or `disconnect`. A cancel with no running turn only
 returns an idle status.
 
 The transport never begins or ends a turn: `AnalysisOrchestrator.run` owns

@@ -1471,6 +1471,10 @@ export interface components {
             };
             /** Skills Used */
             skills_used?: string[];
+            /** Route */
+            route?: {
+                [key: string]: unknown;
+            };
         };
         /** ConnectionColumn */
         ConnectionColumn: {

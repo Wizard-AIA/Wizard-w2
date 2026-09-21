@@ -19,6 +19,44 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   report it. A stable release wins as soon as it is newer than the pre-release
   you are on, and Wizard never downgrades. See "Stable and pre-release channels"
   in the README.
+- **Wizard answers a message with the smallest workflow that serves it.** Every
+  message used to run plan, loop, verify, answer, so `hi` after an analysis
+  planned, wrote code and ran it. Each message is now routed before any model is
+  called (`docs/routing.md`): a greeting or a thank-you is one conversational
+  reply, a question about the dataset's structure is answered from the data
+  frame in one call, a single figure or chart is one code call and an answer,
+  and a complex investigation keeps the full plan, loop and verification. The
+  router reads evidence from the message and the session, not a phrase list; when
+  it is unsure the conversational reply itself asks for the data and the same
+  turn continues as analysis.
+- **You can chat before you upload anything.** Messages without a dataset get a
+  normal reply, and a question that needs data says so and offers the upload,
+  instead of an error.
+- **Stopping and interrupting work.** Every turn ends in exactly one closing
+  frame. Stop sends a `cancelled` frame and leaves the composer usable. Typing
+  "stop" while a task runs cancels it; any other message sent mid-run is refused
+  as busy and returned to the composer instead of failing the running task.
+- **Each answer says what was done**: "Answered directly", "Investigated",
+  "Planned, then investigated", "Plan only", with the router's reasons on hover.
+- **One place decides output limits** (`llm/generation.py`), with provider
+  adapters for Ollama, OpenAI-compatible servers and Anthropic, and a text-free
+  `Turn trace` log line per turn (route, models, call count, budgets, latency).
+
+### Changed
+- **Depth (Auto, Fast, Deep) is a preference, not an intent.** It changes how
+  hard Wizard works on an analytic question and never turns a greeting or a
+  schema question into an analysis. Fast still means no planner and no
+  verification; Deep means a full, verified investigation for analytic work.
+  Fast no longer shrinks output budgets, so a program is not cut off mid-line.
+- Task state (a plan waiting for approval, the last chart's code) is now its own
+  record on the session. Typing "execute the plan" runs the plan that was
+  waiting, against the question it was made for, and switching datasets clears it.
+- Prompt sections that grow with a session (history, previous code, findings,
+  transcripts) are capped so a long session does not grow every prompt.
+
+### Removed
+- The substring-based `SLMRouter` and the `is_simple` shortcut, which routed by
+  message length and phrase fragments (`hi` matched inside `which`).
 
 ### Fixed
 - **A browser tab left open across a backend restart** (an upgrade, `wizard
