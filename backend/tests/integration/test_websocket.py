@@ -89,14 +89,17 @@ def test_ping_is_answered(client: TestClient) -> None:
         assert websocket.receive_json()["type"] == "pong"
 
 
-def test_message_without_a_dataset_is_rejected(client: TestClient) -> None:
+def test_message_without_a_dataset_is_answered_in_conversation(client: TestClient) -> None:
+    """v1.0.14: no dataset is something to explain, not an error frame."""
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.receive_json()
         websocket.send_json({"type": "message", "content": "analyse this", "mode": "fast"})
 
-        frame = websocket.receive_json()
-        assert frame["type"] == "error"
-        assert "dataset" in frame["content"].lower()
+        frames = collect_until(websocket, {"final", "error"})
+    assert frames[-1]["type"] == "final"
+    route = next(frame for frame in frames if frame["type"] == "route")
+    assert route["workflow"] == "converse" and route["needs_data"] is True
+    assert frames[0]["type"] == "status" and frames[0]["phase"] == "routing"
 
 
 def test_a_reaped_session_is_re_announced_rather_than_stranding_the_socket(
@@ -365,16 +368,10 @@ def test_cancel_reaches_a_run_that_is_waiting_for_consent(
         collect_until(websocket, {"approval_required", "final", "error"})
         websocket.send_json({"type": "cancel"})
 
-        # Not `collect_until`: releasing the paused run lets it finish, so its
-        # own frames and the acknowledgement race, and either order is correct.
-        acknowledged = False
-        for _ in range(200):
-            frame = websocket.receive_json()
-            if frame["type"] == "status" and frame["content"] == "Cancelled":
-                acknowledged = True
-                break
+        # A cancelled turn ends in exactly one terminal frame: `cancelled`.
+        frames = collect_until(websocket, {"cancelled"})
 
-    assert acknowledged
+    assert frames[-1]["type"] == "cancelled" and frames[-1]["reason"] == "user"
 
 
 def test_an_answer_for_a_request_that_is_gone_is_ignored(client: TestClient, session_with_data: str) -> None:

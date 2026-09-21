@@ -14,16 +14,12 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { clearStoredSessionId, storeSessionId, websocketUrl } from "./api"
 import { recordUsageFrame } from "./usage-store"
-import type { Artifact, ChatMessage, ServerEvent, Phase, AnalysisMode } from "./types"
-import { reduceTurnState } from "./turn-state"
+import type { AnalysisMode, Artifact, ChatMessage, Phase, ServerEvent } from "./types"
+import { applyFrame } from "./turn-controller"
+import { blankAssistant, blankUser } from "./turn-state"
 
 const HEARTBEAT_MS = 25_000
 const MAX_RECONNECT_DELAY_MS = 15_000
-
-function newId(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID()
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
-}
 
 /**
  * Closes a socket the hook no longer owns.
@@ -49,79 +45,6 @@ function retireSocket(socket: WebSocket | null): void {
   socket.close()
 }
 
-function blankAssistant(): ChatMessage {
-  return {
-    id: newId(),
-    role: "assistant",
-    content: "",
-    createdAt: Date.now(),
-    steps: [],
-    artifacts: [],
-    warnings: [],
-    downloads: [],
-    trail: [],
-    findings: [],
-    assumptions: [],
-    skillsUsed: [],
-    subagents: {},
-    streaming: true,
-    phase: "planning",
-  }
-}
-
-
-
-/**
- * Parses `final.analysis` -- the whole-turn snapshot mirroring
- * `AnalyticalState.to_dict()` -- into `AnalysisSnapshot`. Authoritative: this
- * replaces whatever `critic_finding`/`route_comparison`/`confidence` frames
- * built up live, since the backend's own lists are already cumulative for
- * the whole turn and merging would double every entry.
- */
-
-function blankUser(content: string): ChatMessage {
-  return {
-    id: newId(),
-    role: "user",
-    content,
-    createdAt: Date.now(),
-    steps: [],
-    artifacts: [],
-    warnings: [],
-    downloads: [],
-    trail: [],
-    findings: [],
-    assumptions: [],
-    skillsUsed: [],
-    subagents: {},
-  }
-}
-
-/**
- * Routes one branch-tagged frame into its own `SubagentBranch`, rather than
- * into the top-level fields the same event type would otherwise patch.
- *
- * A subagent reuses the main loop's own handlers unmodified, so it emits the
- * same event types (`action`, `observation`, `status`, `code`, `stdout`,
- * `iteration_start`) — only tagged with `branch` in the raw frame. Without
- * this, a subagent's own status line would overwrite the main thread's, and
- * two concurrent branches' `action`/`observation` frames would race on "close
- * the most recent open entry", which is only correct under strict seriality.
- * Each branch's own sequence *is* strictly serial (one loop, one task), so the
- * same matching rule the top-level trail uses is safe here, just scoped per
- * branch instead of per message.
- */
-
-
-/**
- * Folds the terminal frame's plain name list into the richer per-skill frames.
- *
- * The `skill` frames carry the layer and the match score; `final` carries names
- * only. Replacing one with the other would throw away whichever half arrived
- * second, so names already present keep their frame and the rest are added
- * with what is known about them.
- */
-
 export type ConnectionState = "connecting" | "open" | "closed" | "error"
 
 interface UseChatStreamOptions {
@@ -135,10 +58,24 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
   const [isRunning, setIsRunning] = useState(false)
   const [phase, setPhase] = useState<Phase>("idle")
   const [busyAlert, setBusyAlert] = useState(false)
+  /** Text the backend refused because a turn was running; the composer puts it back. */
+  const [restoredDraft, setRestoredDraft] = useState<{ text: string; nonce: number } | null>(null)
 
   const socketRef = useRef<WebSocket | null>(null)
   const connectRef = useRef<(() => void) | null>(null)
   const activeIdRef = useRef<string | null>(null)
+  // The socket's `onmessage` is assigned once, when the socket is created, so it
+  // can only ever see what a ref holds *now*. Anything a frame handler decides
+  // from (is a turn running, which message is live) therefore lives in a ref
+  // that every writer updates in the same breath as the React state.
+  const messagesRef = useRef<ChatMessage[]>([])
+  const runningRef = useRef(false)
+  const phaseRef = useRef<Phase>("idle")
+  const busyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A message sent while a turn was running. If the backend cancels the turn it
+  // is consumed; if the backend refuses it, it goes back into the composer; if
+  // the turn had just ended, the backend runs it as a new turn and it is adopted.
+  const pendingInterruptRef = useRef<{ text: string; mode: AnalysisMode } | null>(null)
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const attemptsRef = useRef(0)
@@ -153,48 +90,86 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     sessionRef.current = onSessionId
   }, [onArtifact, onSessionId])
 
+  /**
+   * The only writer of the message list. The ref is updated synchronously, so a
+   * frame handled right after another sees it; and no side effect ever runs
+   * inside a React state updater, which StrictMode invokes twice.
+   */
+  const commitMessages = useCallback((update: (previous: ChatMessage[]) => ChatMessage[]) => {
+    const next = update(messagesRef.current)
+    messagesRef.current = next
+    setMessages(next)
+  }, [])
+
+  const setRunning = useCallback((value: boolean) => {
+    runningRef.current = value
+    setIsRunning(value)
+  }, [])
+
+  const setPhaseNow = useCallback((value: Phase) => {
+    phaseRef.current = value
+    setPhase(value)
+  }, [])
+
   /** Applies a mutation to the message currently being streamed. */
-  const patchActive = useCallback((mutate: (message: ChatMessage) => ChatMessage) => {
-    const id = activeIdRef.current
-    if (!id) return
-    setMessages((previous) =>
-      previous.map((message) => (message.id === id ? mutate(message) : message)),
-    )
+  const patchActive = useCallback(
+    (mutate: (message: ChatMessage) => ChatMessage) => {
+      const id = activeIdRef.current
+      if (!id) return
+      commitMessages((previous) => previous.map((message) => (message.id === id ? mutate(message) : message)))
+    },
+    [commitMessages],
+  )
+
+  const notifyBusy = useCallback((draft: string | null) => {
+    setBusyAlert(true)
+    if (busyTimerRef.current) clearTimeout(busyTimerRef.current)
+    busyTimerRef.current = setTimeout(() => setBusyAlert(false), 5000)
+    if (draft) setRestoredDraft({ text: draft, nonce: Date.now() })
   }, [])
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
-      patchActive((message) => {
-        const state = { message, isRunning, globalPhase: phase }
-        const next = reduceTurnState(state, event)
-        if (next.globalPhase !== phase) setPhase(next.globalPhase)
-        if (next.isRunning !== isRunning) setIsRunning(next.isRunning)
-        if (!next.isRunning) activeIdRef.current = null
-        if (event.type === "usage") recordUsageFrame(event as Record<string, unknown>)
-        if (event.type === "artifact") artifactRef.current?.((event as unknown as Artifact))
-        
-        if (event.type === "error") {
-            const code = (event.code as string) ?? undefined
-            if (code === "busy") {
-              setBusyAlert(true)
-              setTimeout(() => setBusyAlert(false), 4000)
-            }
-            if (code === "session_not_found") {
-               clearStoredSessionId()
-            }
-        }
-        if (event.type === "session") {
-            const id = String(event.session_id ?? "")
-            if (id) {
-              storeSessionId(id)
-              sessionRef.current?.(id)
-            }
-        }
+      const { ctx, effects } = applyFrame(
+        {
+          messages: messagesRef.current,
+          activeId: activeIdRef.current,
+          running: runningRef.current,
+          phase: phaseRef.current,
+          pending: pendingInterruptRef.current,
+        },
+        event,
+      )
 
-        return next.message
-      })
+      if (ctx.messages !== messagesRef.current) commitMessages(() => ctx.messages)
+      if (ctx.running !== runningRef.current) setRunning(ctx.running)
+      if (ctx.phase !== phaseRef.current) setPhaseNow(ctx.phase)
+      activeIdRef.current = ctx.activeId
+      pendingInterruptRef.current = ctx.pending
+
+      // Each effect runs here, once, outside any React updater.
+      for (const effect of effects) {
+        switch (effect.kind) {
+          case "session":
+            storeSessionId(effect.id)
+            sessionRef.current?.(effect.id)
+            break
+          case "usage":
+            recordUsageFrame(effect.event as Record<string, unknown>)
+            break
+          case "artifact":
+            artifactRef.current?.(effect.artifact)
+            break
+          case "clear_session":
+            clearStoredSessionId()
+            break
+          case "busy":
+            notifyBusy(effect.draft)
+            break
+        }
+      }
     },
-    [patchActive, isRunning, phase]
+    [commitMessages, notifyBusy, setPhaseNow, setRunning],
   )
 
   const connect = useCallback(() => {
@@ -274,8 +249,8 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
           error: message.content ? undefined : "The connection dropped before the answer completed.",
         }))
         activeIdRef.current = null
-        setIsRunning(false)
-        setPhase("idle")
+        setRunning(false)
+        setPhaseNow("idle")
       }
 
       if (shouldReconnectRef.current) {
@@ -293,7 +268,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
         }, delay)
       }
     }
-  }, [handleEvent, patchActive])
+  }, [handleEvent, patchActive, setPhaseNow, setRunning])
 
   // Keeps the reconnect timer pointing at the current `connect` closure.
   useEffect(() => {
@@ -320,7 +295,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     (payload: Record<string, unknown>) => {
       const socket = socketRef.current
       if (!socket || socket.readyState !== WebSocket.OPEN) {
-        setMessages((previous) => [
+        commitMessages((previous) => [
           ...previous,
           {
             ...blankAssistant(),
@@ -335,7 +310,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       socket.send(JSON.stringify(payload))
       return true
     },
-    [connect],
+    [commitMessages, connect],
   )
 
   const sendMessage = useCallback(
@@ -347,16 +322,38 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       const assistant = { ...blankAssistant(), mode, instruction: trimmed }
       activeIdRef.current = assistant.id
 
-      setMessages((previous) => [...previous, userMessage, assistant])
-      setIsRunning(true)
-      setPhase("planning")
+      commitMessages((previous) => [...previous, userMessage, assistant])
+      setRunning(true)
+      setPhaseNow("routing")
 
       if (!send({ type: "message", content: trimmed, mode })) {
-        setIsRunning(false)
+        setRunning(false)
         activeIdRef.current = null
       }
     },
-    [isRunning, send],
+    [commitMessages, isRunning, send, setPhaseNow, setRunning],
+  )
+
+  /**
+   * Sends a message while a turn is running.
+   *
+   * The backend decides what it is: a request to stop cancels the turn, and
+   * anything else is refused as busy and handed back so the text is not lost. The
+   * running message is never touched here, so its frames keep landing on it.
+   * With nothing running it is simply a message.
+   */
+  const interrupt = useCallback(
+    (content: string, mode: AnalysisMode) => {
+      const trimmed = content.trim()
+      if (!trimmed) return
+      if (!runningRef.current) {
+        sendMessage(trimmed, mode)
+        return
+      }
+      pendingInterruptRef.current = { text: trimmed, mode }
+      if (!send({ type: "message", content: trimmed, mode })) pendingInterruptRef.current = null
+    },
+    [send, sendMessage],
   )
 
   const respondToApproval = useCallback(
@@ -364,7 +361,7 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       const approval = message.approval
       if (!approval) return
 
-      setMessages((previous) =>
+      commitMessages((previous) =>
         previous.map((item) => (item.id === message.id ? { ...item, approval: null } : item)),
       )
 
@@ -375,12 +372,12 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
       // not something that ends it — so the phase moves on regardless.
       if (approval.id) {
         send({ type: "approval", approved, id: approval.id })
-        setPhase("generating")
+        setPhaseNow("generating")
         return
       }
 
       if (!approved) {
-        setMessages((previous) =>
+        commitMessages((previous) =>
           previous.map((item) =>
             item.id === message.id
               ? { ...item, content: item.content || "Plan rejected.", phase: "done" }
@@ -397,9 +394,9 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
 
       const assistant = { ...blankAssistant(), instruction }
       activeIdRef.current = assistant.id
-      setMessages((previous) => [...previous, assistant])
-      setIsRunning(true)
-      setPhase("generating")
+      commitMessages((previous) => [...previous, assistant])
+      setRunning(true)
+      setPhaseNow("routing")
 
       send({
         type: "approval",
@@ -410,23 +407,27 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
         query: approval.query,
       })
     },
-    [messages, send],
+    [commitMessages, messages, send, setPhaseNow, setRunning],
   )
 
   const cancel = useCallback(() => {
     send({ type: "cancel" })
-    setIsRunning(false)
-    setPhase("idle")
-    patchActive((message) => ({ ...message, streaming: false, phase: "idle" }))
+    // Settled here as well as by the backend's `cancelled` frame: the socket may
+    // already be gone, and the user must never wait on a reply to be able to type.
+    patchActive((message) => ({ ...message, streaming: false, phase: "cancelled" }))
+    pendingInterruptRef.current = null
+    setRunning(false)
+    setPhaseNow("idle")
     activeIdRef.current = null
-  }, [patchActive, send])
+  }, [patchActive, send, setPhaseNow, setRunning])
 
   const clear = useCallback(() => {
-    setMessages([])
-    setPhase("idle")
-    setIsRunning(false)
+    commitMessages(() => [])
+    setPhaseNow("idle")
+    setRunning(false)
     activeIdRef.current = null
-  }, [])
+    pendingInterruptRef.current = null
+  }, [commitMessages, setPhaseNow, setRunning])
 
   /**
    * Takes the promotion offer off a message once it has been acted on.
@@ -434,11 +435,21 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
    * Local only — whether it was promoted or dismissed is recorded server-side by
    * the call the card already made, and this just stops the card rendering.
    */
-  const clearSkillCandidate = useCallback((messageId: string) => {
-    setMessages((previous) =>
-      previous.map((item) => (item.id === messageId ? { ...item, skillCandidate: null } : item)),
-    )
-  }, [])
+  const clearSkillCandidate = useCallback(
+    (messageId: string) => {
+      commitMessages((previous) =>
+        previous.map((item) => (item.id === messageId ? { ...item, skillCandidate: null } : item)),
+      )
+    },
+    [commitMessages],
+  )
+
+  useEffect(
+    () => () => {
+      if (busyTimerRef.current) clearTimeout(busyTimerRef.current)
+    },
+    [],
+  )
 
   return {
     messages,
@@ -446,9 +457,11 @@ export function useChatStream({ onArtifact, onSessionId }: UseChatStreamOptions 
     isRunning,
     phase,
     sendMessage,
+    interrupt,
     respondToApproval,
     cancel,
     busyAlert,
+    restoredDraft,
     clearSkillCandidate,
     clear,
     reconnect: connect,

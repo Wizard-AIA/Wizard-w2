@@ -23,9 +23,46 @@ import type {
   TurnRoute
 } from "./types"
 
-function newId(): string {
+export function newId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID()
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+const EMPTY_MESSAGE = {
+  steps: [],
+  artifacts: [],
+  warnings: [],
+  downloads: [],
+  trail: [],
+  findings: [],
+  assumptions: [],
+  skillsUsed: [],
+  subagents: {},
+}
+
+/** A message that has just been sent and has heard nothing back yet. */
+export function blankAssistant(): ChatMessage {
+  return {
+    id: newId(),
+    role: "assistant",
+    content: "",
+    createdAt: Date.now(),
+    ...structuredClone(EMPTY_MESSAGE),
+    streaming: true,
+    // Nothing has been decided yet. "planning" here flashed a Planning row on
+    // every greeting; the backend says what it is doing as soon as it knows.
+    phase: "routing",
+  }
+}
+
+export function blankUser(content: string): ChatMessage {
+  return {
+    id: newId(),
+    role: "user",
+    content,
+    createdAt: Date.now(),
+    ...structuredClone(EMPTY_MESSAGE),
+  }
 }
 
 function blankAnalysis(): AnalysisSnapshot {
@@ -211,6 +248,15 @@ export function applyBranchEvent(message: ChatMessage, event: ServerEvent, branc
   return { ...message, subagents: { ...message.subagents, [branch]: next } }
 }
 
+export function artifactFromEvent(event: ServerEvent): Artifact {
+  return {
+    kind: event.kind as Artifact["kind"],
+    name: event.name as string | undefined,
+    data: event.data as string | undefined,
+    text: event.text as string | undefined,
+  }
+}
+
 export function mergeSkills(existing: SkillUse[], names: string[]): SkillUse[] {
   const seen = new Set(existing.map((skill) => skill.name))
   const extra = names
@@ -337,13 +383,7 @@ export function reduceTurnState(state: TurnState, event: ServerEvent): TurnState
       break
 
     case "artifact": {
-      const artifact: Artifact = {
-        kind: event.kind as Artifact["kind"],
-        name: event.name as string | undefined,
-        data: event.data as string | undefined,
-        text: event.text as string | undefined,
-      }
-      nextMessage = { ...nextMessage, artifacts: [...nextMessage.artifacts, artifact] }
+      nextMessage = { ...nextMessage, artifacts: [...nextMessage.artifacts, artifactFromEvent(event)] }
       break
     }
 
