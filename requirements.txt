@@ -36,7 +36,7 @@ httpx==0.28.1
 # Data stack. Ingestion, profiling and Feather transport into the runtime --
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
-pandas==3.0.5
+pandas==3.0.6
 numpy==2.5.3
 pyarrow==25.0.1
 scipy==1.18.1
@@ -52,9 +52,9 @@ openpyxl==3.1.5
 # `langchain-core` is imported directly by `src/core/llm`, so it is declared
 # rather than left to arrive through a transitive pin.
 langchain>=1.4.0,<1.5.0
-langchain-core>=1.6.2
+langchain-core>=1.6.4
 langchain-ollama==1.1.0
-langchain-openai>=1.6.2
+langchain-openai>=1.6.3
 langchain-anthropic>=1.7.2
 
 # Reading PDF and Word documents attached as context (`core/ingest/documents.py`).

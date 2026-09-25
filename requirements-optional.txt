@@ -27,13 +27,13 @@ redis>=8.1.0
 # a question of which dialect driver is also installed (psycopg, pymysql, ...).
 # SQLite needs nothing beyond the standard library, which is why it is what the
 # test suite uses to exercise the connector for real.
-sqlalchemy>=2.0.53
+sqlalchemy>=2.0.54
 
 # MongoDB and compatible document stores.
 pymongo>=4.18.1
 
 # S3, MinIO, Cloudflare R2 and other S3-compatible object storage.
-boto3>=1.43.94
+boto3>=1.43.99
 
 # ---------------------------------------------------------------------------
 # Local embeddings
