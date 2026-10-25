@@ -27,7 +27,7 @@ Wizard runs on **macOS** (Apple Silicon and Intel), **Linux** (x86-64 and ARM64)
 Then confirm it works and set it up:
 
 ```bash
-wizard --version      # wizard CLI v1.0.14, backend API compat v4.0.0
+wizard --version      # wizard CLI v1.0.15, backend API compat v4.0.0
 wizard --help
 wizard init           # choose a provider and models, install what is missing
 wizard start          # launches Wizard and opens http://localhost:3000
@@ -46,8 +46,8 @@ brew install Wizard-AIA/wizard/wizard
 
 ```bash
 curl -fsSL https://wizardw2.vercel.app/install.sh | sh
-# options: --version 1.0.14  --install-dir DIR  --no-modify-path  --force  --verbose
-curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.14 --no-modify-path
+# options: --version 1.0.15  --install-dir DIR  --no-modify-path  --force  --verbose
+curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.15 --no-modify-path
 ```
 
 **Windows, PowerShell 5.1 or 7+** (installs into `%LOCALAPPDATA%\Wizard` and adds it to your user PATH):
@@ -55,7 +55,7 @@ curl -fsSL https://wizardw2.vercel.app/install.sh | sh -s -- --version 1.0.14 --
 ```powershell
 irm https://wizardw2.vercel.app/install.ps1 | iex
 # with options:
-& ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -Version 1.0.14 -NoModifyPath
+& ([scriptblock]::Create((irm https://wizardw2.vercel.app/install.ps1))) -Version 1.0.15 -NoModifyPath
 ```
 
 **Windows, Scoop:**
@@ -246,6 +246,12 @@ docker compose up --build -d
 ```
 
 Open **http://localhost:3000**. API docs are at **http://localhost:8000/docs**. Already extracted a release zip instead of cloning? The same `docker-compose.yml` is in it — just run the command from inside the extracted folder.
+
+The ports are published on `127.0.0.1` only, so nothing is reachable from another machine. To serve your network, set `WIZARD_BIND_ADDRESS` (the backend mounts the Docker socket and runs generated code, so also set `API_KEY` and put it behind the `production` nginx profile). Redis stays on loopback either way, because it has no password.
+
+```bash
+WIZARD_BIND_ADDRESS=0.0.0.0 API_KEY=change-me docker compose --profile production up --build -d
+```
 
 ### Disk space
 

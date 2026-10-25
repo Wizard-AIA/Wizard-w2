@@ -17,8 +17,12 @@ services:
       - no-new-privileges:true
     deploy:
       replicas: 2
+    # Published on loopback only. This service mounts the Docker socket and
+    # runs generated code, so reaching it from the network must be a choice:
+    # set WIZARD_BIND_ADDRESS=0.0.0.0 (or one interface's address) to serve
+    # other machines, ideally behind the `production` nginx profile and API_KEY.
     ports:
-      - "8000:8000"
+      - "${WIZARD_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     environment:
       - APP_NAME=${APP_NAME:-Wizard}
       - ENV=${ENV:-prod}
@@ -94,8 +98,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    # Loopback only unless WIZARD_BIND_ADDRESS says otherwise (see backend).
     ports:
-      - "3000:3000"
+      - "${WIZARD_BIND_ADDRESS:-127.0.0.1}:3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
@@ -118,8 +123,11 @@ services:
     image: redis:7-alpine
     profiles: ["redis"]
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # The backend reaches Redis over wizard_net. The host port is for local
+    # debugging only and stays on loopback whatever WIZARD_BIND_ADDRESS is:
+    # this Redis has no password.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     networks:
       - wizard_net
     restart: unless-stopped
@@ -127,8 +135,9 @@ services:
   nginx:
     image: nginx:alpine
     profiles: ["production"]
+    # Set WIZARD_BIND_ADDRESS=0.0.0.0 to serve the network through this proxy.
     ports:
-      - "80:80"
+      - "${WIZARD_BIND_ADDRESS:-127.0.0.1}:80:80"
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
