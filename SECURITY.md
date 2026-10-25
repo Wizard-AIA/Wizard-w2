@@ -28,7 +28,7 @@ To secure the execution environment and the underlying repository, Wizard employ
 - **Containment is reported, not assumed:** `/settings` lists what this machine can enforce with a reason for every gap (outbound network is not enforced on Windows, and says so), and `GET /api/sandbox/selftest` spawns a probe that attempts each forbidden operation and reports what stopped it.
 - **AST Guardrail Validation:** Before passing to the Python subset runner, we parse the abstract syntax tree to blacklist dangerous execution tokens (`exec`, `eval`, `os.system`, `subprocess`).
 - **Data Cataloging Privacy:** The `CatalogEngine` automatically flags and masks standard PII payloads before loading dataframes into the cognitive memory layer.
-- **CI/CD Static Analysis:** Github Actions implement continuous **CodeQL** and Dependency auditing (`npm audit`, `safetycli`) on every Pull Request.
+- **CI/CD Static Analysis:** Github Actions implement continuous **CodeQL** and dependency auditing (`pip-audit` on every Python lockfile, `pnpm audit` on the frontend) on every pull request.
 
 ## Responsible Disclosure
 

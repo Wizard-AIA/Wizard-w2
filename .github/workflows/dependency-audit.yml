@@ -42,6 +42,14 @@ jobs:
       - name: Scan runtime dependencies
         run: pip-audit --requirement requirements.lock.txt --require-hashes --disable-pip --strict
 
+      # CI installs these with the repository's own token in scope, so a
+      # vulnerable linter or auditor is a supply-chain path into the pipeline.
+      - name: Scan CI tooling
+        run: pip-audit --requirement requirements-ci-tools.lock.txt --require-hashes --disable-pip --strict
+
+      - name: Scan audit tooling
+        run: pip-audit --requirement requirements-audit-tools.lock.txt --require-hashes --disable-pip --strict
+
   node-audit:
     name: Node.js
     runs-on: ubuntu-latest

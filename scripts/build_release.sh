@@ -105,15 +105,14 @@ if [ "$VERSION" != "dev" ] && [ "$VERSION" != "v$FILE_VERSION" ]; then
   printf '%s\n' "${VERSION#v}" > "$BASE_STAGE/VERSION"
 fi
 
-# requirements.txt/.lock.txt/-local.txt pin this org's own Safety.dev
-# vulnerability-scanning proxy as their package index (see
-# .safety-project.ini) -- fine for this team's own CI, but a consumer's
-# `wizard init`/`docker compose up` must not depend on that account-scoped
-# mirror staying reachable to the public forever. Strip the index-url
-# declarations so installs fall back to public PyPI; every `--hash=...` line
-# is left untouched, since those pin the wheel's actual bytes, not where it
-# came from, and Safety's proxy is a passthrough of the same public wheels.
-echo "Rewriting requirements files to drop the internal package index..."
+# The requirements files used to name this org's Safety.dev proxy as their
+# package index. They resolve from public PyPI now (Dependabot could not
+# authenticate to the proxy, so no Python security update ever opened), but a
+# consumer's `wizard init`/`docker compose up` must never depend on a private
+# mirror, so this stays as a guard: strip any index declaration that comes
+# back. Every `--hash=...` line is left untouched; hashes pin the wheel's
+# bytes, not where it came from.
+echo "Rewriting requirements files to drop any non-default package index..."
 for req_file in requirements.txt requirements.lock.txt requirements-local.txt requirements-optional.txt; do
   path="$BASE_STAGE/$req_file"
   [ -f "$path" ] || continue

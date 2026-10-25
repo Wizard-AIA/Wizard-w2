@@ -12,8 +12,6 @@
 # and the model is told exactly that, so a partial install means the agent is
 # offered a smaller toolkit -- not that it writes code which then fails.
 
--i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
-
 # SQL over dataframes. Usually the fastest route through a large join.
 duckdb==1.5.5
 

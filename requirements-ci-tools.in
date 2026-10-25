@@ -5,7 +5,6 @@
 #   uv pip compile requirements-ci-tools.in --constraints requirements.lock.txt \
 #     --universal --generate-hashes --emit-index-url --python-version 3.12 \
 #     --output-file requirements-ci-tools.lock.txt
--i https://pkgs.safetycli.com/repository/nil-2662d/project/ai_data_analyst/pypi/simple/
 
 # Pinned deliberately -- unpinned, a release that adds or promotes a rule
 # fails master with no code change, which is what happened when UP042
