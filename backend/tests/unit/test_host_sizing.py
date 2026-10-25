@@ -14,6 +14,17 @@ from src.config import Settings, format_memory, parse_memory, tier_for_parameter
 from src.utils.hostinfo import host_info
 
 
+@pytest.fixture(autouse=True)
+def _no_developer_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test here asserts what Settings derives from the machine.
+
+    Settings also reads `.env` and `backend/.env`, so a developer's own file
+    (say `LLM_NUM_CTX=4096`) overrode the derived value and failed the suite on
+    that one machine while CI, which has no `.env`, stayed green.
+    """
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+
 # --------------------------------------------------------------------------- #
 # Memory strings
 # --------------------------------------------------------------------------- #
