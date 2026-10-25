@@ -13,10 +13,10 @@
 # offered a smaller toolkit -- not that it writes code which then fails.
 
 # SQL over dataframes. Usually the fastest route through a large join.
-duckdb==1.5.5
+duckdb==2.0.0
 
 # Multithreaded dataframe execution for large group-bys and joins.
-polars==1.44.2
+polars==2.0.0
 
 # Statistics, inference and machine learning.
 statsmodels==0.15.0
@@ -36,8 +36,8 @@ lightgbm==4.7.0
 # told to use matplotlib instead rather than to import something absent.
 plotly==7.1.0
 seaborn==0.13.2
-pillow==12.3.0
+pillow==13.0.0
 
 # Graphs, and spreadsheet output.
 networkx==3.7
-xlsxwriter==3.2.9
+xlsxwriter==3.3.0

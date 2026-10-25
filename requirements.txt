@@ -21,11 +21,11 @@
 #   seaborn                a second copy of the sandbox's toolkit.
 
 # Web layer
-fastapi==0.141.1
-uvicorn==0.53.0
+fastapi==0.159.1
+uvicorn==0.54.0
 python-multipart==0.0.32
-pydantic==2.13.5
-pydantic-settings==2.15.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
 structlog==26.1.0
 
 # HTTP client. Used in production for provider embeddings and by the test client.
@@ -35,8 +35,8 @@ httpx==0.28.1
 # plus matplotlib and tabulate, which the in-process interpreter and
 # `Session.inspect` respectively require.
 pandas==3.0.6
-numpy==2.5.3
-pyarrow==25.0.1
+numpy==2.5.4
+pyarrow==26.0.0
 scipy==1.18.1
 matplotlib==3.11.2
 tabulate==0.10.0
@@ -49,11 +49,11 @@ openpyxl==3.1.5
 #   langchain-anthropic  Anthropic's Messages API
 # `langchain-core` is imported directly by `src/core/llm`, so it is declared
 # rather than left to arrive through a transitive pin.
-langchain>=1.4.0,<1.5.0
+langchain>=1.4.7,<1.5.0
 langchain-core>=1.6.4
 langchain-ollama==1.1.0
 langchain-openai>=1.6.3
-langchain-anthropic>=1.7.2
+langchain-anthropic>=1.7.6
 
 # Reading PDF and Word documents attached as context (`core/ingest/documents.py`).
 # Both are pure Python. Without them the upload is refused with a message asking
