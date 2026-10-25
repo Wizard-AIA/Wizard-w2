@@ -50,7 +50,7 @@ ARG PIP="uv pip install --system --no-cache --compile-bytecode"
 RUN $PIP \
     "pandas==2.2.2" \
     "numpy==1.26.4" \
-    "pyarrow==17.0.0" \
+    "pyarrow==23.0.1" \
     "matplotlib==3.9.1.post1" \
     "duckdb==1.1.0" \
     "polars==1.35.2" \
@@ -61,25 +61,36 @@ RUN $PIP \
 # xgboost-cpu, not xgboost: the default wheel bundles a CUDA-enabled
 # libxgboost.so and is 154 MB compressed against 4.5 MB here. The import name is
 # identical, so nothing in the prompt or in generated code changes.
+#
+# libgomp1: lightgbm's wheel links the system OpenMP runtime instead of bundling
+# it, and python:slim does not ship one. Without it `import lightgbm` failed in
+# every standard and full image, while the capability probe (find_spec, no
+# import) still advertised lightgbm to the model.
+RUN if [ "$SANDBOX_TIER" != "core" ]; then \
+    apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 RUN if [ "$SANDBOX_TIER" != "core" ]; then $PIP \
     "scipy==1.14.0" \
     "statsmodels==0.14.2" \
     "scikit-learn==1.5.1" \
     "xgboost-cpu==2.1.1" \
-    "lightgbm==4.5.0" \
+    "lightgbm==4.6.0" \
     "plotly==5.23.0" \
     "seaborn==0.13.2" \
     "networkx==3.3" \
     "xlsxwriter==3.2.0" \
     "tabulate==0.9.0" \
-    "pillow==10.4.0" \
+    "pillow==13.0.0" \
     ; fi
 
 # Tier: full. Survival analysis, and geospatial -- which carries GDAL and PROJ
 # through pyogrio/pyproj, around 45 MB of compressed wheels.
 RUN if [ "$SANDBOX_TIER" = "full" ]; then $PIP \
     "lifelines==0.29.0" \
-    "geopandas==1.0.1" \
+    "geopandas==1.1.2" \
     "shapely==2.0.6" \
     ; fi
 

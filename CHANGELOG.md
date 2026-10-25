@@ -19,12 +19,25 @@ file existed are reconstructed from tags, release notes, and milestone commits.
   certifi, and langgraph-sdk; in the CI tool locks, gitpython, aiohttp,
   multidict and filelock. `pip-audit --strict` is clean on all three lockfiles,
   and the audit job now scans the two tool locks as well as the runtime one.
+- **The analysis toolkit generated code runs with is patched too.** The local
+  runtime (`requirements-local.txt`) pinned pillow 12.3.0, and the Docker
+  sandbox image pinned pillow 10.4.0 (66 advisories), pyarrow 17.0.0,
+  lightgbm 4.5.0 and geopandas 1.0.1. They move to pillow 13.0.0, pyarrow
+  23.0.1, lightgbm 4.6.0 and geopandas 1.1.2. Dependabot does not read pins
+  inside a Dockerfile, so nothing had flagged them. The backend builds the
+  sandbox image only when its tag is missing, so an existing image keeps the
+  old libraries: remove it (`docker image rm wizard-sandbox:standard`, or your
+  tier) and the next Docker session rebuilds it.
 - **`docker compose` publishes its ports on 127.0.0.1.** It used to bind 3000,
   8000, 80 and Redis's 6379 on every interface, which put a backend that mounts
   the Docker socket on the local network. Set `WIZARD_BIND_ADDRESS=0.0.0.0` to
   serve other machines; Redis stays on loopback regardless.
 
 ### Fixed
+- **`import lightgbm` failed in every standard and full Docker sandbox.** Its
+  wheel needs the system OpenMP runtime (`libgomp1`), which `python:slim` does
+  not ship, while the capability probe still told the model lightgbm was
+  available. The image installs it now; rebuild the image as described above.
 - **Dependabot could not open a single Python security update.** The
   requirements files named a private Safety.dev package index that Dependabot
   cannot authenticate to, so every pip update failed. They resolve from public
