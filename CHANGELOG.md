@@ -6,6 +6,41 @@ file existed are reconstructed from tags, release notes, and milestone commits.
 
 ## [Unreleased]
 
+### Security
+- **Next.js 16.3.8 to 16.4.3.** 16.0.0 to 16.4.0 carry an unauthenticated remote
+  code execution (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr) and an App Router
+  denial of service. `wizard start` serves the frontend on 127.0.0.1 and the app
+  defines no server actions, so a CLI install was not reachable from the network;
+  a `docker compose` install was (see below). `source-map-js`, `undici`,
+  `brace-expansion` and `js-yaml` move to patched versions too; `pnpm audit`
+  reports nothing, shipped or build-time.
+- **Python dependencies with known vulnerabilities upgraded:** pillow 12.3.0 to
+  13.0.0 (37 advisories), pypdf 6.19.0 to 6.21.2 (11), urllib3 2.7.0 to 2.8.0,
+  certifi, and langgraph-sdk; in the CI tool locks, gitpython, aiohttp,
+  multidict and filelock. `pip-audit --strict` is clean on all three lockfiles,
+  and the audit job now scans the two tool locks as well as the runtime one.
+- **`docker compose` publishes its ports on 127.0.0.1.** It used to bind 3000,
+  8000, 80 and Redis's 6379 on every interface, which put a backend that mounts
+  the Docker socket on the local network. Set `WIZARD_BIND_ADDRESS=0.0.0.0` to
+  serve other machines; Redis stays on loopback regardless.
+
+### Fixed
+- **Dependabot could not open a single Python security update.** The
+  requirements files named a private Safety.dev package index that Dependabot
+  cannot authenticate to, so every pip update failed. They resolve from public
+  PyPI now; release archives already did.
+- The lockfile had drifted from `requirements.txt` again (it pinned pandas 3.0.5
+  and langchain-core 1.6.3 where the source file asks for 3.0.6 and >=1.6.4),
+  so CI tested an older stack than the one declared. Regenerated.
+- `test_host_sizing.py` read the developer's `backend/.env`, so a local
+  `LLM_NUM_CTX` failed the suite on that machine while CI stayed green.
+
+### Changed
+- Dependabot auto-merges patch and minor updates only. A major update (zod 3 to
+  4 merged unreviewed while the audit was failing) now waits for a person.
+  TypeScript majors are held back until typescript-eslint supports TS 7, since
+  one major in the frontend group failed the build for all 61 updates in it.
+
 ## [v1.0.15] - 2026-09-21
 
 ### Fixed
