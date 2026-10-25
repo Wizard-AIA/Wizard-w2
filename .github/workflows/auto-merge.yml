@@ -18,8 +18,17 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3.1.0
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
-      - name: Enable auto-merge for Dependabot PRs
+      # Patch and minor updates merge on their own once the required checks pass.
+      # A major update (for a group, the largest bump in it) waits for a person:
+      # zod 3 to 4 merged here unreviewed while the dependency audit was red.
+      - name: Enable auto-merge for patch and minor updates
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         run: gh pr merge --auto --merge "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      - name: Leave major updates for review
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: echo "::notice::Major update (${DEPS}); not auto-merging. Review and merge by hand."
+        env:
+          DEPS: ${{ steps.metadata.outputs.dependency-names }}

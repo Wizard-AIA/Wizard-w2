@@ -15,6 +15,13 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "weekly"
+    ignore:
+      # typescript-eslint 8 refuses TypeScript 7 ("does not support TS 7.0"),
+      # and one major bump inside the group fails the build for all 61 updates
+      # in it, the Next.js security fix included. Drop this once
+      # typescript-eslint supports TS 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       frontend-dependencies:
         patterns:
