@@ -58,7 +58,7 @@ langchain-anthropic>=1.7.2
 # Reading PDF and Word documents attached as context (`core/ingest/documents.py`).
 # Both are pure Python. Without them the upload is refused with a message asking
 # for Markdown or text instead, which is a feature the UI offers, not an extra.
-pypdf>=6.21.2
+pypdf>=6.21.4
 python-docx>=1.2.0
 
 # Execution sandbox
