@@ -9,7 +9,7 @@
 # Pinned deliberately -- unpinned, a release that adds or promotes a rule
 # fails master with no code change, which is what happened when UP042
 # (str+Enum -> StrEnum) started being reported.
-ruff==0.16.8
+ruff==0.17.4
 pytest-cov==7.1.0
 
 # Mutation testing for the whole backend -- see docs/analysis/mutation-testing.md. Not
@@ -19,4 +19,4 @@ pytest-cov==7.1.0
 # first and rejected: it hard-asserts a mutated module's dotted name never starts with
 # `src.` (verified against 3.3.1 and 3.7.0), which this backend's own `pythonpath=["backend"]`
 # + `import src.*` convention trips on every mutant run.
-cosmic-ray==8.7.0
+cosmic-ray==8.9.0
